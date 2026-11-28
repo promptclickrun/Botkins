@@ -14,8 +14,12 @@ const root = mkdtempSync(join(tmpdir(), "botkins-market-agents-"));
 const market = join(root, "market");
 mkdirSync(join(market, ".github", "plugin"), { recursive: true });
 mkdirSync(join(market, "agents"), { recursive: true });
-const template = (name, role, summary, look) => JSON.stringify({ format: "botkins.bot-template", version: 1, name, role, summary, instructions: "You help me with " + role.toLowerCase() + ".\n\nAsk before you send or delete anything.", look });
-writeFileSync(join(market, "agents", "sorter.json"), template("Sorter", "Inbox triage", "Sorts your inbox into what needs you today and what can wait.", { head: "pip", palette: "fern" }));
+const bundle = {
+  skills: [{ name: "triage-mail", description: "Categorize an inbox.", instructions: "Separate urgent mail from mail that can wait." }],
+  routines: [{ name: "Review the inbox", instructions: "Draft the daily list.", cadence: { kind: "weekdays", time: "09:00" } }],
+};
+const template = (name, role, summary, look, bundle) => JSON.stringify({ format: "botkins.bot-template", version: bundle ? 2 : 1, ...(bundle && { bundle }), name, role, summary, instructions: "You help me with " + role.toLowerCase() + ".\n\nAsk before you send or delete anything.", look });
+writeFileSync(join(market, "agents", "sorter.json"), template("Sorter", "Inbox triage", "Sorts your inbox into what needs you today and what can wait.", { head: "pip", palette: "fern" }, bundle));
 writeFileSync(join(market, "agents", "quill.json"), template("Quill", "Editor and proofreader", "Tightens your drafts and catches the typos.", { head: "muse", palette: "fig" }));
 writeFileSync(join(market, "agents", "coach.json"), template("Coach", "Training coach", "Plans your workouts and keeps you honest.", { head: "pounce", palette: "honey" }));
 writeFileSync(join(market, ".github", "plugin", "marketplace.json"), JSON.stringify({
@@ -48,18 +52,18 @@ try {
   await app.evaluate(() => { globalThis.fetch = async () => { throw new Error("Offline smoke"); }; });
   assert.equal((await call("plugins.addMarketplace", market)).name, "local-agent-market");
 
-  // The Marketplace button sits left of New chat at the top of the side menu, and opens Marketplace.
+  // The Market is a place of the side menu (its own page), and Settings › Marketplace has the same.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1440, 900));
   await page.waitForTimeout(300);
   const expand = page.getByRole("button", { name: "Expand side menu", exact: true });
   if (await expand.count()) await expand.click();
   await page.waitForTimeout(600);
-  const brand = page.locator("aside .brand");
-  const order = await brand.locator("button").evaluateAll((buttons) => buttons.map((b) => b.getAttribute("aria-label")));
-  assert.deepEqual(order.slice(0, 2), ["Marketplace", "New chat"], "Marketplace sits left of New chat");
-  await shot(page, "sidebar-top");
-  await brand.getByRole("button", { name: "Marketplace", exact: true }).click();
-  const dialog = page.locator("dialog.settings-window");
+  await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Market", exact: true }).click();
+  await page.getByRole("heading", { name: "Market", exact: true }).waitFor();
+  await shot(page, "market-page");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("tab", { name: "Marketplace", exact: true }).click();
   await dialog.getByRole("heading", { name: "Marketplace", exact: true }).waitFor();
 
   // Agents: the local templates, with their categories as chips.
@@ -87,6 +91,9 @@ try {
   await expect(dialog.locator(".agent-detail")).toContainText("Productivity · local-agent-market · v1.0.0 · Botkins");
   await expect(dialog.locator(".agent-instructions")).toContainText("Ask before you send or delete anything.");
   await expect(dialog.locator(".agent-detail")).toContainText("Someone else wrote these instructions");
+  await expect(dialog.locator(".template-bundle")).toContainText("Routines start paused.");
+  await dialog.locator(".template-bundle summary").filter({ hasText: "triage-mail" }).click();
+  await expect(dialog.getByText(bundle.skills[0].instructions, { exact: true })).toBeVisible();
   await shot(page, "agent-page");
 
   // Add opens Create a bot, filled in. The person changes the name and creates it.
@@ -99,12 +106,14 @@ try {
   await expect(sheet.locator("textarea[name=instructions]")).toHaveValue(/Ask before you send or delete anything\./);
   await expect(sheet.getByRole("note")).toContainText("From local-agent-market. Someone else wrote these instructions: read them first.");
   await expect(sheet.getByRole("button", { name: "Start from template", exact: true })).toBeVisible();
+  await expect(sheet.locator(".template-bundle")).toContainText(bundle.routines[0].name);
   await shot(page, "create-bot-filled");
   await sheet.locator("input[name=name]").fill("Sorter Two");
   await sheet.getByRole("button", { name: "Create bot", exact: true }).click();
   await sheet.waitFor({ state: "hidden" });
   const made = (await call("snapshot")).bots.find((bot) => bot.name === "Sorter Two");
   assert.ok(made, "the bot was made");
+  assert.deepEqual(made.bundle, bundle);
   assert.equal(made.role, "Inbox triage");
   assert.equal(made.summary, "Sorts your inbox into what needs you today and what can wait.");
   assert.match(made.instructions, /Ask before you send or delete anything\./);
@@ -114,6 +123,7 @@ try {
   await page.getByRole("button", { name: "Create bot", exact: true }).first().click();
   await page.locator("dialog.bot-sheet").getByRole("heading", { name: "Create a bot", exact: true }).waitFor();
   await expect(page.locator("dialog.bot-sheet input[name=name]")).toHaveValue("");
+  await expect(page.locator("dialog.bot-sheet .template-bundle")).toHaveCount(0);
   assert.deepEqual(errors, []);
   console.log("market agents smoke: ok");
 } finally {

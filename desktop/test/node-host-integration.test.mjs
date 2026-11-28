@@ -3,7 +3,7 @@
 // sleeping/unavailable node discovery, separate grants from conversations, and retry idempotency.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { LinkHost } from "../desktop/link/server.mjs";
@@ -13,6 +13,9 @@ import { deviceCall } from "../desktop/device-call.mjs";
 import { Workspace as RealWorkspace } from "../desktop/workspace.mjs";
 import { Workspace as StarterWorkspace } from "./starter.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
+import { DELETE_CONFIRM_PHRASE, runConversion, undoConversion } from "../desktop/node-convert.mjs";
+import { remoteNodeControl, remoteNodeStatus } from "../desktop/remote-teamwork.mjs";
+import { readProfile, writeProfile } from "../desktop/bot-profile-files.mjs";
 
 async function startComputer(t, { dir, name, directory, answer, empty = false }) {
   const listeners = new Set();
@@ -191,15 +194,18 @@ test("acceptance flow: pair fresh empty node, restart, approve list_node_files, 
   });
 
   const chat = hostA.workspace.mainChat("pip");
+  // The node's approval is asked in the chat that asked, on Laptop, not on the node.
+  const nodeCard = (not) => hostA.workspace.interactions.snapshot().find((item) => item.chatId === chat && item.nodeAsk && item.id !== not);
 
-  // Step 3: First run asks on the trusted device; approve with Always allow ("remember").
+  // Step 3: First run asks in the asking chat; approve with Always allow ("remember").
   const firstTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card1 = await until(() => parts.live?.requests?.find((item) => item.nodeJob));
+  const card1 = await until(() => nodeCard());
   assert.equal(card1.dispatch, true);
-  assert.equal(card1.nodeJob, true);
   assert.match(card1.title, /Pip.*Laptop.*Studio Assets.*Studio Mac/);
   assert.match(card1.detail, /project\.list_files/);
-  await owner.call("respond", card1.id, { action: "remember" });
+  assert.equal(node.workspace.interactions.snapshot().length, 0);
+  assert.ok(!parts.live?.requests?.some((item) => item.nodeJob), "nothing to answer on the node's phone");
+  hostA.workspace.interactions.respond(card1.id, { action: "remember" });
   await firstTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:manifest.json,renders");
   assert.equal(node.workspace.nodeHost.view().grants.length, 1);
@@ -223,16 +229,16 @@ test("acceptance flow: pair fresh empty node, restart, approve list_node_files, 
 
   // Step 6: Next run asks for approval again! Deny it first, then verify denial returns cleanly.
   const deniedTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card2 = await until(() => parts.live?.requests?.find((item) => item.nodeJob && item.id !== card1.id));
-  await owner.call("respond", card2.id, { action: "deny" });
+  const card2 = await until(() => nodeCard(card1.id));
+  hostA.workspace.interactions.respond(card2.id, { action: "deny" });
   await deniedTurn;
   assert.match(hostA.workspace.chat(chat).messages.at(-1).text, /declined|denied/i);
   assert.equal(node.workspace.nodeHost.view().grants.length, 0);
 
   // Ask one more time and approve once ("approve"): succeeds without persisting a grant.
   const onceTurn = hostA.workspace.send(chat, "discover-and-list");
-  const card3 = await until(() => parts.live?.requests?.find((item) => item.nodeJob && item.id !== card2.id));
-  await owner.call("respond", card3.id, { action: "approve" });
+  const card3 = await until(() => nodeCard(card2.id));
+  hostA.workspace.interactions.respond(card3.id, { action: "approve" });
   await onceTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:manifest.json,renders");
   assert.equal(node.workspace.nodeHost.view().grants.length, 0);
@@ -311,9 +317,9 @@ test("conversation Always allow does not grant node file listing, and a sleeping
 
   // 2. Listing files from the exact same bot (Pip) on the exact same node (Studio) MUST STILL ASK.
   const fileTurn = hostA.workspace.send(chat, "list-files");
-  const fileCard = await until(() => parts.live?.requests?.find((item) => item.nodeJob));
-  assert.equal(fileCard.nodeJob, true);
-  await owner.call("respond", fileCard.id, { action: "approve" });
+  const fileCard = await until(() => hostA.workspace.interactions.snapshot().find((item) => item.chatId === chat && item.nodeAsk));
+  assert.equal(fileCard.dispatch, true);
+  hostA.workspace.interactions.respond(fileCard.id, { action: "approve" });
   await fileTurn;
   assert.equal(hostA.workspace.chat(chat).messages.at(-1).text, "FILES:plan.md");
 
@@ -376,4 +382,251 @@ test("lost job.submit reply retries with the exact same request ID so the job ne
   assert.equal(ws.chat(chat).messages.at(-1).text, "COUNT:1");
   assert.equal(submitted.length, 2);
   assert.deepEqual(submitted[0], submitted[1]);
+});
+
+test("node calls have no per-reply cap: 20 listings in one reply all run", async (t) => {
+  let submits = 0;
+  const { client } = fakeClient(async (_id, _options, session) => {
+    for (let i = 0; i < 20; i++) await session.tool("list_node_files", { host: "host-b", project: "proj-1", path: "d" + i });
+    return { data: { content: "done" } };
+  });
+  const ws = new StarterWorkspace(join(tempDir(t), "data"), client, () => {});
+  ws.teamworkPeers = {
+    available: () => true,
+    hosts: async (withPin) => [{ serverId: "host-b", name: "Studio", ...(withPin && { pin: "peer-pin" }) }],
+    call: (_id, op) => {
+      if (op === "capabilities")
+        return { version: 1, role: "node", name: "Studio", online: true, paused: false, bots: [], operations: [{ id: "project.list_files", version: 1, readOnly: true }], projects: [{ id: "proj-1", name: "Assets" }] };
+      if (op === "job.submit") {
+        submits++;
+        return { status: "completed", result: { projectId: "proj-1", projectName: "Assets", path: "", entries: [], truncated: false, totalEntries: 0 } };
+      }
+      throw new Error("Unexpected op: " + op);
+    },
+  };
+  const chat = ws.createChat("pip");
+  await ws.send(chat, "List them all");
+  assert.equal(ws.chat(chat).messages.at(-1).text, "done");
+  assert.equal(submits, 20);
+  const run = ws.state.runs.find((r) => r.chatId === chat);
+  assert.equal(run.teamwork.length, 20);
+  assert.ok(run.teamwork.every((a) => a.status === "answered"));
+});
+
+test("full conversion of a 3-bot host (move 1, keep 1, delete 1) over real Teamwork, remote node control, and one-click undo", async (t) => {
+  const directory = [];
+  const sourceDir = tempDir(t);
+  const targetDir = tempDir(t);
+  const repoDir = join(tempDir(t), "client-app");
+  mkdirSync(repoDir, { recursive: true });
+  writeFileSync(join(repoDir, "README.md"), "# Client App\n");
+
+  const source = await startComputer(t, {
+    dir: sourceDir,
+    name: "Mac Mini",
+    directory,
+    answer: async (_id, { prompt }) => ({ data: { content: "Kept-on-node reply: " + prompt } }),
+  });
+  const target = await startComputer(t, {
+    dir: targetDir,
+    name: "Mac Studio",
+    directory,
+    answer: async (_id, { prompt }, session) => {
+      if (prompt === "ask-kept-bot") {
+        const res = JSON.parse(
+          await session.tool("ask_teammate", {
+            host: source.row.serverId,
+            teammate: "scout",
+            message: "still there?",
+          }),
+        );
+        return { data: { content: res.reply } };
+      }
+      return { data: { content: "Studio reply: " + prompt } };
+    },
+  });
+
+  // Clean source down to exactly 3 distinct bots:
+  // 1) "scout" (keep locally as shared bot)
+  // 2) "Atlas" (move to Mac Studio with chat, memory, AGENTS.md, routine, Today panel, skill, project ref)
+  // 3) "TempBot" (delete with typed confirmation)
+  // Keep starter "scout" as our kept bot and remove any other starter bots so we have a clean 3-bot host.
+  const keptId = "scout";
+  source.workspace.state.bots = source.workspace.state.bots.filter((b) => b.id === keptId);
+  source.workspace.state.chats = source.workspace.state.chats.filter((c) => c.botId === keptId);
+  source.workspace.memory.write(keptId, "- Knows local build scripts");
+
+  const movedId = source.workspace.addBot({
+    name: "Atlas",
+    role: "Ops Lead",
+    instructions: "You track deployments.",
+  });
+  const atlasChat = source.workspace.state.chats.find((c) => c.botId === movedId);
+  atlasChat.messages.push(
+    { role: "user", text: "Deploy status?", time: 1700000010000 },
+    { role: "assistant", text: "All green on staging.", time: 1700000011000 },
+  );
+  atlasChat.schedules = [
+    {
+      id: "sched-atlas-1",
+      name: "Weekday Ops Brief",
+      prompt: "Summarize ops",
+      cron: "0 9 * * 1-5",
+      timezone: "America/Chicago",
+      recurring: true,
+      routine: true,
+      enabled: true,
+      nextAt: Date.now() + 600_000,
+    },
+  ];
+  const atlasProjectId = source.workspace.projects.create({ name: "Client App", folder: repoDir });
+  atlasChat.projectId = atlasProjectId;
+  source.workspace.memory.write(movedId, "- Staging deploys run at 9am CT");
+  writeProfile(source.workspace, movedId, { file: "AGENTS.md", previous: "", text: "# Atlas Operating Rules\nAlways check staging first.\n" });
+  source.workspace.state.panels.push({
+    id: "panel-atlas-ops",
+    spaceId: "today",
+    botId: movedId,
+    key: "ops-health",
+    title: "Ops Health",
+    blocks: [{ type: "markdown", text: "Staging healthy" }],
+    revision: 1,
+    updatedAt: Date.now(),
+  });
+  const skillDir = join(source.workspace.dir, "skills", "deploy-check");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "# Deploy Check\nVerify health endpoint.\n");
+
+  const deletedId = source.workspace.addBot({
+    name: "TempBot",
+    role: "Scratchpad",
+    instructions: "Temporary helper.",
+  });
+  source.workspace.memory.write(deletedId, "- Disposable notes");
+
+  // Add a local encrypted vault secret to confirm it is NEVER transmitted over the wire.
+  source.workspace.vault.entries["aws-prod"] = {
+    label: "AWS Prod Key",
+    kind: "api-key",
+    owner: "owner",
+    secret: "DO-NOT-TRANSMIT-SECRET-999",
+  };
+  source.workspace.save();
+
+  assert.equal(source.workspace.state.bots.length, 3);
+
+  // Pair an owner phone to the source computer before conversion (must survive!).
+  const pairing = await pair(
+    fetch,
+    { hosts: [source.address], code: source.link.startPairing().code, serverKey: source.row.serverKey },
+    { name: "Owner iPhone", platform: "ios" },
+  );
+  const phoneParts = {};
+  const ownerPhone = new LinkClient(pairing, {
+    fetch,
+    onParts: (changes) => Object.assign(phoneParts, changes),
+    onState() {},
+  });
+  t.after(() => ownerPhone.stop());
+  ownerPhone.start();
+  await until(() => phoneParts.bots);
+
+  // Execute one-step conversion: Move Atlas -> Mac Studio, Keep Scout, Delete TempBot.
+  const conv = await runConversion(
+    source.workspace,
+    {
+      nodeName: "Mac Mini Node",
+      botActions: [
+        { botId: movedId, action: "move", targetHostId: target.row.serverId },
+        { botId: keptId, action: "keep" },
+        { botId: deletedId, action: "delete" },
+      ],
+      sharedProjects: [atlasProjectId],
+      confirmDelete: DELETE_CONFIRM_PHRASE,
+    },
+    { peers: source.workspace.teamworkPeers },
+  );
+
+  assert.equal(conv.job.status, "completed");
+  assert.ok(conv.job.snapshotPath && existsSync(conv.job.snapshotPath));
+
+  // Verify post-conversion state on source:
+  // - Node role is enabled and Online; first-run setup does not reappear.
+  assert.equal(source.workspace.nodeHost.enabled, true);
+  assert.equal(source.workspace.nodeHost.view().online, true);
+  assert.equal(source.workspace.nodeHost.view().name, "Mac Mini Node");
+  assert.equal(source.workspace.state.bots.length, 1);
+  assert.equal(source.workspace.state.bots[0].id, keptId);
+  assert.equal(source.workspace.nodeHost.capabilities().bots.some((b) => b.id === keptId), true);
+  assert.equal(source.workspace.nodeHost.capabilities().projects.some((p) => p.id === atlasProjectId), true);
+
+  // Verify moved bot ("Atlas") landed cleanly on target ("Mac Studio") with all data intact:
+  const targetAtlas = target.workspace.state.bots.find((b) => b.name === "Atlas");
+  assert.ok(targetAtlas, "Atlas should now live on Mac Studio");
+  const targetAtlasChat = target.workspace.state.chats.find((c) => c.botId === targetAtlas.id);
+  assert.ok(targetAtlasChat.messages.some((m) => m.text.includes("All green on staging.")));
+  assert.equal(target.workspace.memory.read(targetAtlas.id).trim(), "- Staging deploys run at 9am CT");
+  assert.match(readProfile(target.workspace, targetAtlas.id, "AGENTS.md"), /Always check staging first/);
+  assert.equal(targetAtlasChat.schedules.length, 1);
+  assert.equal(targetAtlasChat.schedules[0].enabled, true);
+  assert.equal(targetAtlasChat.schedules[0].cron, "0 9 * * 1-5");
+  assert.equal(targetAtlasChat.schedules[0].timezone, "America/Chicago");
+  assert.ok(target.workspace.state.panels.some((p) => p.botId === targetAtlas.id && p.key === "ops-health"));
+  assert.equal(existsSync(join(target.workspace.dir, "skills", "deploy-check", "SKILL.md")), true);
+  // Vault secret NEVER appeared anywhere on target!
+  assert.equal(JSON.stringify(target.workspace.state).includes("DO-NOT-TRANSMIT-SECRET-999"), false);
+  assert.equal(source.workspace.vault.entries["aws-prod"].secret, "DO-NOT-TRANSMIT-SECRET-999");
+
+  // Verify kept bot ("scout") is reachable from Mac Studio via cross-host Teamwork,
+  // AND that the paired phone still receives & approves requests after conversion!
+  const targetChat = target.workspace.mainChat("pip");
+  const askTurn = target.workspace.send(targetChat, "ask-kept-bot");
+  const askCard = await until(() => phoneParts.live?.requests?.find((r) => r.dispatch && !r.nodeJob));
+  await ownerPhone.call("respond", askCard.id, { action: "approve" });
+  await askTurn;
+  assert.match(target.workspace.chat(targetChat).messages.at(-1).text, /Kept-on-node reply: still there\?/);
+
+  // Verify owner-only remote node control from Mac Studio -> Mac Mini Node over real encrypted Teamwork!
+  const remoteSt = await remoteNodeStatus(target.workspace.teamworkPeers, source.row.serverId);
+  assert.equal(remoteSt.nodeHost.name, "Mac Mini Node");
+  assert.equal(remoteSt.nodeHost.online, true);
+
+  // A paired phone can NEVER invoke node or conversion controls directly (gated out of REMOTE_METHODS).
+  await assert.rejects(ownerPhone.call("nodePause", true), /can't be done from a phone/i);
+  await assert.rejects(ownerPhone.call("nodeConvertRun", { nodeName: "Bad" }), /can't be done from a phone/i);
+  await assert.rejects(ownerPhone.call("nodeRemoteControl", { hostId: source.row.serverId, action: "pause" }), /can't be done from a phone/i);
+
+  // A team member's host (member: true) can NEVER invoke remote node control.
+  const memberRow = { ...target.row, serverId: "member-host-id", member: true };
+  directory.push(memberRow);
+  await assert.rejects(remoteNodeStatus(source.workspace.teamworkPeers, "member-host-id"), /same-owner host|same Botkins profile/i);
+  await assert.rejects(source.workspace.teamworkPeers.call("member-host-id", "control.status", {}), /same Botkins profile/i);
+  directory.pop();
+
+  // Remote pause -> approved on owner's paired phone!
+  const pausePromise = remoteNodeControl(target.workspace.teamworkPeers, source.row.serverId, "pause", {}, { pollMs: 20 });
+  const pauseCard = await until(() => phoneParts.live?.requests?.find((r) => r.nodeJob && /pause/i.test(r.title)));
+  await ownerPhone.call("respond", pauseCard.id, { action: "approve" });
+  const paused = await pausePromise;
+  assert.equal(paused.nodeHost.paused, true);
+
+  // Remote resume works even while paused -> approved on owner's paired phone!
+  const resumePromise = remoteNodeControl(target.workspace.teamworkPeers, source.row.serverId, "resume", {}, { pollMs: 20 });
+  const resumeCard = await until(() => phoneParts.live?.requests?.find((r) => r.nodeJob && /resume/i.test(r.title)));
+  await ownerPhone.call("respond", resumeCard.id, { action: "approve" });
+  const resumed = await resumePromise;
+  assert.equal(resumed.nodeHost.paused, false);
+
+  // One-click Undo conversion restores Atlas + TempBot on source, disables Atlas's routine on target,
+  // turns node role off, and keeps phone pairing working!
+  const undone = await undoConversion(source.workspace, { peers: source.workspace.teamworkPeers });
+  assert.equal(undone.undone, true);
+  assert.equal(source.workspace.nodeHost.enabled, false);
+  assert.equal(source.workspace.state.bots.length, 3);
+  assert.ok(source.workspace.state.bots.some((b) => b.id === movedId));
+  assert.ok(source.workspace.state.bots.some((b) => b.id === deletedId));
+  assert.equal(source.workspace.memory.read(movedId).trim(), "- Staging deploys run at 9am CT");
+  // Atlas's routine is enabled on source and disabled on target -> zero double-fire!
+  assert.equal(source.workspace.state.chats.find((c) => c.botId === movedId).schedules[0].enabled, true);
+  assert.equal(target.workspace.state.chats.find((c) => c.botId === targetAtlas.id).schedules[0].enabled, false);
 });

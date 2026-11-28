@@ -22,11 +22,15 @@ export const paneClosed = () => {
   return byBot;
 };
 
+// The ask this phone last acted on, for each chat, kept while the app runs: leaving a chat and
+// coming back is not seeing it for the first time.
+const handledAsks = new Map<string, number>();
+
 export function usePane(chatId: string, onText: (text: string) => void) {
   const controlling = usePathname() === "/remote";
   const supported = usePart("meta")?.capabilities.includes("side-pane-v1");
   const pane = useWatchedChat(chatId)?.pane;
-  const handled = useRef<number | undefined>(undefined);
+  const handled = useRef<number | undefined>(handledAsks.get(chatId));
   const active = usePart("live")?.active;
   useEffect(() => {
     // The full viewer can sit over either the receipt or the sheet. An agent's close/select
@@ -35,6 +39,7 @@ export function usePane(chatId: string, onText: (text: string) => void) {
     // The turn that asked is still under way when this chat has one running.
     const next = paneMove(pane, handled.current, () => !!active?.includes(chatId) || useApp.getState().running[chatId]?.status === "Working");
     handled.current = next.handled;
+    if (next.handled !== undefined) handledAsks.set(chatId, next.handled);
     if (!next.move) return;
     if ("close" in next.move) {
       if (open?.chatId === chatId) {

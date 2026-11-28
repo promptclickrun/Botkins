@@ -1,8 +1,5 @@
 /* Routines, the Work page additions and Usage. Colors come from the tokens in tokens.css. */
 
-.routines-lede {
-  max-width: 640px;
-}
 .routines .filters {
   flex-wrap: wrap;
 }
@@ -29,10 +26,6 @@
   font-size: calc(13px * var(--text-scale));
   margin-bottom: 4px;
 }
-.routines-empty {
-  margin-top: 22px;
-}
-
 /* A row is a wide button plus a control on the right, so the control isn't nested in the button. */
 /* Rows sit on the canvas, separated by space rather than lines. */
 .routine-row {
@@ -175,21 +168,6 @@
   cursor: default;
 }
 
-/* Detail */
-.routine-hero {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  margin-top: 14px;
-}
-.routine-hero > div {
-  min-width: 0;
-}
-.routine-hero h1,
-.routine-editor h1 {
-  font-size: calc(34px * var(--text-scale));
-  overflow-wrap: anywhere;
-}
 .routine-state {
   font-size: calc(13px * var(--text-scale));
   font-weight: 600;
@@ -202,10 +180,6 @@
   margin-top: 6px;
   font-weight: 600;
   font-size: calc(14px * var(--text-scale));
-}
-.routine-actions button:not(.primary) {
-  border-color: transparent;
-  background: var(--sunken);
 }
 .routine-copy {
   display: flex;
@@ -240,12 +214,6 @@
   margin-top: 8px;
   font-size: calc(14px * var(--text-scale));
 }
-.routine-detail .row {
-  padding: 10px 8px;
-  border-bottom: 0;
-  border-radius: var(--radius);
-}
-
 /* Editor */
 .routine-editor {
   max-width: 720px;
@@ -396,58 +364,6 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-/* Work: the title with its tools at the right, and the tabs under it (src/WorkBar.tsx). */
-.work-bar {
-  margin-bottom: 18px;
-}
-.work-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.work-tools .primary {
-  margin-left: 8px;
-}
-.work-tabs {
-  margin-top: 14px;
-}
-.work-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding-inline: 16px;
-}
-.work-tabs .count {
-  min-width: 18px;
-  padding: 0 6px;
-  border-radius: 99px;
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 700;
-  line-height: 18px;
-  background: var(--accent);
-  color: var(--on-accent);
-  text-align: center;
-}
-/* The way back to Work, above Activity and Usage. */
-.work-back {
-  margin-bottom: 6px;
-}
-.work-head {
-  margin-bottom: 14px;
-}
-/* Filters as quiet chips: no outline, the chosen one on the selected fill. */
-.filters.chips button {
-  border: 0;
-  border-radius: 99px;
-  padding: 6px 13px;
-  font-size: calc(14px * var(--text-scale));
-  color: var(--ink-2);
-}
-.filters.chips button[aria-pressed="true"] {
-  background: var(--active);
-  color: var(--ink);
-  font-weight: 600;
-}
 .filters .count {
   display: inline-block;
   min-width: 16px;

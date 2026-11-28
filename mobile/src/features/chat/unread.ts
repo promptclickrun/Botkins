@@ -1,40 +1,57 @@
 // Pure unread/changed helpers shared by Home's bot dots, BotMenu, Chats, and Spaces
 // (no React Native imports; tests/unread.test.ts runs it). Mirrors desktop/src/unread.ts.
 import type { ChatSummary, SpaceSummary } from "@/link/types";
+import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 
 export const MARK_CHATS_READ_CAPABILITY = "mark-chats-read-v1";
 /** Protocol limit per `markChatsRead` RPC (matches `MAX_MARK_CHATS_READ` in `link/methods.mjs`). */
 export const MAX_MARK_CHATS_READ = 2000;
 
-/** Whether a chat counts toward its bot's unread dot (matches desktop/src/unread.ts: excludes archived and panel chats). */
-export function isUnreadChat(chat: Pick<ChatSummary, "archived" | "panelId" | "unread">): boolean {
-  return !chat.panelId && !chat.archived && !!chat.unread;
+/** Whether a chat counts toward its bot's unread dot (matches desktop/src/unread.ts: excludes archived, panel, and routine chats). */
+export function isUnreadChat(chat: Pick<ChatSummary, "archived" | "panelId" | "unread" | "schedules">): boolean {
+  return !chat.panelId && !chat.archived && !isRoutineChat(chat) && !!chat.unread;
 }
 
-/** Whether a chat is listed on the Chats page (matches desktop/src/chatSections.ts: all non-archived chats, including panel and routine chats). */
-export function isChatsPageChat(chat: Pick<ChatSummary, "archived">): boolean {
-  return !chat.archived;
+/** Whether a chat is visible in the Chats list given "Show routine chats" and any currently open chat. */
+export function isVisibleInChatList(
+  chat: Pick<ChatSummary, "id" | "schedules">,
+  { showRoutineChats = false, selectedChatId, query = "" }: { showRoutineChats?: boolean; selectedChatId?: string | null; query?: string } = {},
+): boolean {
+  if (showRoutineChats || !isRoutineChat(chat)) return true;
+  if (selectedChatId && chat.id === selectedChatId) return true;
+  return query.trim().length > 0;
+}
+
+/** Whether a chat is listed on the Chats page (matches desktop/src/chatSections.ts: non-archived chats visible under current routine-chat filter). */
+export function isChatsPageChat(
+  chat: Pick<ChatSummary, "id" | "archived" | "schedules">,
+  options?: { showRoutineChats?: boolean; selectedChatId?: string | null; query?: string },
+): boolean {
+  return !chat.archived && isVisibleInChatList(chat, options);
 }
 
 /** Whether a chat is listed under Archived on the Chats page (matches desktop/src/chatSections.ts). */
-export function isChatsPageArchived(chat: Pick<ChatSummary, "archived">): boolean {
-  return !!chat.archived;
+export function isChatsPageArchived(
+  chat: Pick<ChatSummary, "id" | "archived" | "schedules">,
+  options?: { showRoutineChats?: boolean; selectedChatId?: string | null; query?: string },
+): boolean {
+  return !!chat.archived && isVisibleInChatList(chat, options);
 }
 
 /** Whether a chat counts as unread on the Chats page (matches desktop/src/chatSections.ts `isChatsPageUnread`). */
-export function isChatsPageUnread(chat: Pick<ChatSummary, "archived" | "unread">): boolean {
-  return !chat.archived && !!chat.unread;
+export function isChatsPageUnread(chat: Pick<ChatSummary, "archived" | "unread" | "schedules">): boolean {
+  return !chat.archived && !isRoutineChat(chat) && !!chat.unread;
 }
 
 /** Every unread chat on the Chats page: what it lists under Unread, counts, and clears with "Mark all as read". */
-export function chatsPageUnreadChats<T extends Pick<ChatSummary, "id" | "archived" | "unread">>(
+export function chatsPageUnreadChats<T extends Pick<ChatSummary, "id" | "archived" | "unread" | "schedules">>(
   chats: readonly T[],
 ): T[] {
   return chats.filter(isChatsPageUnread);
 }
 
 /** The chats that light a bot's unread dot on Home and clear when marking that bot read. */
-export function botUnreadChats<T extends Pick<ChatSummary, "id" | "botId" | "archived" | "panelId" | "unread">>(
+export function botUnreadChats<T extends Pick<ChatSummary, "id" | "botId" | "archived" | "panelId" | "unread" | "schedules">>(
   chats: readonly T[],
   botId: string,
 ): T[] {
@@ -43,7 +60,7 @@ export function botUnreadChats<T extends Pick<ChatSummary, "id" | "botId" | "arc
 
 /** Bot IDs that currently have an unread dot. */
 export function unreadBotIds(
-  chats: readonly Pick<ChatSummary, "botId" | "archived" | "panelId" | "unread">[],
+  chats: readonly Pick<ChatSummary, "botId" | "archived" | "panelId" | "unread" | "schedules">[],
 ): Set<string> {
   const out = new Set<string>();
   for (const chat of chats) {
@@ -53,7 +70,7 @@ export function unreadBotIds(
 }
 
 /** Every non-archived, non-panel unread chat across all bots. */
-export function allUnreadChats<T extends Pick<ChatSummary, "id" | "archived" | "panelId" | "unread">>(
+export function allUnreadChats<T extends Pick<ChatSummary, "id" | "archived" | "panelId" | "unread" | "schedules">>(
   chats: readonly T[],
 ): T[] {
   return chats.filter(isUnreadChat);

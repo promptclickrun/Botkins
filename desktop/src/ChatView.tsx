@@ -1,4 +1,5 @@
 import AlertActions, { hasProactiveTeam } from "./AlertActions";
+import WorkflowActionCard from "./WorkflowActionCard";
 import {
   Fragment,
   useCallback,
@@ -13,15 +14,16 @@ import {
 import {
   ArrowDown,
   ArrowLeft,
+  BrainCircuit,
   Clock,
   Copy,
   Ellipsis,
   File,
   Folder,
   FileDiff,
-  FoldVertical,
   FolderGit2,
   GitFork,
+  PanelLeft,
   PanelRight,
   Monitor,
   Smile,
@@ -32,7 +34,7 @@ import {
   Volume2,
   Square,
 } from "lucide-react";
-import { Button, Glass, Menu as GlisseMenu } from "glisse";
+import { Button, Glass, Menu as GlisseMenu, type MenuEntry } from "glisse";
 import { type CompletionScroll, finalReplyIndex } from "./completionScroll";
 import { isSilentMessage } from "../desktop/link/silent-reply.mjs";
 import { pullRequestUrl } from "../desktop/link/pr-url.mjs";
@@ -42,31 +44,32 @@ import { useStableFunctions } from "./stable";
 import type { WindowState } from "./hotState";
 import type { ChatFiles, FilePreview } from "./ChatFileLink";
 import {
-  HelperChip,
   InterimUpdate,
-  LiveLead,
   ReasoningUpdate,
   RunCards,
   TaskChip,
   TaskDrawer,
   TimelineFold,
   WorkSteps,
-  WorkingPill,
   duration,
+  useNow,
 } from "./ChatActivity";
 import { ActivityIsland, IslandReceipt } from "./ActivityIsland";
 import { ChapterSummary, CrewCard, canStopHelpers, crewCardProps } from "./ActivityInspector";
-import { crewOf, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
+import { finishedCrewLine, storyChapters, storySteps, type StoryUpdate } from "./activityStory";
 import { QuoteContext } from "./Composer";
 import { MentionChips } from "./MentionMenu";
-import { TeamRail } from "./TeamRail";
+import { AgentMessageRail, IncomingAgentRail } from "./AgentMessageRail";
+import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
+import { isStepCoveredByRail } from "./activityModel";
 import RequestPanel from "./RequestPanel";
 import { LinkPreviewCard, useReadAloud } from "./Extras";
 import { liveTurnDisplay, updateInChat } from "./liveDisplay";
-import type { IslandUpdate } from "./island";
+import { thoughtParts, type IslandUpdate } from "./island";
 import { clearReadingError, readAloud, useReading } from "./voice";
 import ContextDetails from "./ContextDetails";
 import { BotAvatar, activityLabel, botActivity, chatActivity, useOutcome } from "./Avatar";
+import type { ChatDetails } from "./ChatSide";
 import SidePane, { paneAction, useNarrow, usePaneAsk, type Inspect } from "./SidePane";
 import ComputerScreen from "./ComputerScreen";
 import { chatDefault, ModelBadge, modelLabel, useDefaultProvider } from "./ModelPicker";
@@ -81,12 +84,14 @@ import { PersonBadge, useMentionDirectory, type ChatPerson } from "./PersonBadge
 import type { Bot, Chat, ChatMode, Message, Run, State } from "./types";
 import { closed, sessionTodos, TRANSFER_TODOS } from "../desktop/link/session-todos";
 import { CONTINUE_OPEN_STEPS, keptLine, openLine } from "./keep";
-import { orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
+import { chatDisplayEntries, isVoiceTranscriptInterim, messageTimelineOwner, orderedRunEvents, type RunTimelineEvent } from "./chatTimeline";
 import { teamCan } from "./teamAccess";
 import { regenerateTitleItem, useAsk, useMenu } from "./Pages";
 import "./canvas.css";
 import "./projects.css";
 import "./groups.css";
+// Last, so the simplified chat (header, column, message box, Details) wins over the older rules.
+import "./chat.css";
 
 /** A bot's face in a mention tag (src/PersonBadge.tsx): one function, so the chat's mention directory stays the same object. */
 const mentionBotFace = (bot: Bot) => <BotAvatar bot={bot} size={14} badge={false} />;
@@ -169,26 +174,57 @@ function ReactionList({ message, state }: { message: Message; state: State }) {
   })}</div>;
 }
 
-function ChatOptions({ state, chat, fail }: { state: State; chat: Chat; fail: (error: unknown) => void }) {
+/**
+ * The chat's ⋯ menu: Regenerate title, and what moved out of the header (model and thinking,
+ * Invite, Bot settings). Details in the side pane has the same, for when the pane is open.
+ */
+function ChatOptions({
+  state,
+  chat,
+  fail,
+  pickModel,
+  invite,
+  botSettings,
+}: {
+  state: State;
+  chat: Chat;
+  fail: (error: unknown) => void;
+  pickModel?: () => void;
+  invite?: () => void;
+  botSettings?: () => void;
+}) {
   const item = regenerateTitleItem(state, chat, fail);
-  if (!item || item === "separator") return null;
-  const Icon = item.icon;
+  const items: MenuEntry[] = [];
+  if (item && item !== "separator") {
+    const Icon = item.icon;
+    items.push({
+      label: item.label,
+      icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
+      onSelect: item.run,
+      disabled: item.disabled,
+      destructive: item.danger,
+    });
+  }
+  const more: MenuEntry[] = [
+    ...(pickModel ? [{ label: "Model and thinking…", icon: <BrainCircuit size={14} aria-hidden="true" />, onSelect: pickModel }] : []),
+    ...(invite ? [{ label: "Invite…", icon: <UserPlus size={14} aria-hidden="true" />, onSelect: invite }] : []),
+    ...(botSettings ? [{ label: "Bot settings", icon: <SlidersHorizontal size={14} aria-hidden="true" />, onSelect: botSettings }] : []),
+  ];
+  if (items.length && more.length) items.push("separator");
+  items.push(...more);
+  if (!items.length) return null;
+  return <GlisseMenu className="chathead-menu" aria-label="Chat options" align="end" icon={<Ellipsis size={17} />} items={items} />;
+}
+
+/** The header's context use: a small ring filled to the percent used, warning past 80%. */
+function ContextRing({ percent }: { percent: number }) {
+  const r = 7;
+  const around = 2 * Math.PI * r;
   return (
-    <GlisseMenu
-      className="chathead-menu"
-      aria-label="Chat options"
-      align="end"
-      icon={<Ellipsis size={17} />}
-      items={[
-        {
-          label: item.label,
-          icon: Icon ? <Icon size={14} aria-hidden="true" /> : undefined,
-          onSelect: item.run,
-          disabled: item.disabled,
-          destructive: item.danger,
-        },
-      ]}
-    />
+    <svg className={"context-ring-mark" + (percent >= 80 ? " high" : "")} width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="9" cy="9" r={r} className="ring-track" />
+      <circle cx="9" cy="9" r={r} className="ring-fill" strokeDasharray={(around * Math.max(percent, 2)) / 100 + " " + around} transform="rotate(-90 9 9)" />
+    </svg>
   );
 }
 
@@ -223,6 +259,8 @@ function ChatViewBody({
   openToday,
   openRoutines,
   openBot,
+  listShown,
+  toggleList,
 }: {
   updates: WindowState;
   completions: CompletionScroll;
@@ -249,6 +287,10 @@ function ChatViewBody({
   openRoutines?: (target: { id?: string; botId?: string }) => void;
   /** Opens this bot's page. */
   openBot?: () => void;
+  /** Whether the chat list beside the chat is showing; given with toggleList. */
+  listShown?: boolean;
+  /** Shows or hides the chat list beside the chat. Without it the header's left button goes back to Chats. */
+  toggleList?: () => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -337,16 +379,19 @@ function ChatViewBody({
   const turnWaits = requests.some((r) => !r.detached);
   const todos = sessionTodos(latest?.todos, chat.todos ?? chatRuns.find((run) => run.todos)?.todos) ?? [];
   const todoRail = todos.length > 0 && <TaskChip todos={todos} open={drawer === "tasks"} toggle={() => setDrawer(drawer === "tasks" ? "" : "tasks")} />;
-  // The to-do chip rides beside the latest turn's fold whenever that fold is sure to be drawn.
-  const todoBesideFold = latest && !islandMode && (latest.status === "Working" || foldFinishedSteps) &&
+  // The to-do chip rides beside the latest turn's finished fold whenever that fold is drawn.
+  const todoBesideFold = latest && !islandMode && latest.status !== "Working" && foldFinishedSteps &&
     chat.messages.some((message) => message.role === "user" && message.runId === latest.id && !message.steeredRunId && !message.answer);
-  // The latest turn's helpers and background commands, for the chip above the message box.
-  const latestCrew = useMemo(() => (latest ? crewOf(latest) : null), [latest?.steps, latest?.agents]);
   const lastUserRun = [...chat.messages].reverse().find((m) => m.role === "user" && m.runId)?.runId;
   // What the chat's bot is doing now; when a reply ends, the avatar plays how it went once.
   const activity = chatActivity(state, chat.id);
   const face = useOutcome(activity, !!latest && failed.includes(latest.status));
   const doing = activityLabel(activity);
+  // Whether the live ActivityIsland is currently visible in the scroller: when it is, hide the quiet status line above the composer.
+  const [islandVisible, setIslandVisible] = useState(false);
+  useEffect(() => {
+    if (!islandMode || latest?.status !== "Working") setIslandVisible(false);
+  }, [islandMode, latest?.id, latest?.status]);
   // The side pane's open or closed choice is kept per computer, for every chat. In a narrow window
   // the pane is a drawer over the conversation instead, open only when asked for.
   const [sideOpen, setSideOpen] = useState(() => {
@@ -429,11 +474,13 @@ function ChatViewBody({
     if (!onScreen || computer?.state !== "online" || watching?.hostId !== hostId || watching?.chatId !== chat.id) setWatching(null);
   }, [onScreen, computer?.state, hostId, chat.id, watching]);
   const remoteHost = !!state.remote?.using;
-  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, preview: (file: FilePreview) => {
+  // The index's revision: a reply's attachments are recorded just after it is written, so its paths are checked again then.
+  const artifactRevision = state.artifacts?.revision ?? 0;
+  const files = useMemo(() => ({ chatId: chat.id, botId: bot.id, hostId, remote: remoteHost, revision: artifactRevision, preview: (file: FilePreview) => {
     setPull(undefined);
     setPreview({ ...file, chatId: chat.id });
     showPaneNow.current(true);
-  } }), [chat.id, bot.id, hostId, remoteHost]);
+  } }), [chat.id, bot.id, hostId, remoteHost, artifactRevision]);
   const closePane = () => {
     showPane(false);
     paneAction(chat.id, "closed");
@@ -513,7 +560,7 @@ function ChatViewBody({
   useLayoutEffect(() => {
     follow();
     // A turn that ends, and a teammate row that appears, add rows below the last message too.
-  }, [follow, chat.messages.length, hasText, liveStream, liveThinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length]);
+  }, [follow, chat.messages.length, hasText, liveStream, liveThinking, liveSteps, requests.length, side?.answer, latest?.status, latest?.teamwork?.length, latest?.taskHandoffs?.length]);
   // Rows also change size without any of the above changing: a card loads, a row or the task
   // list is opened. While the view follows the latest, growth is followed too, except just after
   // the person opened something: that stays where it is, and Scroll to latest message shows if the end
@@ -676,6 +723,29 @@ function ChatViewBody({
   const context = chat.context;
   const percent = context ? Math.min(100, Math.round((context.current / context.limit) * 100)) : 0;
   const [contextOpen, setContextOpen] = useState(false);
+  // The context actions the header used to carry; now in the context popover and in Details.
+  const compactNow = () => void window.botkins.compact(chat.id).catch((e) => setNotice(e.message));
+  const resetContext = () => void window.botkins.changeMainFork(chat.id, "reset", undefined, chat.activeFork).catch((e) => setNotice(e.message));
+  const switchFork = (id: string) => void window.botkins.changeMainFork(chat.id, "switch", id, chat.activeFork).catch((e) => setNotice(e.message));
+  // What Details in the side pane offers for this chat (ChatSide.tsx).
+  const chatDetails: ChatDetails = {
+    model: !group && canManageAgents ? { label: modelLabel(model, models, defaultProvider), badge: <ModelBadge choice={model} models={models} />, change: pickModel } : undefined,
+    context: context && context.limit > 0 ? { current: context.current, limit: context.limit, percent } : undefined,
+    busy,
+    compact: (context && context.limit > 0) || ownMain ? compactNow : undefined,
+    reset: ownMain ? resetContext : undefined,
+    forks: ownMain ? chat.forks : undefined,
+    activeFork: chat.activeFork,
+    switchFork: ownMain ? switchFork : undefined,
+    todos,
+    people: peopleView
+      ? {
+          summary: chatPeopleList.length <= 1 ? "Only you are in this chat" : chatPeopleList.length + " people in this chat",
+          invite: !chat.main ? () => setShowPeople(true) : undefined,
+        }
+      : undefined,
+    botSettings: canManageAgents ? botSettings : undefined,
+  };
 
   // With "Read replies aloud" on, each new final reply in the open chat is spoken. Interim
   // messages are activity markers, not replies, and must never be read aloud as a finished turn.
@@ -725,14 +795,34 @@ function ChatViewBody({
     );
   }
 
-  const timelineRendered = new Set<string>();
   const timelineBusy = latest?.status === "Working";
   function messageMenu(e: React.MouseEvent, message: Message, index: number) {
     if (window.getSelection()?.toString()) return;
     e.preventDefault();
     setMenu({ message, index, x: e.clientX, y: e.clientY });
   }
-  const timelineMessage = (m: Message, index: number) => (
+  const accessibleChatIds = useMemo(() => new Set(state.chats.map((c) => c.id)), [state.chats]);
+  const timelineMessage = (m: Message, index: number) =>
+    isAgentMessage(m) ? (
+      <IncomingAgentRail
+        key={`timeline-message-${index}`}
+        id={`message-${chat.id}-${loadedFrom + index}`}
+        message={m}
+        bots={state.bots}
+        accessibleChatIds={accessibleChatIds}
+        openChat={openChat}
+        files={files}
+      />
+    ) : isAnswerReceipt(m, chat.messages[index - 1]) ? (
+      <div
+        key={`timeline-message-${index}`}
+        id={`message-${chat.id}-${loadedFrom + index}`}
+        className="answer-receipt"
+        role="note"
+      >
+        {answerReceiptLabel(m)}
+      </div>
+    ) : (
     <article
       id={`message-${chat.id}-${loadedFrom + index}`}
       className={messageClass(m, chat.messages, index)}
@@ -749,7 +839,18 @@ function ChatViewBody({
       ) : <b className="command-label">Command output</b>}
       {m.answer && <small className="answer-label">{m.answer.title}</small>}
       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-      {m.role === "command" && m.plain ? <pre className="command-output">{m.text}</pre> : <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />}
+      {m.actionCard ? (
+        <WorkflowActionCard
+          chatId={chat.id}
+          card={m.actionCard}
+          readOnly={!!(state.team && "me" in state.team)}
+          openChat={openChat}
+        />
+      ) : m.role === "command" && m.plain ? (
+        <pre className="command-output">{m.text}</pre>
+      ) : (
+        <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
+      )}
       <Attachments list={m.attachments} />
       {!!m.mentions?.length && (
         <MentionChips
@@ -759,7 +860,7 @@ function ChatViewBody({
           open={(r) => { if (r.kind === "project") openProject?.(r.id); else if (r.kind === "wiki") openWiki?.(r.path); else if (r.kind === "board") openToday?.(); }}
         />
       )}
-      {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+      {m.role === "assistant" && !m.actionCard && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
       <Reactions state={state} message={m} botId={chat.botId} />
       {actions(m, index)}
     </article>
@@ -769,14 +870,13 @@ function ChatViewBody({
     const live = run.status === "Working";
     const related = chat.messages
       .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.runId === run.id || message.steeredRunId === run.id || message.answer?.runId === run.id);
-    const initial = related.find(({ message }) => message.role === "user" && message.runId === run.id && !message.steeredRunId && !message.answer);
+      .filter(({ message }) => messageTimelineOwner(message) === run.id);
     const reply = related.filter(({ message }) => message.role === "assistant" && !message.interim && !isSilentMessage(message));
     const allSteps = run.steps ?? [];
     // The bot is on its work now: the turn runs and nothing waits for the person. Its live line
     // shimmers (T3 Code's look): the running step, or the lead while no step runs in view.
     const onIt = run.status === "Working" && !turnWaits;
-    const showStep = (step: NonNullable<typeof run.steps>[number]) => (stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed");
+    const showStep = (step: NonNullable<typeof run.steps>[number]) => !isStepCoveredByRail(step, run) && ((stepsMode === "open" && !islandMode) || (stepsMode === "failed" && step.status === "Failed"));
     type Event = { kind: RunTimelineEvent["kind"] | "crew"; at: number; order: number; key: string; body: ReactNode; fold: ReactNode; details: ReactNode };
     const events: Event[] = [];
     // The turn's updates for the island's receipt, where they fold with the thinking once it ended.
@@ -791,7 +891,7 @@ function ChatViewBody({
         if (!isReasoning && showUpdates) receiptUpdates.push({ key: event.key, at: event.at, text: event.value.text });
         const update = isReasoning
           ? <ReasoningUpdate text={event.value.text} />
-          : <InterimUpdate text={event.value.text} />;
+          : <InterimUpdate text={event.value.text} files={files} />;
         events.push({
           kind: event.kind, at: event.at, order: event.order, key: event.key,
           body: isReasoning ? (showThinking && thinkingMode === "open" && !islandMode ? update : null) : (updateInChat({ live, showUpdates, showThinking, thinkingMode, islandMode }) ? update : null),
@@ -805,19 +905,22 @@ function ChatViewBody({
         const marker = <div className="timeline-person">↳ {event.value.answer?.title ? event.value.answer.title + ": " : ""}{event.value.text}</div>;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: timelineMessage(event.value, event.index), fold: marker, details: marker });
       } else {
+        if (isStepCoveredByRail(event.value, run)) continue;
         const body = <WorkSteps steps={[event.value]} live={onIt} onOpen={(step) => routeNow.current(run.id, "step-" + step.id)} />;
         events.push({ kind: event.kind, at: event.at, order: event.order, key: event.key, body: showStep(event.value) ? body : null, fold: body, details: body });
       }
     }
-    // The crew card: among the events where the first helper or command started while the turn
-    // runs, and right after the receipt or fold once it ended.
+    // The crew card stays in the feed while the turn runs or while any background command is still
+    // running. Once finished, its summary folds into the turn's fold or receipt line.
     const crewInfo = crewCardProps(run);
-    const crewCard = crewInfo && (
+    const crewRunning = !!crewInfo && crewInfo.crew.running > 0;
+    const crewFinished = !live && crewInfo && !crewRunning ? finishedCrewLine(crewInfo.crew) : undefined;
+    const crewCard = crewInfo && (live || crewRunning) ? (
       <CrewCard key={"crew-" + run.id} run={run} line={crewInfo.line} marks={crewInfo.marks} open={crewOpen.has(run.id)} toggle={toggleCrew} openMember={openMember} botName={bot.name} canStop={canStop} />
-    );
-    if (crewInfo && live) {
-      const at = events.findIndex((event) => event.at > crewInfo.crew.at);
-      events.splice(at < 0 ? events.length : at, 0, { kind: "crew", at: crewInfo.crew.at, order: 0, key: "crew-" + run.id, body: crewCard, fold: null, details: null });
+    ) : null;
+    if (crewCard && live) {
+      const at = events.findIndex((event) => event.at > crewInfo!.crew.at);
+      events.splice(at < 0 ? events.length : at, 0, { kind: "crew", at: crewInfo!.crew.at, order: 0, key: "crew-" + run.id, body: crewCard, fold: null, details: null });
     }
     const activityEvents = events.filter((event) => event.kind !== "reply" && event.kind !== "step");
     // Older records can have a summary and distinct tool names without individual call records.
@@ -840,11 +943,11 @@ function ChatViewBody({
       .map((event) => <Fragment key={event.key}>{event.body}</Fragment>);
     const elapsed = run.finished === undefined ? run.usage?.durationMs : run.finished - run.time;
     // The bot's own steps, as the island's receipt and the Activity tab count them: a helper's steps are the crew card's.
-    const count = storySteps(allSteps).length;
+    const count = storySteps(allSteps, run).length;
     const endingLabel = run.ending === "timed-out" ? "Timed out" : run.ending === "interrupted" ? "Interrupted" : run.ending === "stopped" ? "Stopped" : run.ending === "failed" ? "Needs you" : "";
     const countLabel = count ? count + (count === 1 ? " step" : " steps") : undefined;
     const folded = foldFinishedSteps;
-    const hasActivity = !!olderWork || activityEvents.length > 0 || !!run.agents?.length || !!run.todos?.length;
+    const hasActivity = !!olderWork || !!crewFinished || activityEvents.length > 0 || !!run.agents?.length || !!run.todos?.length;
     const groupTranscript = group
       ? events.map((event) => {
           const visible = event.kind === "reply" || live || !folded || event.kind === "person" || event.kind === "command";
@@ -856,11 +959,12 @@ function ChatViewBody({
     // What the working bot is doing, as the header says it, without the trailing dots: "Coding".
     const doingNow = activityLabel(group && currentBot ? botActivity(state, currentBot.id) : activity).replace(/…$/, "") || "Working";
     const who = currentBot?.name ?? bot.name;
-    const line = live
+    const baseLine = live
       ? doingNow === "Needs you" ? who + " needs you" : who + " is " + doingNow[0].toLowerCase() + doingNow.slice(1)
       : elapsed === undefined ? endingLabel || "Turn activity" : `Worked for ${duration(elapsed)}`;
+    const line = [baseLine, crewFinished].filter(Boolean).join(" · ");
 
-    // Faces in the work log hold still; only the live line's face moves while the turn runs.
+    // Faces in the work log hold still.
     const stillFace = (size: number, moving = false) => <BotAvatar bot={currentBot ?? bot} state={live ? (group && currentBot ? botActivity(state, currentBot.id) : activity) : "idle"} size={size} animated={moving} />;
     const groupFailure = group && run.failures?.length
       ? run.failures.map((failure) => `${state.bots.find((b) => b.id === failure.botId)?.name ?? "A bot"}: ${failure.detail}`).join(" · ")
@@ -881,14 +985,12 @@ function ChatViewBody({
     );
     return (
       <Fragment key={`timeline-${run.id}`}>
-        {initial && timelineMessage(initial.message, initial.index)}
-        {live && !islandMode && <LiveLead avatar={stillFace(28, true)} label={doingNow} thought={showUpdates ? liveIntent.trim() || undefined : undefined} shimmer={onIt && doingNow !== "Needs you" && !allSteps.some((step) => !step.agentId && step.status === "Running" && showStep(step))} />}
         {(live || !folded) && stepsMode === "open" && olderWork}
         {group ? groupTranscript : (live || !folded || islandMode) ? events.map((event) => <Fragment key={event.key}>{event.body}</Fragment>) : personBody}
         {/* A finished one-bot turn folds above its answer: the work, then the reply. With the island
             the work folds into a receipt under the answer instead. */}
         {!group && !live && !islandMode && (folded || hasActivity) && fold}
-        {!group && !live && !islandMode && crewCard}
+        {!group && !live && !islandMode && crewRunning && crewCard}
         {/* Botkins gave the bot more turns in this run by itself: said just before the reply it kept going for. */}
         {!group && keptLine(run) && <div className="timeline-kept">{keptLine(run)}</div>}
         {!group && reply.map(({ message, index }) => timelineMessage(message, index))}
@@ -903,8 +1005,8 @@ function ChatViewBody({
             <LiveReply updates={updates} files={files} follow={follow} />
           </article>
         )}
-        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} onToggle={disclosed} onOpen={openerFor(run.id)} />}
-        {islandMode && !live && crewCard}
+        {islandMode && !live && <IslandReceipt run={orderedRun} thoughts={showThinking} updates={receiptUpdates} extra={crewFinished} onToggle={disclosed} onOpen={openerFor(run.id)} />}
+        {islandMode && !live && crewRunning && crewCard}
         {islandMode && live ? (
           <ActivityIsland
             run={orderedRun}
@@ -917,10 +1019,11 @@ function ChatViewBody({
             thoughts={showThinking}
             onToggle={disclosed}
             onOpen={openerFor(run.id)}
+            onVisibility={setIslandVisible}
           />
-        ) : (live || group) && (live || folded || hasActivity) && fold}
-        {group && !live && crewCard}
-        <TeamRail run={run} bots={state.bots} />
+        ) : !live && group && (folded || hasActivity) && fold}
+        {group && !live && crewRunning && crewCard}
+        <AgentMessageRail run={run} bots={state.bots} tasks={state.tasks} openChat={openChat} />
         <RunCards run={run} prefill={prefill} pickModel={canManageAgents ? pickModel : undefined} />
         {!live && (failed.includes(run.status) || !!groupFailure) && (
           <div className="error run-error"><span>{groupFailure || (run.ending === "timed-out" ? "Timed out" : run.status) + " · " + (run.detail || "Reply stopped.")}</span>{!groupFailure && run.id === lastUserRun && !busy && <button className="secondary" onClick={() => void window.botkins.retry(run.id).catch((e) => setNotice(e.message))}><RotateCcw size={13} />Try again</button>}</div>
@@ -961,10 +1064,26 @@ function ChatViewBody({
             }}
           />
         )}
+      {/* The header keeps what a person reaches for in every chat: the chat list (or back), who
+          this is with one line of status, the project, a context ring, the side pane and the ⋯
+          menu. The model is in the message box and in Details; threads, Compact and Reset context
+          are in the ring's popover and in Details; Invite and Bot settings are in ⋯ and Details. */}
       <div className="chathead">
-        <button className="chathead-back" aria-label="Back to chats" title="Back to chats" onClick={back}>
-          <ArrowLeft size={18} />
-        </button>
+        {toggleList ? (
+          <button
+            className="chathead-icon chathead-list"
+            aria-label={listShown ? "Hide chat list" : "Show chat list"}
+            title={listShown ? "Hide chat list" : "Show chat list"}
+            aria-pressed={!!listShown}
+            onClick={toggleList}
+          >
+            <PanelLeft size={18} />
+          </button>
+        ) : (
+          <button className="chathead-back" aria-label="Back to chats" title="Back to chats" onClick={back}>
+            <ArrowLeft size={18} />
+          </button>
+        )}
         {group ? (
           <span className="group-avatars" aria-hidden="true">
             {members.map((m) => (
@@ -972,33 +1091,19 @@ function ChatViewBody({
             ))}
           </span>
         ) : (
-          <BotAvatar bot={bot} state={face} size={30} animated />
+          <BotAvatar bot={bot} state={face} size={32} animated />
         )}
         <div className="chathead-title">
           <h2>{group ? chat.title : bot.name}</h2>
-          <small className={doing ? "doing" : undefined}>
-            {doing || (chat.main && "Main chat") ||
-              (group
-                ? chat.title === members.map((m) => m.name).join(", ")
-                  ? "Group chat · " + members.length + " bots"
-                  : members.map((m) => m.name).join(", ")
-                : bot.role)}
+          <small>
+            {group
+              ? chat.title === members.map((m) => m.name).join(", ")
+                ? "Group chat · " + members.length + " bots"
+                : members.map((m) => m.name).join(", ")
+              : [chat.main && "Main chat", modelLabel(model, models, defaultProvider)].filter(Boolean).join(" · ") || bot.role}
           </small>
         </div>
         <div className="chathead-tools">
-          {ownMain && <select aria-label="Main chat context" title="Main chat context" disabled={busy}
-            value={chat.activeFork} onChange={e => {
-              const id = e.target.value;
-              if (id === "compact") {
-                void window.botkins.compact(chat.id).catch(err => setNotice(err.message));
-                return;
-              }
-              void (id === "reset" ? window.botkins.changeMainFork(chat.id, "reset", undefined, chat.activeFork) : window.botkins.changeMainFork(chat.id, "switch", id, chat.activeFork)).catch(err => setNotice(err.message));
-            }}>
-            {chat.forks?.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-            <option value="compact">Compact</option>
-            <option value="reset">Reset context</option>
-          </select>}
           {project && (
             <div className="project-tag">
               <span className="project-label" title={chat.folder ?? project.folder ?? project.name}>
@@ -1023,19 +1128,15 @@ function ChatViewBody({
           {context && context.limit > 0 && (
             <div className="context-meter">
               <button
-                className="context-open"
+                className="context-open context-ring"
                 aria-haspopup="dialog"
                 aria-expanded={contextOpen}
                 aria-label={"Context window: " + percent + "% used. Show details"}
                 title="Context window"
                 onClick={() => setContextOpen(!contextOpen)}
               >
-                <span className="meter" aria-hidden="true">
-                  <i style={{ width: percent + "%" }} className={percent >= 80 ? "high" : ""} />
-                </span>
-                <small>
-                  {percent}%<span className="context-words"> of context</span>
-                </small>
+                <ContextRing percent={percent} />
+                <small>{percent}%</small>
               </button>
               {contextOpen && (
                 <ContextDetails
@@ -1045,40 +1146,16 @@ function ChatViewBody({
                   close={() => setContextOpen(false)}
                   compact={() => {
                     setContextOpen(false);
-                    void window.botkins.compact(chat.id).catch((e) => setNotice(e.message));
+                    compactNow();
                   }}
+                  reset={ownMain ? () => {
+                    setContextOpen(false);
+                    resetContext();
+                  } : undefined}
+                  switchFork={ownMain ? switchFork : undefined}
                 />
               )}
-              <button
-                className="chathead-icon"
-                aria-label="Compact"
-                disabled={busy}
-                title="Compact: summarize earlier turns to free up context"
-                onClick={() => void window.botkins.compact(chat.id).catch((e) => setNotice(e.message))}
-              >
-                <FoldVertical size={17} />
-              </button>
             </div>
-          )}
-          {!group && canManageAgents && (
-            <button
-              className="chat-model"
-              aria-label={"Model: " + modelLabel(model, models, defaultProvider) + ". Change model and thinking"}
-              title="Model and thinking"
-              onClick={pickModel}
-            >
-              <ModelBadge choice={model} models={models} />
-            </button>
-          )}
-          {!chat.main && peopleView && (
-            <button className="chathead-icon chat-invite" aria-label="Invite" title="Invite" aria-haspopup="dialog" onClick={() => setShowPeople(true)}>
-              <UserPlus size={17} />
-            </button>
-          )}
-          {canManageAgents && (
-            <button className="chathead-icon bot-settings" aria-label="Bot settings" title="Bot settings" onClick={botSettings}>
-              <SlidersHorizontal size={17} />
-            </button>
           )}
           {paneAllowed && (
             <button
@@ -1094,7 +1171,15 @@ function ChatViewBody({
               {unseen && <i className="pane-dot" aria-hidden="true" />}
             </button>
           )}
-          <ChatOptions key={chat.id} state={state} chat={chat} fail={(error) => setNotice(error instanceof Error ? error.message : String(error))} />
+          <ChatOptions
+            key={chat.id}
+            state={state}
+            chat={chat}
+            fail={(error) => setNotice(error instanceof Error ? error.message : String(error))}
+            pickModel={!group && canManageAgents ? pickModel : undefined}
+            invite={!chat.main && peopleView ? () => setShowPeople(true) : undefined}
+            botSettings={canManageAgents ? botSettings : undefined}
+          />
         </div>
       </div>
       <div className="messages-wrap">
@@ -1178,35 +1263,86 @@ function ChatViewBody({
           )}
           {historic && historic.messages.map((message, i) => historic.from + i < loadedFrom && !isSilentMessage(message) &&
             (!message.interim || (thinkingMode === "open" && (!foldFinishedSteps || !message.runId || !runs.has(message.runId) || runs.get(message.runId)?.status === "Working"))) && (
+            isAgentMessage(message) ? (
+              <IncomingAgentRail
+                key={historic.from + i}
+                id={`message-${chat.id}-${historic.from + i}`}
+                message={message}
+                bots={state.bots}
+                accessibleChatIds={accessibleChatIds}
+                openChat={openChat}
+                files={files}
+              />
+            ) : isAnswerReceipt(message, historic.messages[i - 1]) ? (
+              <div
+                key={historic.from + i}
+                id={`message-${chat.id}-${historic.from + i}`}
+                className="answer-receipt"
+                role="note"
+              >
+                {answerReceiptLabel(message)}
+              </div>
+            ) : (
             <article key={historic.from + i} id={`message-${chat.id}-${historic.from + i}`} className={messageClass(message, historic.messages, i)} onContextMenu={e => messageMenu(e, message, historic.from + i)}>
               {message.role === "user" && personLabel(message, historic.messages, i)}
-              <RichText text={message.text} files={files} mentions={mentions} />
+              {message.actionCard ? (
+                <WorkflowActionCard
+                  chatId={chat.id}
+                  card={message.actionCard}
+                  readOnly={!!(state.team && "me" in state.team)}
+                  openChat={openChat}
+                />
+              ) : (
+                <RichText text={message.text} files={files} mentions={mentions} />
+              )}
               <Attachments list={message.attachments} />
               <Reactions state={state} message={message} botId={chat.botId} />
             </article>
+            )
           ))}
-          {chat.messages.map((m, i) => {
-            const timelineOwner = m.runId ?? m.steeredRunId ?? m.answer?.runId;
-            const run = timelineOwner ? runs.get(timelineOwner) : undefined;
-            if (run) {
-              if (timelineRendered.has(run.id)) return null;
-              timelineRendered.add(run.id);
-              return renderTimeline(run);
-            }
-            if (isSilentMessage(m) || (m.interim && thinkingMode !== "open")) return null;
+          {chatDisplayEntries(chat.messages, runs, timelineBusy ? latest : undefined).map((entry) => {
+            if (entry.kind === "timeline") return renderTimeline(entry.run);
+            const { message: m, index: i } = entry;
+            const interim = !!m.interim && !isVoiceTranscriptInterim(m);
+            if (isSilentMessage(m) || (interim && thinkingMode !== "open")) return null;
+            const prev = i > 0 ? chat.messages[i - 1] : undefined;
+            const samePrevAssistant =
+              prev?.role === "assistant" &&
+              !!prev.text &&
+              prev.botId === m.botId &&
+              (!prev.interim || isVoiceTranscriptInterim(prev)) &&
+              !messageTimelineOwner(prev);
             return (
               <Fragment key={i}>
-                {(m.text || m.role !== "assistant") && (
+                {(m.text || m.actionCard || m.role !== "assistant") && (
+                  isAgentMessage(m) ? (
+                    <IncomingAgentRail
+                      id={`message-${chat.id}-${loadedFrom + i}`}
+                      message={m}
+                      bots={state.bots}
+                      accessibleChatIds={accessibleChatIds}
+                      openChat={openChat}
+                      files={files}
+                    />
+                  ) : isAnswerReceipt(m, chat.messages[i - 1]) ? (
+                    <div
+                      id={`message-${chat.id}-${loadedFrom + i}`}
+                      className="answer-receipt"
+                      role="note"
+                    >
+                      {answerReceiptLabel(m)}
+                    </div>
+                  ) : (
                   <article
                     id={`message-${chat.id}-${loadedFrom + i}`}
                     className={messageClass(m, chat.messages, i)}
                     onContextMenu={e => messageMenu(e, m, loadedFrom + i)}
                   >
-                    {m.interim ? (
-                      <InterimUpdate text={m.text} onToggle={disclosed} />
+                    {interim ? (
+                      <InterimUpdate text={m.text} files={files} onToggle={disclosed} />
                     ) : m.role === "assistant" ? (
                       // Consecutive replies from one bot share its label: only the first of a run shows it.
-                      !(chat.messages[i - 1]?.role === "assistant" && chat.messages[i - 1].text && chat.messages[i - 1].botId === m.botId) && (
+                      !samePrevAssistant && (
                         <b className="speaker">
                           {(() => {
                             const who = group ? state.bots.find((b) => b.id === m.botId) : bot;
@@ -1220,9 +1356,16 @@ function ChatViewBody({
                     ) : (
                       <b className="command-label">Command output</b>
                     )}
-                    {!m.interim && <>
+                    {!interim && <>
                       {m.quote && <blockquote className="msg-quote">{m.quote}</blockquote>}
-                      {m.role === "command" && m.plain ? (
+                      {m.actionCard ? (
+                        <WorkflowActionCard
+                          chatId={chat.id}
+                          card={m.actionCard}
+                          readOnly={!!(state.team && "me" in state.team)}
+                          openChat={openChat}
+                        />
+                      ) : m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
                       ) : (
                         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
@@ -1246,76 +1389,36 @@ function ChatViewBody({
                         }}
                       />
                     )}
-                      {m.role === "assistant" && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
+                      {m.role === "assistant" && !m.actionCard && <LinkPreviewCard text={m.text} enabled={!!state.settings.linkPreviews} />}
                       <Reactions state={state} message={m} botId={chat.botId} />
                       {actions(m, i)}
                     </>}
                   </article>
+                  )
                 )}
               </Fragment>
             );
           })}
-          {timelineBusy && !timelineRendered.has(latest.id) && (
-            <Fragment key={`unanchored-timeline-${latest.id}`}>
-              {renderTimeline(latest)}
-            </Fragment>
-          )}
-          {busy && !timelineBusy && group && (
+          {busy && !timelineBusy && group && hasText && showUpdates && (
             <article className="assistant live">
-              {hasText && showUpdates ? (
-                <>
-                  {speaker && (
-                    <b className="speaker">
-                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
-                      <span className="speaker-name">{speaker.name}</span>
-                    </b>
-                  )}
-                  <LiveReply updates={updates} files={files} follow={follow} />
-                </>
-              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
-                <WorkingPill startedAt={latest.time} title={speaker?.name ? speaker.name + " is working" : undefined} />
-              ) : (
-                <>
-                  {speaker && (
-                    <b className="speaker">
-                      <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
-                      <span className="speaker-name">{speaker.name}</span>
-                    </b>
-                  )}
-                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
-                    {turnWaits ? "Waiting for your response…" : (speaker?.name ?? "The group") + " is typing…"}
-                  </p>
-                </>
+              {speaker && (
+                <b className="speaker">
+                  <BotAvatar bot={speaker} state={botActivity(state, speaker.id)} size={22} animated={false} />
+                  <span className="speaker-name">{speaker.name}</span>
+                </b>
               )}
+              <LiveReply updates={updates} files={files} follow={follow} />
             </article>
           )}
-          {busy && !timelineBusy && !group && (
+          {busy && !timelineBusy && !group && hasText && showUpdates && (
             <article className="assistant live">
-              {hasText && showUpdates ? (
-                <>
-                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
-                    <b className="speaker">
-                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
-                      <span className="speaker-name">{bot.name}</span>
-                    </b>
-                  )}
-                  <LiveReply updates={updates} files={files} follow={follow} />
-                </>
-              ) : !turnWaits && !state.settings.foldTools && latest?.status === "Working" ? (
-                <WorkingPill startedAt={latest.time} title={liveIntent || undefined} />
-              ) : (
-                <>
-                  {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
-                    <b className="speaker">
-                      <BotAvatar bot={bot} state={activity} size={22} animated={false} />
-                      <span className="speaker-name">{bot.name}</span>
-                    </b>
-                  )}
-                  <p className={"typing" + (turnWaits ? "" : " shimmer-text")} role="status">
-                    {turnWaits ? "Waiting for your response…" : liveIntent || "Working…"}
-                  </p>
-                </>
+              {!(chat.messages.at(-1)?.role === "assistant" && chat.messages.at(-1)?.text) && (
+                <b className="speaker">
+                  <BotAvatar bot={bot} state={activity} size={22} animated={false} />
+                  <span className="speaker-name">{bot.name}</span>
+                </b>
               )}
+              <LiveReply updates={updates} files={files} follow={follow} />
             </article>
           )}
           {panels.filter(panel => panel.kind === "screen").map(panel => (
@@ -1463,15 +1566,13 @@ function ChatViewBody({
             </span>
           </div>
         )}
-        {((todoRail && !todoBesideFold) || !!latestCrew || drawer === "tasks") && (
+        {((todoRail && !todoBesideFold) || drawer === "tasks") && (
           <>
-            <div className="canvas-chips">
-              {/* Composer chips keep the background helpers first. */}
-              {latestCrew && latest && (
-                <HelperChip running={latestCrew.running} total={latestCrew.members.length} onOpen={() => openMember(latest.id, latestCrew.members.find((m) => m.status === "Running")?.id ?? latestCrew.members[0].id)} />
-              )}
-              {!todoBesideFold && todoRail}
-            </div>
+            {!todoBesideFold && todoRail && (
+              <div className="canvas-chips">
+                {todoRail}
+              </div>
+            )}
             {drawer === "tasks" && todos.length > 0 && <TaskDrawer todos={todos} transfer={!busy && todos.some(todo => !closed(todo)) ? () => void window.botkins.send(chat.id, TRANSFER_TODOS).catch(e => setNotice(e.message)) : undefined} />}
           </>
         )}
@@ -1521,16 +1622,74 @@ function ChatViewBody({
             </div>
           );
         })()}
+        {(busy || latest?.status === "Working") && (!islandMode || !islandVisible) && (
+          <TurnStatusLine
+            label={(() => {
+              if (turnWaits) return "Waiting for you";
+              const latestThought = showThinking && thinkingMode === "open" ? latest?.reasoning?.at(-1)?.text : undefined;
+              const stepRunning = latest?.steps?.some((s) => !s.agentId && !s.background && s.status === "Running");
+              if (!stepRunning && latestThought) {
+                const heading = thoughtParts(latestThought).heading;
+                if (heading) return heading;
+              }
+              return liveIntent.trim() || doing || (group && speaker ? `${speaker.name} is working` : "Working…");
+            })()}
+            since={latest?.time ?? Date.now()}
+            steps={latest ? storySteps(latest.steps ?? [], latest).length : 0}
+            waiting={turnWaits}
+            onOpen={latest ? () => inspectNow.current("activity", latest.id) : undefined}
+          />
+        )}
         <QuoteContext.Provider value={{ quote, setQuote }}>{composer}</QuoteContext.Provider>
       </div>
       </div>
       {paneShown && narrow && <div className="pane-scrim" aria-hidden="true" onClick={closePane} />}
       {paneShown && (
-        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} />
+        <SidePane key={chat.id} inspect={inspect?.chatId === chat.id ? inspect : undefined} latestRunId={latest?.id} pull={pull?.chatId === chat.id ? pull : undefined} preview={preview?.chatId === chat.id ? preview : undefined} state={state} chat={chat} bot={bot} face={face} group={group} drawer={narrow} close={closePane} openComputer={openComputer} openRoutines={openRoutines} openBot={openBot} openChat={openChat} details={chatDetails} files={files} />
       )}
       {computer && !computer.member && computer.state === "online" && onScreen && watching?.hostId === computer.id && watching.chatId === chat.id &&
         <ComputerScreen key={computer.id + "/" + chat.id} host={computer} close={closeComputer} />}
     </div>
+  );
+}
+
+function formatStatusClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+/** One quiet status line directly above the composer while a turn runs (and the island is not in view). */
+function TurnStatusLine({
+  label,
+  since,
+  steps,
+  waiting,
+  onOpen,
+}: {
+  label: string;
+  since: number;
+  steps: number;
+  waiting: boolean;
+  onOpen?: () => void;
+}) {
+  const now = useNow(!waiting);
+  const elapsed = formatStatusClock(Math.max(0, now - since));
+  const meta = steps > 0 ? `${elapsed} · ${steps} ${steps === 1 ? "step" : "steps"}` : elapsed;
+  return (
+    <button
+      type="button"
+      className={"turn-status-line" + (waiting ? " waiting" : "")}
+      onClick={onOpen}
+      disabled={!onOpen}
+      aria-label={`${label}, ${meta}. Open turn activity`}
+    >
+      <span className="turn-status-dot" aria-hidden="true" />
+      <span className="turn-status-label">{label}</span>
+      <span className="turn-status-meta">{meta}</span>
+    </button>
   );
 }
 

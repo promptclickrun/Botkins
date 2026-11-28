@@ -34,6 +34,7 @@ import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from
 import { join } from "node:path";
 import { CopilotClient, CopilotRequestHandler, CopilotWebSocketCloseStatus, CopilotWebSocketHandler, RuntimeConnection, defineTool as sdkTool } from "@microsoft/copilot-sdk";
 import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
+import { resumeOrRecover } from "../sessions.mjs";
 import { QUIET_CHECK_MS, watchQuiet } from "../liveness.mjs";
 import { decide } from "./permissions.mjs";
 import { CopilotRelay } from "./relay.mjs";
@@ -372,7 +373,8 @@ class CopilotSession extends ProviderSession {
     return completed;
   }
   async send({ prompt, attachments, fleet }, timeoutMs, onReady) {
-    const options = { prompt, ...(attachments?.length && { attachments: sdkAttachments(attachments) }) };
+    const prefix = this.entry.lost ? this.entry.lost + "\n\n" : "";
+    const options = { prompt: prefix + prompt, ...(attachments?.length && { attachments: sdkAttachments(attachments) }) };
     // Admit the message and use the session events for completion. The SDK's own completion
     // timeout is a wall-clock deadline; a build or a sub-agent may run for as long as it takes. The
     // turn ends when the reply is done, when the person stops it, or when the session is gone
@@ -497,6 +499,7 @@ class CopilotSession extends ProviderSession {
       })();
       admission.catch(() => {});
       const response = await Promise.race([admission, outcome]);
+      if (prefix) this.entry.lost = "";
       return { text: response?.data?.content?.trim() || "" };
     } finally {
       ended = true;
@@ -1040,17 +1043,13 @@ export class CopilotProvider extends ModelProvider {
     // of the session rather than asked for.
     if (spec.inference && !(await this.auth().catch(() => ({ connected: false }))).connected) options.github = { capi: { enabled: false } };
     if (this.teardowns.size) await Promise.allSettled([...this.teardowns]);
-    let sdk;
-    if (spec.established) {
-      try {
-        sdk = await timed("resume session", () => client.resumeSession(spec.sessionId, options));
-      } catch (error) {
-        // The first turn may have failed before the runtime persisted any events.
-        if (spec.hasReplies || !String(error.message).includes("Session not found")) throw error;
-      }
-    }
-    const resumed = !!sdk;
-    sdk ??= await timed("create session", () => client.createSession({ ...options, sessionId: spec.sessionId }));
+    const { value: sdk, recovered, lost } = await resumeOrRecover({
+      spec,
+      hasRef: !!spec.established,
+      resume: () => timed("resume session", () => client.resumeSession(spec.sessionId, options)),
+      create: () => timed("create session", () => client.createSession({ ...options, sessionId: spec.sessionId })),
+    });
+    const resumed = !recovered && !!spec.established;
     // A new session of a plan's model was created on that model already.
     if ((resumed || (spec.model.source && !planned(spec.model, spec.inference))) && sdk.rpc?.model) {
       try {
@@ -1071,6 +1070,7 @@ export class CopilotProvider extends ModelProvider {
       id: spec.sessionId,
       ...(spec.sourcesOnly && { forget: () => client.deleteSession(spec.sessionId) }),
       sdk,
+      lost: recovered && spec.established ? lost : "",
       signature,
       model: modelKey(spec.model),
       inference: spec.inference,

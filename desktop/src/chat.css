@@ -1,0 +1,620 @@
+/* An open chat, simplified to match the phone (and the Chat mockup): a short header with one line
+   of status and four quiet tools, a 720px reading column, a message box that is a rounded card with
+   the field above one row of buttons, and Details in the side pane as grouped cards (ui.css).
+   Loaded after canvas.css, groups.css and models.css, so it wins where they disagree. Tokens only. */
+
+/* ---- Header ------------------------------------------------------------------------------- */
+.conversation .chathead {
+  box-sizing: border-box;
+  min-height: 56px;
+  padding: 8px 12px 8px 14px;
+  gap: 10px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 2;
+}
+.chathead .chathead-back,
+.chathead .chathead-icon {
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+}
+.chathead .chathead-back:hover,
+.chathead .chathead-icon:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chathead .chathead-icon[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+.chathead .chathead-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chathead .chathead-title h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: calc(15px * var(--text-scale));
+  line-height: 20px;
+  font-weight: 700;
+}
+.chathead .chathead-title small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12px * var(--text-scale));
+  line-height: 16px;
+  color: var(--muted);
+}
+.chathead .chathead-tools {
+  gap: 6px;
+}
+/* The context ring: a pill with a small ring and the percent. */
+.chathead .context-meter {
+  gap: 0;
+}
+.chathead .context-open.context-ring {
+  height: 30px;
+  padding: 0 10px 0 7px;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--muted);
+}
+.chathead .context-open.context-ring:hover,
+.chathead .context-open.context-ring[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chathead .context-ring small {
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.context-ring-mark {
+  flex: none;
+}
+.context-ring-mark circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.context-ring-mark .ring-track {
+  stroke: var(--line-strong);
+}
+.context-ring-mark .ring-fill {
+  stroke: var(--accent-text);
+  stroke-linecap: round;
+}
+.context-ring-mark.high .ring-fill {
+  stroke: var(--warning);
+}
+/* The project tag keeps its label and Changes; it reads as one more quiet chip. */
+.chathead .project-tag .chathead-icon {
+  width: 28px;
+  height: 28px;
+}
+.chathead .chathead-menu button.lg-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+/* The popover's own context actions: threads, Reset context, Compact. */
+.context-details .cd-thread {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: calc(13px * var(--text-scale));
+}
+.context-details .cd-thread span {
+  flex: 1;
+  color: var(--muted);
+}
+.context-details .cd-thread select {
+  max-width: 60%;
+}
+.context-details .cd-buttons {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* ---- Reading column ----------------------------------------------------------------------- */
+.conversation .chat-column,
+.conversation .composewrap > * {
+  max-width: 720px;
+}
+.conversation article.user {
+  padding: 10px 15px;
+  border-radius: 20px 20px 6px 20px;
+  /* Narrower than the column, so your messages and another person's read as two sides. */
+  max-width: min(80%, 560px);
+  font-size: calc(15px * var(--text-scale));
+  line-height: 22px;
+}
+
+/* Answer receipt: a quiet right-aligned system line, never a person bubble. */
+.conversation .answer-receipt {
+  align-self: flex-end;
+  max-width: min(80%, 560px);
+  padding: 2px 4px;
+  font-size: calc(12.5px * var(--text-scale));
+  line-height: 17px;
+  color: var(--muted);
+  text-align: right;
+  word-break: break-word;
+}
+
+/* ---- Single quiet turn status line above the composer -------------------------------------- */
+.turn-status-line {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.turn-status-line:hover {
+  color: var(--ink);
+}
+.turn-status-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.turn-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: turn-status-pulse 1.8s ease-in-out infinite;
+}
+.turn-status-line.waiting .turn-status-dot {
+  background: var(--warning);
+  animation: none;
+}
+.turn-status-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.turn-status-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+@keyframes turn-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-status-dot {
+    animation: none;
+  }
+}
+
+/* ---- Message box: the field, then one row of buttons ---------------------------------------- */
+.composer:has(> .composer-bar) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 0;
+  padding: 10px 10px 8px 14px;
+  border-radius: 24px;
+}
+.composewrap .composer:has(> .composer-bar),
+.composer-glass.lg-glass:has(.composer-bar) {
+  border-radius: 24px;
+}
+.composer:has(> .composer-bar) > textarea {
+  flex: none;
+  align-self: stretch;
+  padding: 4px 2px;
+  font-size: calc(15px * var(--text-scale));
+  line-height: 22px;
+  min-height: 30px;
+}
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -6px;
+  min-width: 0;
+}
+.composer-bar-gap {
+  flex: 1 1 auto;
+}
+.composer-bar .composer-model {
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.composer-bar .composer-attach {
+  align-self: center;
+  background: var(--sunken);
+  color: var(--ink-2);
+}
+.composer-bar .composer-model.composer-model-pick {
+  width: auto;
+  max-width: 260px;
+  min-width: 0;
+  flex: 0 1 auto;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 500;
+  color: var(--muted);
+}
+.composer-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-model-more {
+  flex: none;
+}
+.composer-bar .send,
+.composer-bar button.lg-button.send-glass {
+  width: 34px;
+  height: 34px;
+}
+
+/* ---- Details in the side pane: grouped cards ------------------------------------------------ */
+.side-pane {
+  background: var(--rail);
+}
+.side-pane:not(.wide) {
+  width: 320px;
+}
+.side-pane .chat-side,
+.chat-side {
+  width: auto;
+  padding: 16px;
+  gap: 18px;
+  border-left: 0;
+  background: transparent;
+}
+.chat-side .chat-side-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-side .chat-side-bot {
+  flex-direction: row;
+  align-items: center;
+  text-align: left;
+  gap: 12px;
+}
+.chat-side .chat-side-bot .bot-avatar {
+  margin: 0;
+  flex: none;
+}
+.chat-side-who {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-side .chat-side-name {
+  font-size: calc(16px * var(--text-scale));
+}
+.chat-side-who small {
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-side-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
+}
+.chat-side .chat-side-actions .btn {
+  height: 32px;
+  border-radius: 10px;
+  padding: 0 8px;
+  color: var(--ink);
+}
+.chat-side .chat-side-actions .btn:hover {
+  background: color-mix(in srgb, var(--sunken) 80%, var(--ink) 8%);
+}
+.chat-side .page-section {
+  gap: 8px;
+}
+.chat-side .group-row {
+  --row-height: 46px;
+  padding: 8px 14px;
+  font-size: calc(14px * var(--text-scale));
+}
+.chat-side .group-row .row-title {
+  font-weight: 500;
+}
+.chat-side-model .row-value {
+  min-width: 0;
+  overflow: hidden;
+}
+.chat-side-model .model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.chat-side .chat-side-context {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.chat-side-context-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-side-context-line .row-title {
+  flex: 1;
+}
+.chat-side-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.chat-side-meter i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent-text);
+}
+.chat-side-meter i.high {
+  background: var(--warning);
+}
+.chat-side-context-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chat-side .chat-side-thread {
+  cursor: default;
+}
+.chat-side-thread select {
+  appearance: none;
+  min-width: 0;
+  max-width: 55%;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  text-align: right;
+  padding: 0;
+}
+.chat-side-thread select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.chat-side-todos ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-side-todos li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: calc(13.5px * var(--text-scale));
+}
+.chat-side-todos li > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.chat-side-todos li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-side-todos li.done > span {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.chat-side-todos li.done > svg {
+  color: var(--success);
+}
+.chat-side-todos li.in_progress > span {
+  font-weight: 600;
+}
+.chat-side-todos li em {
+  font-style: normal;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+}
+.chat-side .chat-side-routines ul {
+  display: block;
+}
+.chat-side .chat-side-routines li > .group-row {
+  margin: 0;
+  width: 100%;
+  border-radius: 0;
+  align-items: center;
+}
+.chat-side .chat-side-routines li + li > .group-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--row-inset);
+  right: 0;
+  height: 1px;
+  background: var(--line);
+}
+.chat-side .chat-side-routines li svg {
+  margin: 0;
+  flex: none;
+}
+.chat-side .chat-side-routines strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 500;
+}
+.chat-side .chat-side-routines small {
+  font-size: calc(12.5px * var(--text-scale));
+}
+.chat-side .chat-side-none {
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(13.5px * var(--text-scale));
+}
+
+/* ---- Side pane tabs as pills ---------------------------------------------------------------- */
+.side-pane .pane-head {
+  box-sizing: border-box;
+  min-height: 56px;
+  padding: 0 8px 0 10px;
+  gap: 4px;
+}
+.side-pane .pane-tabs {
+  align-items: center;
+  gap: 4px;
+}
+.side-pane .pane-tab,
+.side-pane .pane-tab > [role="tab"] {
+  border-radius: 15px;
+}
+.side-pane .pane-tab > [role="tab"] {
+  height: 30px;
+  padding: 0 12px;
+  font-weight: 500;
+}
+.side-pane .pane-tab.selected {
+  background: var(--active);
+}
+.side-pane .pane-tab.selected::after {
+  display: none;
+}
+.side-pane .pane-tab:not(.selected):hover {
+  background: var(--hover);
+}
+.side-pane .pane-tab:not(.selected) .pane-tab-close {
+  background: var(--rail);
+  box-shadow: -6px 0 6px var(--rail);
+}
+.side-pane .pane-table th,
+.side-pane .pane-webbar {
+  background: var(--rail);
+}
+.pane-full-note {
+  text-align: center;
+  padding: 32px 16px;
+}
+
+/* ---- A side pane panel opened full screen (SpacePanelOpen.tsx) ------------------------------ */
+.space-opened-panel > .pane-opened {
+  height: 100%;
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+}
+.space-opened.fullscreen .space-opened-panel > .pane-opened {
+  flex: 1;
+  min-height: 0;
+}
+.pane-opened .pane-web,
+.pane-opened .pane-rich,
+.pane-opened .pane-table {
+  flex: 1;
+  min-height: 0;
+}
+.pane-opened .pane-web-page webview {
+  min-height: 60vh;
+}
+.pane-opened.table {
+  overflow: auto;
+}
+
+/* Details' sections sit in the pane's own gap, not the page's section margins (style.css). */
+.chat-side section + section,
+.chat-side .page-section {
+  margin: 0;
+}
+/* The ⋯ menu is a plain icon button like its neighbours, not a glass one. */
+.chathead .chathead-menu button.lg-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+.chathead .chathead-menu button.lg-button:hover,
+.chathead .chathead-menu button.lg-button[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--ink);
+}
+/* The opened panel's own title row, under its full-screen and close buttons. */
+.pane-opened-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 84px 10px 2px;
+  font-family: var(--font-display);
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 700;
+}
+.pane-opened-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-opened:has(.pane-opened) .space-opened-actions {
+  z-index: 3;
+}
+.pane-opened .pane-table {
+  border-top: 1px solid var(--line);
+}
+/* The popover's note takes its own line over the buttons. */
+.context-details .cd-actions {
+  flex-wrap: wrap;
+}
+.context-details .cd-actions small {
+  flex: 1 1 100%;
+}
+.context-details .cd-buttons {
+  margin-left: auto;
+}

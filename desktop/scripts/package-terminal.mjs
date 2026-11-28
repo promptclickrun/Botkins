@@ -69,6 +69,13 @@ export function build({ out, only = TARGETS, npm = process.env.npm_execpath, log
       for (const dir of existsSync(join(modules, "@anthropic-ai")) ? readdirSync(join(modules, "@anthropic-ai")) : []) if (dir.startsWith("claude-agent-sdk-")) rmSync(join(modules, "@anthropic-ai", dir), { recursive: true, force: true });
       for (const scope of ["@microsoft", "@koromix"]) for (const dir of existsSync(join(modules, scope)) ? readdirSync(join(modules, scope)) : []) if (/-linuxmusl-|-musl-/.test(dir)) rmSync(join(modules, scope, dir), { recursive: true, force: true });
       rmSync(join(modules, ".package-lock.json"), { force: true });
+      if (process.env.BOTKINS_SKIP_CUA_DRIVER_DOWNLOAD !== "1") {
+        execFileSync(
+          process.execPath,
+          [join(root, "scripts", "cua-driver.mjs"), system === "macos" ? "darwin" : "linux", arch, join(stage, "vendor", "cua-driver")],
+          { stdio: "inherit" },
+        );
+      }
       const file = name + ".tar.gz";
       execFileSync("tar", [...tarOwner(), "-czf", join(out, file), "-C", work, name], { stdio: "inherit", env: { ...process.env, COPYFILE_DISABLE: "1" } });
       built.push(file);

@@ -342,9 +342,10 @@ test("fork uses Copilot's native fork at a mapped event boundary", async (t) => 
   await ws.send(id, "A");
   await ws.send(id, "B");
   const forkId = await ws.forkChat(id, 1);
-  assert.equal(forkId, "forked-1");
+  assert.notEqual(forkId, "forked-1", "Botkins chat.id stays separate from the provider's native fork ref");
   assert.deepEqual(forks, [{ sessionId: id, toEventId: "ev-B" }]);
   assert.equal(ws.chat(forkId).established, true);
+  assert.equal(ws.chat(forkId).sessions?.copilot?.ref, "forked-1");
   assert.equal(ws.chat(forkId).forkContext, undefined);
 });
 
@@ -367,8 +368,8 @@ test("work summaries use tool names only", () => {
 
 test("todo statuses map to Botkins' set", () => {
   assert.deepEqual(
-    mapTodos({ rows: [{ id: "1", title: "a", status: "completed" }, { id: "2", status: "blocked", title: "b" }, { id: "3", title: "c", status: "weird" }, { id: "4", title: "d", status: "failed" }] }).map((t) => t.status),
-    ["done", "blocked", "pending", "failed"],
+    mapTodos({ rows: [{ id: "1", title: "a", status: "completed" }, { id: "2", status: "blocked", title: "b" }, { id: "3", title: "c", status: "weird" }, { id: "4", title: "d", status: "failed" }, { id: "5", title: "e", status: "abandoned" }] }).map((t) => t.status),
+    ["done", "blocked", "pending", "failed", "cancelled"],
   );
   assert.deepEqual(mapTodos(undefined), []);
 });

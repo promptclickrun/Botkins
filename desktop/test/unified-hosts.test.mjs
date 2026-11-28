@@ -251,3 +251,149 @@ test("RemoteHosts persists unified mode & per-host inclusion and exposes hostsAp
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("unified desktop routes channel* and chat.cardAction to the owning host, keeps secrets scoped, and rescopes results", () => {
+  const remoteConn = scopeId("srv-a", "ch-slack-1");
+  const remoteBot = scopeId("srv-a", "bot-ops");
+  const otherBot = scopeId("srv-b", "bot-other");
+  const remoteChat = scopeId("srv-a", "chat-wf-1");
+
+  // 1. composeUnifiedDesktopState scopes remote channels, workflows, workflowRuns, and actionCard references.
+  const composed = composeUnifiedDesktopState(
+    {
+      ...makeLocalSnap(),
+      channels: [{ id: "ch-local", kind: "telegram", label: "Local TG", botId: "bot-local", enabled: true }],
+      workflows: [{ id: "wf-local", name: "Local WF", nodes: [], edges: [] }],
+      workflowRuns: [{ id: "wfr-local", workflowId: "wf-local", startedAt: 100 }],
+    },
+    {
+      localName: "Desk Mac",
+      remotes: [
+        {
+          host: { id: "srv-a", name: "Studio Linux", state: "online" },
+          snapshot: {
+            ...makeRemoteSnap("a"),
+            chats: [
+              {
+                id: "chat-wf-1",
+                botId: "bot-ops",
+                title: "Triage",
+                messages: [
+                  {
+                    role: "assistant",
+                    text: "Review PR",
+                    actionCard: {
+                      id: "card-1",
+                      title: "PR #99",
+                      needsYou: true,
+                      state: "dispatched",
+                      dispatchedChatId: "chat-child",
+                      dispatchedBotId: "bot-ops",
+                      dispatch: { botId: "bot-ops", prompt: "Review it" },
+                    },
+                  },
+                ],
+              },
+            ],
+            channels: [
+              {
+                id: "ch-slack-1",
+                kind: "slack",
+                label: "Eng Slack",
+                botId: "bot-ops",
+                enabled: true,
+                policy: { dm: "pairing", notifyPhone: true },
+                pendingPairings: [{ connectionId: "ch-slack-1", code: "ABCD-1234", senderId: "U1" }],
+              },
+            ],
+            workflows: [
+              {
+                id: "wf-a",
+                name: "CI Watch",
+                nodes: [{ id: "n1", kind: "agent", config: { botId: "bot-ops", chatId: "chat-wf-1" } }],
+                edges: [],
+              },
+            ],
+            workflowRuns: [{ id: "wfr-a", workflowId: "wf-a", startedAt: 500 }],
+          },
+        },
+      ],
+    },
+  );
+
+  assert.equal(composed.channels.length, 2);
+  const scopedCh = composed.channels.find((c) => c.id === remoteConn);
+  assert.ok(scopedCh);
+  assert.equal(scopedCh.botId, remoteBot);
+  assert.equal(scopedCh.hostId, "srv-a");
+  assert.equal(scopedCh.hostName, "Studio Linux");
+  assert.equal(scopedCh.policy.notifyPhone, true);
+  assert.equal(scopedCh.pendingPairings[0].connectionId, remoteConn);
+
+  const wfChat = composed.chats.find((c) => c.id === remoteChat);
+  assert.equal(wfChat.messages[0].actionCard.dispatchedChatId, scopeId("srv-a", "chat-child"));
+  assert.equal(wfChat.messages[0].actionCard.dispatchedBotId, remoteBot);
+  assert.equal(wfChat.messages[0].actionCard.dispatch.botId, remoteBot);
+
+  assert.equal(composed.workflows.find((w) => w.id === scopeId("srv-a", "wf-a")).nodes[0].config.botId, remoteBot);
+  assert.equal(composed.workflowRuns[0].id, scopeId("srv-a", "wfr-a"));
+
+  // 2. chat.cardAction routes by scoped chatId and rescopes returned dispatched chatId/botId/card.
+  const cardRoute = routeUnifiedCall("chat.cardAction", [remoteChat, "card-1", "dispatch"], { settingsHost: LOCAL_HOST_ID });
+  assert.deepEqual(cardRoute, { kind: "remote", hostId: "srv-a", name: "chat.cardAction", args: ["chat-wf-1", "card-1", "dispatch"] });
+  const cardRes = rescopeResult(
+    "chat.cardAction",
+    "srv-a",
+    {
+      ok: true,
+      state: "dispatched",
+      chatId: "chat-child",
+      botId: "bot-ops",
+      card: { id: "card-1", state: "dispatched", dispatchedChatId: "chat-child", dispatchedBotId: "bot-ops", dispatch: { botId: "bot-ops", prompt: "go" } },
+    },
+  );
+  assert.equal(cardRes.chatId, scopeId("srv-a", "chat-child"));
+  assert.equal(cardRes.botId, remoteBot);
+  assert.equal(cardRes.card.dispatchedChatId, scopeId("srv-a", "chat-child"));
+  assert.equal(cardRes.card.dispatchedBotId, remoteBot);
+  assert.equal(cardRes.card.dispatch.botId, remoteBot);
+
+  // 3. channelAdd sends secrets ONLY to the owning host (derived from botId or settingsHost), never fans out.
+  const addSecret = { botToken: "xoxb-SUPER-SECRET-TOKEN", appToken: "xapp-SUPER-SECRET" };
+  const addRoute = routeUnifiedCall("channelAdd", [{ kind: "slack", label: "Ops", botId: remoteBot, secrets: addSecret }], { settingsHost: LOCAL_HOST_ID });
+  assert.equal(addRoute.kind, "remote");
+  assert.equal(addRoute.hostId, "srv-a");
+  assert.deepEqual(addRoute.args, [{ kind: "slack", label: "Ops", botId: "bot-ops", secrets: addSecret }]);
+
+  // channelUpdate routes only to the connection's owning host with unscoped id.
+  const updateRoute = routeUnifiedCall("channelUpdate", [remoteConn, { secrets: { botToken: "xoxb-NEW" } }], { settingsHost: LOCAL_HOST_ID });
+  assert.deepEqual(updateRoute, { kind: "remote", hostId: "srv-a", name: "channelUpdate", args: ["ch-slack-1", { secrets: { botToken: "xoxb-NEW" } }] });
+
+  // Cross-host channel binding is rejected before dispatch so secrets and bindings cannot leak across hosts.
+  assert.throws(() => routeUnifiedCall("channelBind", [remoteConn, otherBot]), /same computer/);
+  assert.throws(() => routeUnifiedCall("channelUpdate", [remoteConn, { botId: otherBot }]), /same computer/);
+  assert.throws(() => routeUnifiedCall("channelAdd", [{ kind: "slack", hostId: "srv-a", botId: otherBot }]), /same computer/);
+
+  // Same-host channel* RPCs route to srv-a with unscoped IDs.
+  assert.deepEqual(routeUnifiedCall("channelBind", [remoteConn, remoteBot]), { kind: "remote", hostId: "srv-a", name: "channelBind", args: ["ch-slack-1", "bot-ops"] });
+  assert.deepEqual(routeUnifiedCall("channelSetPolicy", [remoteConn, { notifyPhone: true }]), { kind: "remote", hostId: "srv-a", name: "channelSetPolicy", args: ["ch-slack-1", { notifyPhone: true }] });
+  assert.deepEqual(routeUnifiedCall("channelPause", [remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelPause", args: ["ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelResume", [remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelResume", args: ["ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelTest", [remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelTest", args: ["ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelRemove", [remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelRemove", args: ["ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelPairApprove", ["ABCD-1234", remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelPairApprove", args: ["ABCD-1234", "ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelPairDeny", ["ABCD-1234", remoteConn]), { kind: "remote", hostId: "srv-a", name: "channelPairDeny", args: ["ABCD-1234", "ch-slack-1"] });
+  assert.deepEqual(routeUnifiedCall("channelLogs", [remoteConn, { limit: 50 }]), { kind: "remote", hostId: "srv-a", name: "channelLogs", args: ["ch-slack-1", { limit: 50 }] });
+
+  // Host-scoped reads without a connection id follow settingsHost (single host, not broadcast).
+  assert.deepEqual(routeUnifiedCall("channelsList", [], { settingsHost: "srv-a" }), { kind: "remote", hostId: "srv-a", name: "channelsList", args: [] });
+  assert.deepEqual(routeUnifiedCall("channelLogs", [null, { limit: 50 }], { settingsHost: "srv-a" }), { kind: "remote", hostId: "srv-a", name: "channelLogs", args: [null, { limit: 50 }] });
+
+  // Rescoping channel* results restores scoped IDs.
+  const listed = rescopeResult("channelsList", "srv-a", [{ id: "ch-slack-1", botId: "bot-ops", kind: "slack" }]);
+  assert.equal(listed[0].id, remoteConn);
+  assert.equal(listed[0].botId, remoteBot);
+  const logs = rescopeResult("channelLogs", "srv-a", [{ time: 1, connectionId: "ch-slack-1", kind: "slack", decision: "replied", turnId: "t-1" }]);
+  assert.equal(logs[0].connectionId, remoteConn);
+  assert.equal(logs[0].turnId, scopeId("srv-a", "t-1"));
+});

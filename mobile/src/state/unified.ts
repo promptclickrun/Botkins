@@ -12,6 +12,8 @@ import type {
   BoardItem,
   Bot,
   BotTask,
+  ChannelAuditEntry,
+  ChannelConnection,
   ChatDetail,
   ChatSummary,
   DeviceAsk,
@@ -26,6 +28,9 @@ import type {
   RunSummary,
   Section,
   SpaceSummary,
+  Workflow,
+  WorkflowActionCard,
+  WorkflowRun,
 } from "@/link/types";
 
 export const SCOPED_PREFIX = "rh~";
@@ -119,6 +124,57 @@ function scopeRun<T extends RunSummary | Run>(run: T, hostId: string, primaryId:
   return next as T;
 }
 
+function scopeActionCard(card: WorkflowActionCard, s: (id: string) => string): WorkflowActionCard {
+  return {
+    ...card,
+    ...(card.dispatchedChatId ? { dispatchedChatId: s(card.dispatchedChatId) } : {}),
+    ...(card.dispatchedBotId ? { dispatchedBotId: s(card.dispatchedBotId) } : {}),
+    ...(card.dispatch
+      ? {
+          dispatch: {
+            ...card.dispatch,
+            ...(card.dispatch.botId ? { botId: s(card.dispatch.botId) } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function scopeChannel(conn: ChannelConnection, s: (id: string) => string, tag?: { hostId: string; hostName: string }): ChannelConnection {
+  return {
+    ...conn,
+    id: s(conn.id),
+    ...(conn.botId ? { botId: s(conn.botId) } : {}),
+    ...(tag ?? {}),
+  };
+}
+
+function scopeWorkflow(wf: Workflow, s: (id: string) => string, tag?: { hostId: string; hostName: string }): Workflow {
+  return {
+    ...wf,
+    id: s(wf.id),
+    nodes: wf.nodes.map((node) => {
+      if (!node.config) return node;
+      const cfg = { ...node.config };
+      if (typeof cfg.botId === "string" && cfg.botId) cfg.botId = s(cfg.botId);
+      if (typeof cfg.chatId === "string" && cfg.chatId) cfg.chatId = s(cfg.chatId);
+      if (typeof cfg.routineChatId === "string" && cfg.routineChatId) cfg.routineChatId = s(cfg.routineChatId);
+      if (typeof cfg.taskId === "string" && cfg.taskId) cfg.taskId = s(cfg.taskId);
+      return { ...node, config: cfg };
+    }),
+    ...(tag ?? {}),
+  };
+}
+
+function scopeWorkflowRun(run: WorkflowRun, s: (id: string) => string, tag?: { hostId: string; hostName: string }): WorkflowRun {
+  return {
+    ...run,
+    id: s(run.id),
+    workflowId: s(run.workflowId),
+    ...(tag ?? {}),
+  };
+}
+
 export function scopeChatDetail(detail: ChatDetail, hostId: string, primaryId: string | null): ChatDetail {
   if (hostId === primaryId) return detail;
   const s = (id: string) => idForHost(hostId, id, primaryId);
@@ -132,6 +188,7 @@ export function scopeChatDetail(detail: ChatDetail, hostId: string, primaryId: s
       ...(m.steeredRunId && { steeredRunId: s(m.steeredRunId) }),
       ...(m.proactiveRunId && { proactiveRunId: s(m.proactiveRunId) }),
       ...(m.answer && { answer: { ...m.answer, runId: s(m.answer.runId), requestId: s(m.answer.requestId) } }),
+      ...(m.actionCard && { actionCard: scopeActionCard(m.actionCard, s) }),
     })),
     runs: detail.runs.map((r) => scopeRun(r, hostId, primaryId)),
     ...(detail.pane && {
@@ -251,6 +308,12 @@ export function scopePartsForHost(
         ...(t.runId ? { runId: s(t.runId) } : {}),
         ...tag,
       }));
+    } else if (name === "workflows" && Array.isArray(value)) {
+      out.workflows = (value as Workflow[]).map((wf) => scopeWorkflow(wf, s, tag));
+    } else if (name === "workflowRuns" && Array.isArray(value)) {
+      out.workflowRuns = (value as WorkflowRun[]).map((r) => scopeWorkflowRun(r, s, tag));
+    } else if (name === "channels" && Array.isArray(value)) {
+      out.channels = (value as ChannelConnection[]).map((conn) => scopeChannel(conn, s, tag));
     } else if (name === "projects" && Array.isArray(value)) {
       out.projects = (value as Project[]).map((p) => ({
         ...p,
@@ -357,6 +420,9 @@ export function mergeUnifiedParts(
   const chats: ChatSummary[] = [];
   const runs: RunSummary[] = [];
   const tasks: BotTask[] = [];
+  const workflows: Workflow[] = [];
+  const workflowRuns: WorkflowRun[] = [];
+  const channels: ChannelConnection[] = [];
   const projects: Project[] = [];
   const panels: Panel[] = [];
   const projectPanels: PanelView[] = [];
@@ -387,6 +453,9 @@ export function mergeUnifiedParts(
     if (p.chats) chats.push(...p.chats);
     if (p.runs) runs.push(...p.runs);
     if (p.tasks) tasks.push(...p.tasks);
+    if (p.workflows) workflows.push(...p.workflows);
+    if (p.workflowRuns) workflowRuns.push(...p.workflowRuns);
+    if (p.channels) channels.push(...p.channels);
     if (p.projects) projects.push(...p.projects);
     if (p.panels) panels.push(...p.panels);
     if (p.projectPanels) projectPanels.push(...p.projectPanels);
@@ -413,6 +482,7 @@ export function mergeUnifiedParts(
 
   chats.sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
   runs.sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
+  workflowRuns.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   live.requests.sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   board.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
@@ -422,6 +492,9 @@ export function mergeUnifiedParts(
   merged.chats = chats;
   merged.runs = runs;
   merged.tasks = tasks;
+  merged.workflows = workflows;
+  merged.workflowRuns = workflowRuns;
+  merged.channels = channels;
   merged.projects = projects;
   merged.panels = panels;
   merged.projectPanels = projectPanels;
@@ -512,6 +585,33 @@ const SETTINGS_HOST_METHODS = new Set([
   "link.devices.list",
   "link.devices.rename",
   "link.devices.remove",
+  "channelsList",
+  "channelAdd",
+  "channelPairList",
+  "channelPairApprove",
+  "channelPairDeny",
+  "channelLogs",
+  "workflowsList",
+  "workflowCreate",
+  "workflowImportText",
+  "workflowGithubStatus",
+  "workflowGithubSignInStart",
+  "workflowGithubSignInCancel",
+  "claudeArtifacts.status",
+  "claudeArtifacts.setModel",
+  "market.catalog",
+  "market.skillImage",
+  "market.skillPreview",
+  "market.skillInstall",
+  "market.packPreview",
+  "market.packInstall",
+  "market.templatePreview",
+  "market.templateInstall",
+  "link.credentials.grants",
+  "link.credentials.setGrant",
+  "link.credentials.revokeGrant",
+  "link.credentials.audit",
+  "link.credentials.copy",
 ]);
 
 const STRING_ID_METHODS = new Set([
@@ -535,6 +635,7 @@ const STRING_ID_METHODS = new Set([
 const STRING_ARRAY_ID_METHODS = new Set([
   "importAgents",
   "addProjectArtifact",
+  "startProjectJob",
 ]);
 
 /** Methods that should fan out across hosts when passed mixed IDs (e.g. markChatsRead, reorderBots). */
@@ -547,6 +648,42 @@ export function routeMobileCall(
   args: unknown[],
   ctx: { primaryId: string; settingsHostId: string | null; poolIds: string[] },
 ): MobileRouteResult {
+  // Channel security & host-affinity checks: secrets and bindings never cross hosts.
+  if (method === "channelBind" && args.length >= 2 && typeof args[0] === "string" && typeof args[1] === "string" && args[1]) {
+    const connHost = hostOfId(args[0], ctx.primaryId);
+    const botHost = hostOfId(args[1], ctx.primaryId);
+    if (connHost && botHost && connHost !== botHost) {
+      throw new Error("A channel can only be bound to a bot on the same computer.");
+    }
+  }
+  if (method === "channelUpdate" && typeof args[0] === "string" && args[1] && typeof args[1] === "object" && !Array.isArray(args[1])) {
+    const patch = args[1] as { botId?: unknown };
+    if (typeof patch.botId === "string" && patch.botId) {
+      const connHost = hostOfId(args[0], ctx.primaryId);
+      const botHost = hostOfId(patch.botId, ctx.primaryId);
+      if (connHost && botHost && connHost !== botHost) {
+        throw new Error("A channel can only be bound to a bot on the same computer.");
+      }
+    }
+  }
+  if (method === "channelAdd" && args[0] && typeof args[0] === "object" && !Array.isArray(args[0])) {
+    const input = args[0] as Record<string, unknown>;
+    const explicitHost = typeof input.hostId === "string" && input.hostId ? input.hostId : null;
+    const botHost = typeof input.botId === "string" && input.botId ? hostOfId(input.botId, ctx.primaryId) : null;
+    if (explicitHost && botHost && explicitHost !== botHost) {
+      throw new Error("A channel can only be bound to a bot on the same computer.");
+    }
+    const candidate = explicitHost ?? botHost ?? ctx.settingsHostId ?? ctx.primaryId;
+    const target = ctx.poolIds.includes(candidate) ? candidate : ctx.primaryId;
+    const { hostId: _strip, ...restObj } = input;
+    const cleaned = [restObj, ...args.slice(1)];
+    return {
+      kind: "single",
+      hostId: target,
+      args: target === ctx.primaryId ? cleaned : unscopeValueForHost(cleaned, target),
+    };
+  }
+
   // Explicit hostId on first object argument (e.g. addBot({ ..., hostId }))
   if (args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) && typeof (args[0] as { hostId?: unknown }).hostId === "string") {
     const explicit = (args[0] as { hostId: string }).hostId;
@@ -602,11 +739,82 @@ export function rescopeMobileResult<T>(method: string, result: T, hostId: string
     if (STRING_ARRAY_ID_METHODS.has(method)) {
       return result.map((item) => (typeof item === "string" ? s(item) : item)) as unknown as T;
     }
+    if (method === "channelsList") {
+      return (result as unknown as ChannelConnection[]).map((conn) => scopeChannel(conn, s)) as unknown as T;
+    }
+    if (method === "channelPairList") {
+      return (result as unknown as Array<Record<string, unknown>>).map((p) =>
+        p && typeof p === "object"
+          ? { ...p, ...(typeof p.connectionId === "string" && p.connectionId ? { connectionId: s(p.connectionId) } : {}) }
+          : p,
+      ) as unknown as T;
+    }
+    if (method === "channelLogs") {
+      return (result as unknown as ChannelAuditEntry[]).map((entry) => ({
+        ...entry,
+        ...(entry.connectionId ? { connectionId: s(entry.connectionId) } : {}),
+        ...(entry.turnId ? { turnId: s(entry.turnId) } : {}),
+      })) as unknown as T;
+    }
     return result;
   }
   if (typeof result !== "object") return result;
   if (method === "link.messages") {
     return scopeChatDetail(result as unknown as ChatDetail, hostId, primaryId) as unknown as T;
+  }
+  if (method === "chat.cardAction") {
+    const res = result as unknown as {
+      state: "dispatched" | "dismissed";
+      chatId?: string;
+      botId?: string;
+      botName?: string;
+      card: WorkflowActionCard;
+    };
+    return {
+      ...res,
+      ...(res.chatId ? { chatId: s(res.chatId) } : {}),
+      ...(res.botId ? { botId: s(res.botId) } : {}),
+      ...(res.card ? { card: scopeActionCard(res.card, s) } : {}),
+    } as unknown as T;
+  }
+  if (method === "channelAdd" || method === "channelUpdate" || method === "channelBind" || method === "channelSetPolicy" || method === "channelPause" || method === "channelResume") {
+    return scopeChannel(result as unknown as ChannelConnection, s) as unknown as T;
+  }
+  if (method === "channelRemove") {
+    const res = result as unknown as { removed: boolean; id: string };
+    return { ...res, ...(res.id ? { id: s(res.id) } : {}) } as unknown as T;
+  }
+  if (method === "channelPairApprove" || method === "channelPairDeny") {
+    const res = result as unknown as Record<string, unknown>;
+    return {
+      ...res,
+      ...(typeof res.connectionId === "string" && res.connectionId ? { connectionId: s(res.connectionId) } : {}),
+    } as unknown as T;
+  }
+  if (method === "workflowsList") {
+    const res = result as unknown as { workflows: Workflow[]; runs: WorkflowRun[] };
+    return {
+      ...res,
+      workflows: (res.workflows ?? []).map((wf) => scopeWorkflow(wf, s)),
+      runs: (res.runs ?? []).map((r) => scopeWorkflowRun(r, s)),
+    } as unknown as T;
+  }
+  if (method === "workflowCreate" || method === "workflowUpdate" || method === "workflowPause" || method === "workflowResume") {
+    return scopeWorkflow(result as unknown as Workflow, s) as unknown as T;
+  }
+  if (method === "workflowRun" || method === "workflowRetryRun" || method === "workflowRespondApproval" || method === "workflowCancelRun") {
+    return scopeWorkflowRun(result as unknown as WorkflowRun, s) as unknown as T;
+  }
+  if (method === "workflowImportText") {
+    const res = result as unknown as { workflow?: Workflow } & Record<string, unknown>;
+    return { ...res, ...(res.workflow ? { workflow: scopeWorkflow(res.workflow, s) } : {}) } as unknown as T;
+  }
+  if (method === "claudeArtifacts.status" || method === "claudeArtifacts.setModel" || method === "claudeArtifacts.setBotApproval" || method === "claudeArtifacts.revokeBotApproval") {
+    const res = result as unknown as { grants?: Array<{ botId: string; botName: string; grantedAt: number }> } & Record<string, unknown>;
+    return {
+      ...res,
+      ...(Array.isArray(res.grants) ? { grants: res.grants.map((g) => ({ ...g, botId: s(g.botId) })) } : {}),
+    } as unknown as T;
   }
   if (method === "spaces.read") {
     const content = result as unknown as { id: string; panels?: PanelView[]; cards?: BoardItem[] };

@@ -181,3 +181,156 @@ test("rescopeMobileResult rescopes string IDs, string arrays, and nested objects
   assert.equal(detail.messages[0]?.runId, scopeId("host-b", "run-b"));
   assert.equal(detail.runs[0]?.id, scopeId("host-b", "run-b"));
 });
+
+test("mobile unified layer routes channel* and chat.cardAction to the owning host, keeps secrets scoped, and rescopes results", () => {
+  const ctx = { primaryId: "host-a", settingsHostId: "host-b", poolIds: ["host-a", "host-b", "host-c"] };
+  const connB = scopeId("host-b", "ch-discord-1");
+  const botB = scopeId("host-b", "bot-b");
+  const botC = scopeId("host-c", "bot-c");
+  const chatB = scopeId("host-b", "chat-b");
+
+  // 1. scopePartsForHost & mergeUnifiedParts preserve channels, workflows, and actionCards with scoped IDs.
+  const scopedA = scopePartsForHost(
+    {
+      ...sampleParts("a"),
+      channels: [{ id: "ch-a", kind: "slack", label: "A Slack", transport: "socket", enabled: true, botId: "bot-a" }],
+    },
+    "host-a",
+    "Desk Mac",
+    "host-a",
+  );
+  const scopedB = scopePartsForHost(
+    {
+      ...sampleParts("b"),
+      channels: [{ id: "ch-discord-1", kind: "discord", label: "B Discord", transport: "gateway", enabled: true, botId: "bot-b", policy: { notifyPhone: true } }],
+      "chat:chat-b": {
+        id: "chat-b",
+        from: 0,
+        total: 1,
+        messages: [
+          {
+            role: "assistant",
+            text: "Deploy?",
+            actionCard: {
+              id: "card-9",
+              title: "Deploy prod",
+              blocks: [],
+              needsYou: true,
+              state: "dispatched",
+              dispatchedChatId: "chat-deploy",
+              dispatchedBotId: "bot-b",
+              dispatch: { botId: "bot-b", prompt: "deploy" },
+            },
+          },
+        ],
+        runs: [],
+      },
+    },
+    "host-b",
+    "Studio Linux",
+    "host-a",
+  );
+
+  const merged = mergeUnifiedParts(
+    [
+      { pairing: { serverId: "host-a", name: "Desk Mac" } as any, link: "online", synced: true, parts: scopedA as Partial<Parts>, chats: {}, running: {}, texts: {} },
+      { pairing: { serverId: "host-b", name: "Studio Linux" } as any, link: "online", synced: true, parts: scopedB as Partial<Parts>, chats: {}, running: {}, texts: {} },
+    ],
+    "host-a",
+    "host-b",
+  );
+  assert.equal(merged.channels?.length, 2);
+  const remoteCh = merged.channels?.find((c) => c.id === connB);
+  assert.ok(remoteCh);
+  assert.equal(remoteCh.botId, botB);
+  assert.equal(remoteCh.policy?.notifyPhone, true);
+
+  const chatDetail = scopedB["chat:" + chatB] as { messages: Array<{ actionCard?: { dispatchedChatId?: string; dispatchedBotId?: string; dispatch?: { botId?: string } } }> };
+  assert.equal(chatDetail.messages[0]?.actionCard?.dispatchedChatId, scopeId("host-b", "chat-deploy"));
+  assert.equal(chatDetail.messages[0]?.actionCard?.dispatchedBotId, botB);
+  assert.equal(chatDetail.messages[0]?.actionCard?.dispatch?.botId, botB);
+
+  // 2. chat.cardAction routes to host-b with unscoped chatId and rescopes returned dispatched IDs.
+  const cardRoute = routeMobileCall("chat.cardAction", [chatB, "card-9", "dispatch"], ctx);
+  assert.deepEqual(cardRoute, { kind: "single", hostId: "host-b", args: ["chat-b", "card-9", "dispatch"] });
+  const cardRes = rescopeMobileResult(
+    "chat.cardAction",
+    {
+      ok: true,
+      state: "dispatched",
+      chatId: "chat-deploy",
+      botId: "bot-b",
+      card: {
+        id: "card-9",
+        title: "Deploy prod",
+        blocks: [],
+        needsYou: true,
+        state: "dispatched",
+        dispatchedChatId: "chat-deploy",
+        dispatchedBotId: "bot-b",
+        dispatch: { botId: "bot-b", prompt: "deploy" },
+      },
+    },
+    "host-b",
+    "host-a",
+  );
+  assert.equal(cardRes.chatId, scopeId("host-b", "chat-deploy"));
+  assert.equal(cardRes.botId, botB);
+  assert.equal(cardRes.card.dispatchedChatId, scopeId("host-b", "chat-deploy"));
+  assert.equal(cardRes.card.dispatchedBotId, botB);
+  assert.equal(cardRes.card.dispatch?.botId, botB);
+
+  // 3. channelAdd / channelUpdate route secrets strictly to the single owning host (never fanout).
+  const secretPayload = { botToken: "MTIz.SECRET.DISCORD" };
+  const addRoute = routeMobileCall("channelAdd", [{ kind: "discord", label: "Ops", botId: botB, secrets: secretPayload }], ctx);
+  assert.deepEqual(addRoute, {
+    kind: "single",
+    hostId: "host-b",
+    args: [{ kind: "discord", label: "Ops", botId: "bot-b", secrets: secretPayload }],
+  });
+  const updateRoute = routeMobileCall("channelUpdate", [connB, { secrets: { botToken: "NEW-SECRET" } }], ctx);
+  assert.deepEqual(updateRoute, {
+    kind: "single",
+    hostId: "host-b",
+    args: ["ch-discord-1", { secrets: { botToken: "NEW-SECRET" } }],
+  });
+
+  // Cross-host channel binding refuses to mix hosts.
+  assert.throws(() => routeMobileCall("channelBind", [connB, botC], ctx), /same computer/);
+  assert.throws(() => routeMobileCall("channelUpdate", [connB, { botId: botC }], ctx), /same computer/);
+  assert.throws(() => routeMobileCall("channelAdd", [{ kind: "discord", hostId: "host-b", botId: botC }], ctx), /same computer/);
+
+  // Other channel* RPCs route to the owning host with unscoped IDs.
+  assert.deepEqual(routeMobileCall("channelBind", [connB, botB], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1", "bot-b"] });
+  assert.deepEqual(routeMobileCall("channelSetPolicy", [connB, { dm: "allowlist", notifyPhone: false }], ctx), {
+    kind: "single",
+    hostId: "host-b",
+    args: ["ch-discord-1", { dm: "allowlist", notifyPhone: false }],
+  });
+  assert.deepEqual(routeMobileCall("channelPause", [connB], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelResume", [connB], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelRemove", [connB], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelTest", [connB], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelPairApprove", ["PAIR-99", connB], ctx), { kind: "single", hostId: "host-b", args: ["PAIR-99", "ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelPairDeny", ["PAIR-99", connB], ctx), { kind: "single", hostId: "host-b", args: ["PAIR-99", "ch-discord-1"] });
+  assert.deepEqual(routeMobileCall("channelLogs", [connB, { limit: 100 }], ctx), { kind: "single", hostId: "host-b", args: ["ch-discord-1", { limit: 100 }] });
+  assert.deepEqual(routeMobileCall("channelsList", [], ctx), { kind: "single", hostId: "host-b", args: [] });
+
+  // Rescoping channel* results preserves scoped connection/bot/turn IDs.
+  const resList = rescopeMobileResult(
+    "channelsList",
+    [{ id: "ch-discord-1", kind: "discord", label: "B Discord", transport: "gateway", enabled: true, botId: "bot-b" }],
+    "host-b",
+    "host-a",
+  );
+  assert.equal(resList[0]?.id, connB);
+  assert.equal(resList[0]?.botId, botB);
+  const resLogs = rescopeMobileResult(
+    "channelLogs",
+    [{ time: 1, connectionId: "ch-discord-1", kind: "discord", decision: "replied", turnId: "t-42" }],
+    "host-b",
+    "host-a",
+  );
+  assert.equal(resLogs[0]?.connectionId, connB);
+  assert.equal(resLogs[0]?.turnId, scopeId("host-b", "t-42"));
+});

@@ -8,7 +8,10 @@ import { api, attempt } from "@/state/link";
 import { BOT_TAPS } from "@/features/chat/habits";
 import { islandOn } from "@/features/chat/islandModel";
 import { type ChatPrefs, setChatPrefs, useChatPrefs } from "@/state/chatPrefs";
-import { Group, Label, Page, Row, space, T, useTheme } from "@/ui";
+import { type Href, router } from "expo-router";
+import { ShieldCheck } from "lucide-react-native";
+import { brand, Group, IconTile, Label, Page, Row, space, T, useTheme } from "@/ui";
+import { APPROVAL_SHORT } from "./Settings";
 
 // Open is the island (src/features/chat/islandModel.ts): one live window per running turn. The setting is "Steps", never "Tools".
 const STEPS: { value: ChatPrefs["steps"]; label: string; subtitle: string }[] = [
@@ -55,11 +58,21 @@ export function ChoiceMenu<V extends string>({ title, subtitle, value, options, 
 export default function Chat() {
   const prefs = useChatPrefs();
   const settings = useSettings();
+  const owner = usePart("meta")?.you?.kind !== "member";
   const chatMode = usePart("proactive")?.chatMode;
+  // Every bot has a Main chat on a computer that keeps them; the Proactive setting doesn't decide that.
+  const mainChats = !!usePart("meta")?.capabilities.includes("main-chat-v1");
   const online = useOnline();
   const canManage = useCan("settings", "manage");
+  const canViewAgents = useCan("agents", "view");
   return (
     <Page title="Chat">
+      {/* Approvals live here as on the computer, whose Chat settings say when bots ask first. */}
+      {owner && (
+        <Group>
+          <Row leading={<IconTile icon={ShieldCheck} color={brand.fern} />} title="Approvals" subtitle="When bots ask you first" value={settings ? APPROVAL_SHORT[settings.approval] : undefined} chevron onPress={() => router.push("/settings/approvals" as Href)} />
+        </Group>
+      )}
       <View>
         <Label>What a reply shows</Label>
         <Group>
@@ -77,10 +90,18 @@ export default function Chat() {
       <View>
         <Label>Opening</Label>
         <Group>
-          <ChoiceMenu title="When you select a bot" value={!chatMode && prefs.botTap === "main" ? "latest" : prefs.botTap} options={chatMode ? BOT_TAPS : BOT_TAPS.filter(t => t.value !== "main")} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
+          <ChoiceMenu title="When you select a bot" value={!mainChats && prefs.botTap === "main" ? "latest" : prefs.botTap} options={mainChats ? BOT_TAPS : BOT_TAPS.filter(t => t.value !== "main")} onChange={(botTap) => setChatPrefs({ botTap })} stacked />
           {chatMode && <ChoiceMenu title="Proactive signals" subtitle="Where your bots send alerts delivered to chat." value={chatMode}
             options={[{ value: "main", label: "Main chat" }, { value: "new", label: "New chat every time" }]}
             onChange={mode => void attempt(api.setProactiveChatMode(mode))} />}
+          <Row
+            title="Show routine chats"
+            subtitle="Include chats created and owned by routines in your chat list"
+            subtitleLines={2}
+            toggled={!!settings?.showRoutineChats}
+            disabled={!online || !canViewAgents}
+            onToggle={(showRoutineChats) => void attempt(api.setPreferences({ showRoutineChats }))}
+          />
         </Group>
       </View>
 

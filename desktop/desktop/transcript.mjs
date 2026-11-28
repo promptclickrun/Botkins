@@ -1,12 +1,26 @@
 import { isSilent } from "./link/silent-reply.mjs";
 
+const RAW_TEXT = new WeakMap();
+
+export function rawSegmentText(message) {
+  return RAW_TEXT.get(message) ?? message.text;
+}
+
+export function setRawSegmentText(message, text) {
+  if (message && !RAW_TEXT.has(message) && typeof text === "string") RAW_TEXT.set(message, text);
+}
+
 // Each boundary consumes the live tail exactly once. Keep source message IDs separate
 // from chat indexes: a steer or an answer can split one provider message into two.
 export function commitInterim(chat, run, task) {
   const text = task.stream?.trim();
   if (!run || run.noOutput || !text) return;
-  if (!isSilent(text)) chat.messages.push({ role: "assistant", text, interim: true, runId: run.id,
-    time: task.streamTime ?? Date.now(), ...(task.speaker && { botId: task.speaker }) });
+  if (!isSilent(text)) {
+    const message = { role: "assistant", text, interim: true, runId: run.id,
+      time: task.streamTime ?? Date.now(), ...(task.speaker && { botId: task.speaker }) };
+    RAW_TEXT.set(message, text);
+    chat.messages.push(message);
+  }
   task.stream = "";
   delete task.streamTime;
   if (run.recovery) delete run.recovery.draft;
@@ -20,10 +34,12 @@ export function finishReply(chat, run, task, final) {
   const last = segments.at(-1);
   let text = final?.trim() || "";
   if (last) {
-    const prefix = segments.map(m => m.text).join("\n\n");
+    const prefixes = [...new Set([segments.map(rawSegmentText).join("\n\n"), segments.map(m => m.text).join("\n\n")])];
+    const lastTexts = new Set([rawSegmentText(last), last.text]);
+    const matchedPrefix = prefixes.find(prefix => text.startsWith(prefix) && text.length > prefix.length);
     if (task.stream?.trim()) text = task.stream.trim();
-    else if (text.startsWith(prefix) && text.length > prefix.length) text = text.slice(prefix.length).trim();
-    else if (!text || text === last.text || text === prefix) {
+    else if (matchedPrefix) text = text.slice(matchedPrefix.length).trim();
+    else if (!text || lastTexts.has(text) || prefixes.includes(text)) {
       delete last.interim;
       return;
     }
@@ -59,7 +75,9 @@ export function answerReceipt(view, answer) {
     const labels = view.fields.filter(f => Object.hasOwn(answer.content, f.key)).map(f => f.label);
     return view.title + " · " + (labels.length ? "Provided " + labels.join(", ") : "No fields supplied");
   }
-  if (view.dispatch) return ({ approve: "Allow this time", today: "Allow for today", remember: "Always allow", deny: "Deny" })[answer.action];
+  if (view.dispatch)
+    return ({ approve: "Allow this time", today: "Allow for today", remember: "Always allow", deny: "Deny", deny_always: "Always deny" })[answer.action];
+  if (view.artifactGrant) return ({ approve: "Allow for this chat", remember: "Always allow", deny: "Deny" })[answer.action];
   if (view.kind === "permission") return ({ approve:"Allow once", remember:"Allow for this chat", deny:"Deny" })[answer.action];
   if (view.kind === "question" && view.freeform === false && view.choices?.includes(answer.value)) return answer.value;
   return "Answered";

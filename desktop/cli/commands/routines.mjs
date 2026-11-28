@@ -10,7 +10,7 @@
 // often it runs, and that each run uses the model and can cost money. The socket refuses such a schedule
 // unless the call carries { fastSchedule: true }; the command sends that only after the yes.
 import { readFileSync } from "node:fs";
-import { CliError, EXIT, table, usage } from "../output.mjs";
+import { ago, CliError, EXIT, table, usage } from "../output.mjs";
 import { confirm, readAll } from "./input.mjs";
 import { safe, shellWord } from "./tools.mjs";
 
@@ -232,6 +232,20 @@ export const routinesCommands = {
           context.print(await context.client.call("routines.get", one(context, "Name the routine (its name or id).")), routineText);
         },
       },
+      runs: {
+        summary: "List a routine's latest runs: how each ended and what it said",
+        usage: "botkins routines runs <routine> [--limit <n>]",
+        options: { limit: { type: "string", value: "n", about: "How many runs, 1 to 50 (10)" } },
+        details: "Newest first. A run that its script ended with {\"wakeAgent\": false} is `silent`. In a routine's own script, `botkins routines runs \"$BOTKINS_ROUTINE_ID\" --json` reads its earlier runs.",
+        async run(context) {
+          const ref = one(context, "Name the routine (its name or id).");
+          const limit = context.options.limit === undefined ? undefined : Number(context.options.limit);
+          if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 50)) throw usage("--limit is a whole number from 1 to 50.");
+          context.print(await context.client.call("routines.runs", ref, ...(limit === undefined ? [] : [limit])), (list) =>
+            list.length ? table(["WHEN", "STATUS", "TRIGGER", "REPLY"], list.map((run) => [ago(run.time), run.silent ? "silent" : run.status, run.trigger ?? "", clip(safe(run.reply ?? run.detail ?? ""), 60)])) : "This routine has not run yet.",
+          );
+        },
+      },
       when: {
         summary: "Say what a schedule or a cron line means, and when it would run next",
         usage: "botkins routines when [<cron line>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>]",
@@ -259,7 +273,7 @@ export const routinesCommands = {
       },
       add: {
         summary: "Make a routine: a bot does a prompt on a schedule",
-        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | - | --script <text> | --script-file <path>) [--follow-up] [--model <provider/model>] [--effort <level>] (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--yes]",
+        usage: "botkins routines add <name> --bot <bot> (--prompt <text> | --file <path> | - | --script <text> | --script-file <path>) [--follow-up] [--model <provider/model>] [--effort <level>] (--cadence <kind> [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] | --cron <five fields>) [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--allow-ready-tasks] [--yes]",
         arguments: [{ name: "name", required: true }],
         options: {
           bot: { type: "string", value: "bot", about: "The bot that does the work (its name or id)" },
@@ -268,6 +282,7 @@ export const routinesCommands = {
           ...CADENCE_OPTIONS,
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
+          "allow-ready-tasks": { type: "boolean", about: "Let this routine create Ready tasks assigned to a bot (starts automatically)" },
           ...YES,
         },
         details: CADENCE_DETAILS + RUN_DETAILS + " The prompt is a long text: give it with --prompt, with --file, or on standard input with the word -. The command shows the whole routine first (the bot, the schedule in words, the next two times and the prompt), because the bot then runs with nobody watching, and asks. With no terminal it needs --yes. A schedule that runs more often than a bot's own routine tool allows has one more line: how often it runs, and that each run uses the model and can cost money.",
@@ -289,6 +304,7 @@ export const routinesCommands = {
             ...(o.timezone !== undefined && { timezone: o.timezone }),
             ...(deliverFrom(o) && { deliver: deliverFrom(o) }),
             ...(o.quiet && { notify: false }),
+            ...(o["allow-ready-tasks"] && { allowReadyTasks: true }),
           };
           const review = await context.client.call("routines.review", null, data);
           show(context, reviewText(review, true));
@@ -301,7 +317,7 @@ export const routinesCommands = {
       },
       edit: {
         summary: "Change a routine",
-        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--script <text> | --script-file <path> | --no-script] [--follow-up | --no-follow-up] [--model <provider/model|default>] [--effort <level>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--yes]",
+        usage: "botkins routines edit <routine> [-] [--name <text>] [--prompt <text>] [--file <path>] [--script <text> | --script-file <path> | --no-script] [--follow-up | --no-follow-up] [--model <provider/model|default>] [--effort <level>] [--cadence <kind>] [--at <HH:MM>] [--days <list>] [--date <YYYY-MM-DD>] [--cron <five fields>] [--timezone <zone>] [--deliver <where>] [--chat <chat>] [--category <name>] [--quiet] [--notify] [--allow-ready-tasks] [--no-ready-tasks] [--yes]",
         arguments: [{ name: "routine", required: true }],
         options: {
           name: { type: "string", value: "text", about: "A new name" },
@@ -313,6 +329,8 @@ export const routinesCommands = {
           ...RESULT_OPTIONS,
           quiet: { type: "boolean", about: "No notification when a run ends" },
           notify: { type: "boolean", about: "Notify when a run ends (the usual way)" },
+          "allow-ready-tasks": { type: "boolean", about: "Let this routine create Ready tasks assigned to a bot" },
+          "no-ready-tasks": { type: "boolean", about: "Keep tasks created by this routine in Later (default)" },
           ...YES,
         },
         details: "Only what you name changes." + RUN_DETAILS + " A schedule option changes that part of the schedule: `--at 10:00` moves a daily routine to ten o'clock, and a new --cadence replaces the schedule, so give its fields too. " + CADENCE_DETAILS + " The prompt can come from --prompt, --file, or standard input with the word -. The command shows the whole routine as it will be, and asks. With no terminal it needs --yes. A routine that is paused stays paused (`botkins routines resume`). A schedule that runs more often than a bot's own routine tool allows has one more line in what it shows: how often it runs, and that each run uses the model and can cost money.",
@@ -321,6 +339,7 @@ export const routinesCommands = {
           const o = context.options;
           if (o.quiet && o.notify) throw usage("Give --quiet or --notify, not both.");
           if (o["follow-up"] && o["no-follow-up"]) throw usage("Give --follow-up or --no-follow-up, not both.");
+          if (o["allow-ready-tasks"] && o["no-ready-tasks"]) throw usage("Give --allow-ready-tasks or --no-ready-tasks, not both.");
           const script = await scriptFrom(context);
           if (script !== undefined && o["no-script"]) throw usage("Give a script or --no-script, not both.");
           const prompt = await promptFrom(context, false);
@@ -335,6 +354,7 @@ export const routinesCommands = {
             ...(o.timezone !== undefined && { timezone: o.timezone }),
             ...(deliverFrom(o) && { deliver: deliverFrom(o) }),
             ...((o.quiet || o.notify) && { notify: o.notify === true }),
+            ...((o["allow-ready-tasks"] || o["no-ready-tasks"]) && { allowReadyTasks: o["allow-ready-tasks"] === true }),
           };
           if (!Object.keys(patch).length) throw usage("Say what to change. `botkins help routines edit` lists the options.");
           const review = await context.client.call("routines.review", ref, patch);
@@ -411,6 +431,120 @@ export const routinesCommands = {
             if (!(await confirm(context, "Delete it?"))) return EXIT.failed;
           }
           context.print(await context.client.call("routines.schedule", chat, number, action), (done) => (done.removed ? "Deleted" : done.enabled ? "Resumed" : "Paused") + " schedule " + done.id + " of " + safe(done.chat) + ".");
+        },
+      },
+    },
+  },
+  workflows: {
+    summary: "Manage event-based workflows",
+    commands: {
+      list: {
+        summary: "List workflows and their status",
+        usage: "botkins workflows list",
+        async run(context) {
+          context.print(await context.client.call("workflows.list"), (list) =>
+            list.length
+              ? table(["NAME", "STATE", "STEPS", "ID"], list.map((w) => [safe(w.name), w.enabled ? "Active" : "Paused", String((w.nodes ?? []).length), w.id]))
+              : "No workflows yet.",
+          );
+        },
+      },
+      add: {
+        summary: "Create a workflow from a JSON definition file",
+        usage: "botkins workflows add <file>",
+        async run(context) {
+          const raw = await textFrom(context, one(context, "Give a JSON file (or - for stdin)."), "workflow file");
+          const created = await context.client.call("workflows.add", JSON.parse(raw));
+          context.print(created, (w) => "Created workflow " + safe(w.name) + " (" + w.id + ").");
+        },
+      },
+      edit: {
+        summary: "Update a workflow from a JSON patch file",
+        usage: "botkins workflows edit <id> <file>",
+        async run(context) {
+          if (context.args.length !== 2) throw usage("Give the workflow id and a JSON patch file.");
+          const [id, file] = context.args;
+          const raw = await textFrom(context, file, "workflow patch file");
+          const updated = await context.client.call("workflows.edit", id, JSON.parse(raw));
+          context.print(updated, (w) => "Updated workflow " + safe(w.name) + ".");
+        },
+      },
+      remove: {
+        summary: "Delete a workflow and its run history",
+        usage: "botkins workflows remove <id> [--yes]",
+        options: YES,
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          if (!(await confirm(context, "Remove workflow " + id + "?"))) return EXIT.failed;
+          context.print(await context.client.call("workflows.remove", id), (done) => "Removed workflow " + safe(done.name) + ".");
+        },
+      },
+      pause: {
+        summary: "Pause a workflow (stops event and schedule triggers; manual runs still work)",
+        usage: "botkins workflows pause <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.pause", id), (w) => "Paused " + safe(w.name) + ".");
+        },
+      },
+      resume: {
+        summary: "Resume a paused workflow",
+        usage: "botkins workflows resume <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.resume", id), (w) => "Resumed " + safe(w.name) + ".");
+        },
+      },
+      run: {
+        summary: "Run a workflow manually",
+        usage: "botkins workflows run <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          context.print(await context.client.call("workflows.run", id, {}), (run) => "Started run " + run.id + " (" + run.status + ").");
+        },
+      },
+      retry: {
+        summary: "Retry a failed workflow run from the failed step",
+        usage: "botkins workflows retry <runId>",
+        async run(context) {
+          const runId = one(context, "Give the run id.");
+          context.print(await context.client.call("workflows.retry", runId), (run) => "Retrying run " + run.id + ".");
+        },
+      },
+      approve: {
+        summary: "Approve or reject a workflow step waiting for approval",
+        usage: "botkins workflows approve <runId> <approved|rejected> [--note <text>]",
+        options: { note: { type: "string", value: "text", about: "Optional note passed to downstream steps" } },
+        async run(context) {
+          if (context.args.length !== 2) throw usage("Give the run id and approved or rejected.");
+          const [runId, decision] = context.args;
+          context.print(await context.client.call("workflows.approve", runId, undefined, decision, context.options.note ?? ""), (run) => "Recorded " + decision + " on run " + run.id + ".");
+        },
+      },
+      cancel: {
+        summary: "Cancel a running or waiting workflow run",
+        usage: "botkins workflows cancel <runId>",
+        async run(context) {
+          const runId = one(context, "Give the run id.");
+          context.print(await context.client.call("workflows.cancel", runId), (run) => "Cancelled run " + run.id + ".");
+        },
+      },
+      export: {
+        summary: "Export a workflow as portable JSON (no secrets)",
+        usage: "botkins workflows export <id>",
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          const json = await context.client.call("workflows.export", id);
+          context.print(json, (text) => text);
+        },
+      },
+      import: {
+        summary: "Import a workflow from a portable JSON file (starts paused)",
+        usage: "botkins workflows import <file>",
+        async run(context) {
+          const raw = await textFrom(context, one(context, "Give a workflow JSON file (or - for stdin)."), "workflow file");
+          const res = await context.client.call("workflows.import", raw, {});
+          context.print(res, (r) => "Imported workflow " + safe(r.workflow.name) + " (paused).");
         },
       },
     },

@@ -256,19 +256,20 @@
 }
 
 /* -------------------------------------------------------------- bot page */
-/* The bot is the subject: its Botkin large and bare, its name in the serif, and calm sections
-   split by hairlines instead of boxed cards. */
-.bot-profile > * + * {
-  margin-top: 30px;
+/* As on the phone: the Botkin, its name and role and the ways to talk to it, then cards. The
+   profile form and the chats on the left; the bot's settings and the Manage rows on the right. */
+.bot-profile.page {
+  gap: 22px;
 }
 .profile-back {
-  margin-left: -4px;
+  align-self: flex-start;
+  margin-left: -8px;
+  color: var(--muted);
 }
 .profile-hero {
   display: flex;
   align-items: center;
-  gap: 28px;
-  margin-top: 10px;
+  gap: 24px;
 }
 .profile-portrait {
   display: grid;
@@ -280,11 +281,16 @@
   flex: 1;
 }
 .profile-title h1 {
-  margin: 4px 0 2px;
-  font-size: calc(34px * var(--text-scale));
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: calc(28px * var(--text-scale));
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.4px;
   overflow-wrap: anywhere;
 }
-.profile-title > p.muted {
+.profile-role {
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: calc(15px * var(--text-scale));
 }
@@ -299,136 +305,119 @@
   margin: 0;
 }
 .profile-about {
-  margin-top: 8px;
+  margin: 8px 0 0;
   max-width: 60ch;
-}
-.actionrow.profile-actions {
-  margin: 18px 0 0 -6px;
-  gap: 2px;
-}
-/* One primary (New chat); the rest are quiet words with their icons. */
-.actionrow.profile-actions button {
-  border: 0;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  font-size: calc(13px * var(--text-scale));
+  font-size: calc(14px * var(--text-scale));
   color: var(--ink-2);
-  gap: 6px;
 }
-.actionrow.profile-actions button:hover:not(:disabled) {
-  filter: none;
-  background: var(--hover);
-  color: var(--ink);
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
 }
-.actionrow.profile-actions button > svg {
-  color: var(--muted);
+.profile-columns {
+  gap: 24px;
 }
-.actionrow.profile-actions .primary {
-  margin: 0 8px 0 6px;
-  padding: 8px 15px;
-  color: var(--on-accent);
-}
-.actionrow.profile-actions .primary:hover:not(:disabled) {
-  background: var(--accent);
-  color: var(--on-accent);
-  filter: brightness(1.06);
-}
-.actionrow.profile-actions .primary > svg {
-  color: inherit;
-}
-.actionrow.profile-actions .danger,
-.actionrow.profile-actions .danger > svg {
-  color: var(--danger);
-}
-.actionrow.profile-actions button:disabled {
-  opacity: 0.4;
-}
-.profile-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 48px;
-  align-items: start;
-}
+.profile-main,
 .profile-side {
-  display: grid;
-  gap: 0;
-}
-.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   min-width: 0;
 }
-.profile-side > .profile-card {
-  padding: 22px 0;
+/* Each settings card: a title inside a rounded card, as the phone's grouped settings. */
+.bot-profile .profile-card {
+  min-width: 0;
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: var(--card-radius);
+  background: var(--card);
 }
-.profile-side > .profile-card:first-child {
-  padding-top: 0;
+:root:not([data-backdrop="clean"]) .bot-profile .profile-card {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
 }
-.profile-side > .profile-card + .profile-card {
-  border-top: 1px solid var(--line);
+.bot-profile .profile-card h2 {
+  margin: 0;
+  font-size: calc(15px * var(--text-scale));
+  line-height: 1.35;
+  font-weight: 700;
 }
-.profile-card h2 {
-  font-size: calc(19px * var(--text-scale));
-}
-.profile-card > p {
+.bot-profile .profile-card > p {
   margin: 4px 0 12px;
   font-size: calc(13px * var(--text-scale));
   color: var(--muted);
 }
-.profile-card .sectionhead {
+.bot-profile .profile-card .sectionhead {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 4px;
+  margin: 0 0 4px;
 }
-.profile-card .sectionhead .textbutton {
+.bot-profile .profile-card .sectionhead .textbutton {
   gap: 6px;
   padding: 5px 9px;
   border-radius: var(--radius-sm);
   font-size: calc(13px * var(--text-scale));
   font-weight: 600;
+  color: var(--accent-text);
 }
-.profile-card .sectionhead .textbutton:hover {
+.bot-profile .profile-card .sectionhead .textbutton:hover {
   filter: none;
   background: var(--hover);
-  color: var(--ink);
+}
+.profile-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
 }
 .profile-edit label {
   display: grid;
   gap: 6px;
+  margin: 12px 0;
   font-size: calc(13px * var(--text-scale));
   font-weight: 600;
-  margin: 14px 0;
+  color: var(--ink-2);
 }
 .profile-edit input,
 .profile-edit textarea {
   font-weight: 400;
+  color: var(--ink);
+  background: var(--sunken);
+  border-color: transparent;
+  border-radius: 10px;
 }
-.profile-side > section {
-  margin-top: 0;
+.profile-edit input:focus,
+.profile-edit textarea:focus {
+  border-color: var(--line-strong);
 }
 .profile-save {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.profile-save .primary:disabled {
+.profile-save .btn:disabled {
   opacity: 0.4;
 }
-/* Quiet buttons in the sections: a soft fill, no outline. */
-.profile-card .secondary,
-.profile-save .secondary {
+.profile-save small {
+  color: var(--muted);
+}
+/* Quiet buttons in the cards: a soft fill, no outline. */
+.bot-profile .profile-card .secondary {
   border: 0;
   padding: 7px 12px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 9px;
+  background: var(--sunken);
   font-size: calc(13px * var(--text-scale));
   font-weight: 600;
   gap: 6px;
 }
-.profile-card .secondary:hover,
-.profile-save .secondary:hover {
+.bot-profile .profile-card .secondary:hover {
   filter: none;
-  background: color-mix(in srgb, var(--ink) 11%, transparent);
+  background: color-mix(in srgb, var(--sunken) 80%, var(--ink) 8%);
 }
 .profile-stat {
   display: flex;
@@ -439,36 +428,54 @@
 .profile-card .model-picker select {
   max-width: 100%;
 }
-/* The model list and thinking sit on the canvas here, so their wells take the card color. */
+/* The model list and thinking sit on a card here, so their wells take the sunken color. */
 .bot-profile .mp-list,
 .bot-profile .mp-group-head,
 .bot-profile .model-picker .thinking-control,
 .bot-profile .mp-empty {
-  background: var(--surface);
+  background: var(--sunken);
 }
-.profile-chats .sectionhead {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
+.profile-chats .group-label small,
+.profile-manage .group-label small {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.profile-manage .group-row {
+  --row-height: 44px;
+  --row-inset: 46px;
+  gap: 14px;
+  font-size: calc(14px * var(--text-scale));
+}
+.profile-manage .group-row > svg {
+  flex: none;
+  color: var(--muted);
+}
+.profile-manage .group-row.danger,
+.profile-manage .group-row.danger > svg {
+  color: var(--danger);
+}
+.profile-manage .group-row:disabled {
+  opacity: 0.45;
+}
+.profile-manage .group-row:disabled:hover {
+  background: transparent;
 }
 @media (max-width: 1000px) {
-  .profile-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-  .profile-side > .profile-card:first-child {
-    padding-top: 22px;
-    border-top: 1px solid var(--line);
-  }
   .profile-hero {
     gap: 18px;
   }
   .profile-portrait .bot-avatar {
-    width: 104px;
-    height: 104px;
+    width: 88px;
+    height: 88px;
   }
   .profile-title h1 {
-    font-size: calc(28px * var(--text-scale));
+    font-size: calc(24px * var(--text-scale));
+  }
+  .profile-pair {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 }
 
@@ -505,4 +512,39 @@
   margin: 6px 0 0;
   color: var(--muted);
   font-size: calc(13px * var(--text-scale));
+}
+
+/* ------------------------------------------------------------- Create a bot */
+/* The sheet's fields sit in two soft cards: the Botkin with its name and role, then what it is for.
+   (Layout is from settings.css; these only add the cards, so the sheet matches the bot page.) */
+form.botform {
+  gap: 16px;
+}
+form.botform .botform-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--sunken);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+form.botform .botform-top.botform-card {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+}
+form.botform .botform-card label {
+  color: var(--ink-2);
+}
+form.botform .botform-card textarea {
+  background: var(--surface);
+  border-color: transparent;
+  border-radius: 10px;
+}
+form.botform .botform-card textarea:focus {
+  border-color: var(--line-strong);
+}
+form.botform .botform-face small {
+  color: var(--muted);
 }

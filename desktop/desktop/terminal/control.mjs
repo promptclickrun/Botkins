@@ -35,6 +35,7 @@ import { appsApi } from "./control-apps.mjs";
 import { profileApi } from "./control-profile.mjs";
 import { nodeApi } from "./control-node.mjs";
 import { hostsApi } from "./control-hosts.mjs";
+import { channelsApi } from "./control-channels.mjs";
 import { parseScopedId, scopeId } from "../unified-hosts.mjs";
 import { checkReach } from "./reach.mjs";
 import { normaliseConfig } from "../providers/keyed/config.mjs";
@@ -796,6 +797,50 @@ export function controlApi(service) {
       }
       return merged.sort((a, b) => Date.parse(b.time || 0) - Date.parse(a.time || 0)).slice(0, cap);
     },
+    /** Pending interactions (approvals, questions, forms, secure inputs, and node-job requests). */
+    "interactions.list": ([options = {}] = []) => {
+      const onlyNode = options?.nodeJob === true;
+      const mapEntry = (entry, hostMeta) => ({
+        id: hostMeta ? scopeId(hostMeta.id, entry.id) : entry.id,
+        kind: entry.kind,
+        title: entry.title,
+        ...(entry.label && { label: entry.label }),
+        ...(entry.preview && { preview: entry.preview }),
+        ...(entry.detail && { detail: entry.detail }),
+        chatId: hostMeta && entry.chatId ? scopeId(hostMeta.id, entry.chatId) : entry.chatId,
+        botId: hostMeta && entry.botId ? scopeId(hostMeta.id, entry.botId) : entry.botId,
+        ...(entry.nodeJob && { nodeJob: true }),
+        ...(entry.dispatch && { dispatch: true }),
+        ...(entry.review && { review: true }),
+        ...(entry.operation && { operation: entry.operation }),
+        ...(entry.resourceId && { resourceId: entry.resourceId }),
+        ...(entry.resourceName && { resourceName: entry.resourceName }),
+        ...(entry.sourceBotName && { sourceBotName: entry.sourceBotName }),
+        ...(entry.sourceHostName && { sourceHostName: entry.sourceHostName }),
+        ...(entry.targetHostName && { targetHostName: entry.targetHostName }),
+        ...(entry.remember && { remember: entry.remember }),
+        ...(entry.choices && { choices: entry.choices }),
+        ...(entry.freeform !== undefined && { freeform: entry.freeform }),
+        ...(entry.time !== undefined && { time: entry.time }),
+        ...(isUnified() && {
+          hostId: hostMeta ? hostMeta.id : "local",
+          hostName: hostMeta ? hostMeta.name : localHostName(),
+        }),
+      });
+      const localList = workspace.interactions
+        .snapshot()
+        .filter((entry) => !onlyNode || entry.nodeJob === true)
+        .map((entry) => mapEntry(entry, null));
+      if (!isUnified()) return localList;
+      const merged = [...localList];
+      for (const { host, snapshot } of remoteEntries()) {
+        for (const entry of snapshot.requests ?? []) {
+          if (onlyNode && entry.nodeJob !== true) continue;
+          merged.push(mapEntry(entry, host));
+        }
+      }
+      return merged.sort((a, b) => Number(a.time ?? 0) - Number(b.time ?? 0));
+    },
     // The answer says which chat and which kind of request (never its text or the answer's), for the log line (coverage.mjs). The request is gone once it is answered, so it is read first.
     // A yes to a request (`approve`, `today` or `remember`) needs the mark `{ agreed: true }` as the last argument: a bot's shell must not approve its own request by a quiet call. A no, a cancel and an answer to a question need none.
     "chat.respond": async ([requestId, answer, mark]) => {
@@ -893,7 +938,7 @@ export function controlApi(service) {
   // A plugin by its name, bots by their names, and what of a plugin runs here (desktop/terminal/control-plugins.mjs).
   Object.assign(api, pluginsApi({ workspace, handlers, bot, signIns, log: (line) => log?.info?.(line) }));
   // The rest of the workspace, one file for each area (desktop/terminal/control-<area>.mjs). A name that is there already is not replaced.
-  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi, nodeApi]) {
+  for (const area of [botsApi, chatsApi, routinesApi, projectsApi, wikiApi, prefsApi, credentialsApi, voiceApi, spacesApi, sharingApi, teamApi, appsApi, nodeApi, channelsApi]) {
     for (const [name, call] of Object.entries(area({ workspace, handlers, bot, signIns, selection }))) {
       if (Object.hasOwn(api, name)) throw new Error("Two control calls have the name " + name + ".");
       api[name] = call;
@@ -908,7 +953,7 @@ export function controlApi(service) {
     api[name] = call;
   }
   // The other plugin calls go by their own names ("plugins.browse", …), as a phone makes them.
-  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name.startsWith("mcpCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
+  for (const name of Object.keys(handlers)) if ((name.startsWith("plugins.") || name.startsWith("piPackages.") || name.startsWith("skillsCatalog.") || name.startsWith("market.") || name.startsWith("mcpCatalog.") || name === "skills.upload") && !Object.hasOwn(api, name)) api[name] = (args) => handlers[name](...args);
   // A reference to a saved credential is refused by the named call too, before its own work starts.
   for (const name of WITHOUT_REFERENCES) {
     if (!Object.hasOwn(api, name)) continue;

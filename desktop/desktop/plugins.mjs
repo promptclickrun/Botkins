@@ -413,7 +413,7 @@ export class Plugins {
       if (!ok && was !== false) this.ws.notify?.();
       return ok;
     };
-    return { id: row.preview.id, folder: row.folder, config: row.preview.config, values: this.values(row), intact };
+    return { id: row.preview.id, revision: row.revision ?? basename(row.folder), folder: row.folder, config: row.preview.config, values: this.values(row), intact };
   }
   oauthServers(row) {
     // Manifests are immutable per revision. Snapshotting a streaming chat must not
@@ -720,9 +720,9 @@ export class Plugins {
     }
     throw new Error("This plugin sign-in is unavailable.");
   }
-  async signIn(id, { open, patience, finished, followed } = {}) {
+  async signIn(id, { open, patience, finished, followed, redirect, answerRedirect } = {}) {
     const server = this.signInServer(id);
-    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }) });
+    await this.oauth.signIn(server, { client: server.clientId ? { clientId: server.clientId } : undefined, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }), ...(redirect && { redirect }), ...(answerRedirect && { answerRedirect }) });
     if (!this.authServer(id)) {
       this.vault.remove(this.oauth.entry(server));
       throw new Error("The plugin changed during sign-in.");
@@ -733,9 +733,13 @@ export class Plugins {
   }
   async token(botId, request) {
     for (const row of this.records.filter((r) => scoped(r, botId))) {
-      const server = this.knownOAuthServers(row).find((s) => s.name === request.server && s.url === request.url);
-      if (server)
-        return this.oauth.token(server, { reason: request.reason, client: server.clientId ? { clientId: server.clientId } : undefined });
+      const server = this.knownOAuthServers(row).find((s) => s.name === request.server && s.url === request.url &&
+        (request.serverId === undefined || request.serverId === s.id));
+      if (server) {
+        if (request.serverId !== undefined && !this.intact(row)) return null;
+        return this.oauth.token(server, { reason: request.reason, client: server.clientId ? { clientId: server.clientId } : undefined,
+          ...(request.serverId !== undefined && { rejectedAccessToken: request.rejectedAccessToken }) });
+      }
     }
     return null;
   }
@@ -754,7 +758,20 @@ export class Plugins {
     stops.plugins.clear();
     Object.assign(stops, { total: 0, toldTotal: false });
   }
-  async session(bot, chat, { skillsOnly = false } = {}) {
+  /**
+   * Whether every one of these plugins may still run for this bot as the revision that gave the
+   * hooks: installed, on, for this bot, ready, its copy intact, and still that revision. A hook
+   * that fires after its turn (a child that ends later) asks first. An update under the same id is
+   * another revision, and its predecessor's hooks then run no more. `plugins` is [{ id, revision }].
+   */
+  authorizes(botId, plugins) {
+    if (!Array.isArray(plugins) || !plugins.length) return false;
+    return plugins.every((held) => {
+      const row = this.records.find((r) => r.preview.id === held?.id);
+      return !!row && typeof held.revision === "string" && held.revision === (row.revision ?? basename(row.folder)) && scoped(row, botId) && this.intact(row) && this.public(row).status === "ready";
+    });
+  }
+  async session(bot, chat, { skillsOnly = false, liveOAuth = false } = {}) {
     // A copy that is no longer the reviewed bytes is not used, and the app shows why.
     const scopedRows = this.records.filter((r) => scoped(r, bot.id));
     const before = scopedRows.map((r) => this.checked.get(r.folder)?.ok);
@@ -763,6 +780,16 @@ export class Plugins {
     const rows = sound.filter((r) => this.public(r).status === "ready");
     if (!rows.length) return { directories: [], mcpServers: {}, hooks: undefined };
     const plugins = rows.map((row) => (skillsOnly ? { id: row.preview.id, folder: row.folder } : this.runtimeRecord(row)));
-    return pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line), stops: this.stopsFor(chat.id) });
+    const spec = pluginSession(plugins, { dir: this.ws.dir, botId: bot.id, chatId: chat.id, skillsOnly, note: (line) => this.ws.pluginNote?.(chat.id, line), stops: this.stopsFor(chat.id) });
+    if (liveOAuth && !skillsOnly) {
+      for (const row of rows) {
+        for (const credential of this.knownOAuthServers(row)) {
+          const server = spec.mcpServers[credential.name];
+          if (server?.type === "http" && server.url === credential.url &&
+              !Object.keys(server.headers ?? {}).some((name) => name.toLowerCase() === "authorization")) server.oauthId = credential.id;
+        }
+      }
+    }
+    return spec;
   }
 }

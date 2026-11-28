@@ -421,10 +421,11 @@ for (const timeline of [true, false]) {
       const steer = kinds.indexOf("user:Skip the docs");
       assert.ok(steer > 1 && kinds.slice(1, steer).some((k) => k.startsWith("work:")), "work before the steer: " + kinds.join(" | "));
       assert.ok(kinds.slice(steer + 1).some((k) => k.startsWith("work:")), "work after it");
-      // The reply, its activity line, then its crew card (the two helpers).
-      assert.ok(kinds.at(-3)?.startsWith("assistant:") && kinds.at(-2) === "activity", kinds.join(" | "));
-      // An older computer doesn't say which steps were a helper's, so it has no count of them.
-      assert.equal(kinds.at(-1), "crew:2 helpers" + (timeline ? " · " + own.length + " steps" : ""));
+      // The reply, then its activity line with the finished helpers folded in.
+      assert.ok(kinds.at(-2)?.startsWith("assistant:") && kinds.at(-1) === "activity", kinds.join(" | "));
+      const activityItem = items.at(-1);
+      assert.equal(activityItem?.kind, "activity");
+      assert.match(activityItem.kind === "activity" ? (activityItem.label ?? "") : "", /2 helpers finished/);
     } finally {
       await d.close();
     }
@@ -609,6 +610,84 @@ test("the worked example in docs/turn-timeline.md reads as the doc says, from ei
     "work:Asked you a question, ran a command",
     "Restarted. Staging is healthy again.",
     "activity",
+  ]);
+});
+
+test("live voice transcripts stay separate from the running turn's work block while it runs and after it finishes", () => {
+  const working = run({ steps: [step("a", 1)] });
+  const messages: Message[] = [
+    { role: "user", text: "Refactor the parser", runId: "r1", time: at(0) },
+    { role: "assistant", text: "Reading parser.ts", runId: "r1", interim: true, time: at(0.5) },
+    { role: "user", text: "How is it going?", voiceId: "call:u1", time: at(2) },
+    { role: "assistant", text: "Still working on parser.ts.", voiceId: "call:a1", time: at(2.5) },
+  ];
+  // Open steps mode: voice lines are standalone chat messages, and the live work block stays at the bottom.
+  const openLive = chatTimeline(input({ timeline: true, messages, running: working, live: { stream: "Halfway there" } }));
+  assert.deepEqual(shape(openLive), [
+    "user:Refactor the parser",
+    "user:How is it going?",
+    "assistant:Still working on parser.ts.",
+    "text:Reading parser.ts",
+    "live:a|Halfway there",
+    "fold",
+  ]);
+  // Island / fold mode: voice lines remain standalone chat messages above the live island/fold.
+  const islandPrefs = { ...SHOW, foldFinishedSteps: true, island: true };
+  const islandLive = chatTimeline(input({ timeline: true, messages, running: working, live: { stream: "Halfway there" }, prefs: islandPrefs }));
+  assert.deepEqual(shape(islandLive), [
+    "user:Refactor the parser",
+    "user:How is it going?",
+    "assistant:Still working on parser.ts.",
+    "text:Reading parser.ts",
+    "live:|Halfway there",
+    "fold",
+  ]);
+  // Once finished, the final reply and work fold stay after the mid-turn voice lines, and the fold excludes voice lines.
+  const finished = run({ status: "Completed", finished: at(5), steps: [step("a", 1, "Done")] });
+  const completed = [...messages, { role: "assistant" as const, text: "Refactor done.", runId: "r1", time: at(5) }];
+  const islandDone = chatTimeline(input({ timeline: true, messages: completed, runs: { r1: finished }, prefs: islandPrefs }));
+  assert.deepEqual(shape(islandDone), [
+    "user:Refactor the parser",
+    "user:How is it going?",
+    "assistant:Still working on parser.ts.",
+    "assistant:Refactor done.",
+    "fold",
+  ]);
+  const foldRow = islandDone.find((item) => item.kind === "fold");
+  assert.ok(foldRow?.kind === "fold");
+  assert.ok(!foldRow.entries.some((entry) => entry.kind === "text" && entry.text.includes("Still working")), "voice lines never fold into the work block");
+});
+
+test("ask_bot voice acknowledgements (including legacy interim-tagged lines) stay outside the running work block", () => {
+  const working = run({ steps: [step("a", 1)] });
+  const messages: Message[] = [
+    { role: "user", text: "Check my list", voiceId: "call:u1", runId: "r1", time: at(0) },
+    { role: "assistant", text: "Checking now.", voiceId: "call:a1", runId: "r1", interim: true, time: at(0.2) },
+    { role: "user", text: "Thanks", voiceId: "call:u2", time: at(1) },
+    { role: "assistant", text: "Anytime.", voiceId: "call:a2", time: at(1.2) },
+  ];
+  const live = chatTimeline(input({ timeline: true, messages, running: working, live: { stream: "" } }));
+  assert.deepEqual(shape(live), [
+    "user:Check my list",
+    "assistant:Checking now.",
+    "user:Thanks",
+    "assistant:Anytime.",
+    "live:a|",
+    "fold",
+  ]);
+  // A stopped run without a reply stays between mid-turn and post-turn voice messages.
+  const stopped = run({ status: "Stopped", detail: "Stopped.", finished: at(2), steps: [step("a", 1, "Done")] });
+  const withLater = [...messages, { role: "user" as const, text: "What happened?", voiceId: "call:u3", time: at(3) }];
+  const done = chatTimeline(input({ timeline: true, messages: withLater, runs: { r1: stopped } }));
+  assert.deepEqual(shape(done), [
+    "user:Check my list",
+    "assistant:Checking now.",
+    "user:Thanks",
+    "assistant:Anytime.",
+    "work:a",
+    "activity",
+    "ended:Stopped (try again)",
+    "user:What happened?",
   ]);
 });
 

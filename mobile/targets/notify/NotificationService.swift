@@ -22,6 +22,8 @@ final class NotificationService: UNNotificationServiceExtension {
   override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
     deliver = contentHandler
     let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+    // Keep every Botkins alert in one app-wide notification stack, including alerts from older hosts.
+    content.threadIdentifier = ""
     best = content
     if let sealed = request.content.userInfo["b"] as? String, let (opened, host) = open(sealed) {
       if let title = opened["t"] as? String, !title.isEmpty { content.title = title }
@@ -31,6 +33,7 @@ final class NotificationService: UNNotificationServiceExtension {
       if let chat = opened["c"] as? String { info["chatId"] = chat }
       if let kind = opened["k"] as? String { info["kind"] = kind }
       if let asked = opened["r"] as? String { info["requestId"] = asked }
+      if opened["nj"] as? Bool == true { info["nodeJob"] = true }
       // An alert about a space ("space-alerts-v1") names the space, and the panel when it is about one.
       if let space = opened["s"] as? String { info["spaceId"] = space }
       if let panel = opened["p"] as? String { info["panelId"] = panel }

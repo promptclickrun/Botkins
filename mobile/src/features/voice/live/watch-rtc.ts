@@ -1,5 +1,6 @@
 // Codex's live voice is WebRTC-only. This transport keeps the protocol, tools and transcript in
 // JavaScript while the iPhone native peer uses the Watch as its custom RTCAudioDevice.
+import type { LiveProvider } from "@/link/types";
 import { MicGate, MIN_TURN_MS, RELEASE_TAIL_MS } from "./input";
 import { OpenAIRealtime, transcription, turnsByHand } from "./openai";
 import type { Negotiate } from "./webrtc";
@@ -22,15 +23,18 @@ export class WatchRTCTransport extends LiveBase {
     private readonly negotiate: Negotiate,
     runTool: ToolRunner,
     private readonly language?: string,
+    private readonly provider: LiveProvider = "openai",
   ) {
     super(runTool);
     this.protocol = new OpenAIRealtime({
-      send: (event) => this.send(event),
+      send: (event) => {
+        if (!this.codex) this.send(event);
+      },
       status: (status) => this.setStatus(status),
       inputItem: (id) => this.emit("inputItem", id),
       line: (id, who, text, options) => this.line(id, who, text, options),
       tool: (name, args) => this.tool(name, args),
-      error: (message) => this.emit("error", message),
+      error: (message) => (this.codex ? this.fail(message) : this.emit("error", message)),
       responding: (on) => (this.responding = on),
       playing: (on) => {
         this.sounding = on;
@@ -39,6 +43,10 @@ export class WatchRTCTransport extends LiveBase {
       },
       session: (session) => (this.manual = turnsByHand(session)),
     });
+  }
+
+  private get codex() {
+    return this.provider === "codex";
   }
 
   private send(event: Record<string, unknown>) {
@@ -64,11 +72,13 @@ export class WatchRTCTransport extends LiveBase {
       this.rtc.onState((state) => {
         if (state === "open") {
           this.apply();
-          const input = {
-            transcription: transcription(this.language),
-            ...(this.input === "push" && { turn_detection: null }),
-          };
-          this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
+          if (!this.codex) {
+            const input = {
+              transcription: transcription(this.language),
+              ...(this.input === "push" && { turn_detection: null }),
+            };
+            this.send({ type: "session.update", session: { type: "realtime", audio: { input } } });
+          }
           this.setStatus("listening");
         } else if (state === "failed" || state === "closed") {
           if (!this.ended) this.fail(state === "failed" ? "The Watch voice connection failed." : "The call ended.");
@@ -103,8 +113,10 @@ export class WatchRTCTransport extends LiveBase {
 
   interrupt() {
     if (this.ended) return;
-    if (this.responding) this.send({ type: "response.cancel" });
-    if (this.sounding) this.send({ type: "output_audio_buffer.clear" });
+    if (!this.codex) {
+      if (this.responding) this.send({ type: "response.cancel" });
+      if (this.sounding) this.send({ type: "output_audio_buffer.clear" });
+    }
     this.rtc.flush();
     this.responding = false;
     this.sounding = false;
@@ -122,7 +134,7 @@ export class WatchRTCTransport extends LiveBase {
       this.turnMs = 0;
       this.startTurn();
       if (this.responding || this.sounding) this.interrupt();
-      this.send({ type: "input_audio_buffer.clear" });
+      if (!this.codex) this.send({ type: "input_audio_buffer.clear" });
     }
     this.gate.press();
     this.apply();
@@ -137,7 +149,7 @@ export class WatchRTCTransport extends LiveBase {
     this.sending = setTimeout(() => {
       this.sending = null;
       this.apply();
-      if (this.ended || !this.manual) return;
+      if (this.ended || this.codex || !this.manual) return;
       if (held < MIN_TURN_MS || this.quietTurn) {
         this.send({ type: "input_audio_buffer.clear" });
         return;

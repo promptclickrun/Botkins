@@ -5,10 +5,46 @@ import { createHash } from "node:crypto";
 import { agree, b64u, box, hkdf, random, unb64u, unbox } from "./link/crypto.mjs";
 import { findHost, normalizeHost } from "./remote/link-client.mjs";
 
-const operations = new Set(["list", "submit", "status", "cancel", "capabilities", "job.submit", "job.status", "job.cancel"]);
-const nodeOperations = new Set(["capabilities", "job.submit", "job.status", "job.cancel"]);
-const trackedOperations = new Set(["submit", "status", "job.submit", "job.status"]);
-const cancelOperations = new Set(["cancel", "job.cancel"]);
+const operations = new Set([
+  "list",
+  "submit",
+  "status",
+  "cancel",
+  "capabilities",
+  "job.submit",
+  "job.status",
+  "job.cancel",
+  "job.answer",
+  "control.status",
+  "control.submit",
+  "control.poll",
+  "control.cancel",
+  "migrate.begin",
+  "migrate.chunk",
+  "migrate.commit",
+  "migrate.verify",
+  "migrate.activate",
+  "migrate.rollback",
+]);
+const nodeOperations = new Set([
+  "capabilities",
+  "job.submit",
+  "job.status",
+  "job.cancel",
+  "job.answer",
+  "control.status",
+  "control.submit",
+  "control.poll",
+  "control.cancel",
+  "migrate.begin",
+  "migrate.chunk",
+  "migrate.commit",
+  "migrate.verify",
+  "migrate.activate",
+  "migrate.rollback",
+]);
+const trackedOperations = new Set(["submit", "status", "job.submit", "job.status", "job.answer", "control.submit", "control.poll"]);
+const cancelOperations = new Set(["cancel", "job.cancel", "control.cancel"]);
 const windowMs = 60_000;
 const statusCacheMs = 10_000;
 const maxReplyBytes = 1024 * 1024;
@@ -147,7 +183,8 @@ export function installTeamworkPeers({ workspace, link }, profile, transport = g
         reply = { error: String(error?.message || "The teamwork request failed.").slice(0, 360) };
       }
       if (trackedOperations.has(operation)) {
-        if (pending(reply.value)) reply.value = { status: reply.value.status };
+        // A pending job's approval (ask) is shown to the owner on the asking computer, so it is sent only after the peer checks out, as output is.
+        if (pending(reply.value) && !reply.value?.output && !reply.value?.ask) reply.value = { status: reply.value.status };
         else await peer.verify();
       }
       if (cancelOperations.has(operation) && reply.value) reply.value = { status: reply.value.status };
@@ -183,7 +220,7 @@ export function installTeamworkPeers({ workspace, link }, profile, transport = g
       const id = nonce();
       const request = { id, boot: found.hello.teamworkBoot, at: Date.now(), operation, payload };
       const body = JSON.stringify({ teamwork: 1, from: local.serverId, publicKey: local.serverKey, box: box(key, request, "teamwork/request") });
-      if (Buffer.byteLength(body) > 160 * 1024) throw new Error("That teamwork request is too large.");
+      if (Buffer.byteLength(body) > 512 * 1024) throw new Error("That teamwork request is too large.");
       let response;
       try {
         response = await fetchPeer("http://" + found.host + "/botkins/v1/profile", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(12_000) });
@@ -193,7 +230,7 @@ export function installTeamworkPeers({ workspace, link }, profile, transport = g
       const sealed = await response.json();
       const reply = unbox(key, sealed.box, "teamwork/reply/" + id);
       if (trackedOperations.has(operation)) {
-        if (pending(reply.value)) return { status: reply.value.status };
+        if (pending(reply.value) && !reply.value?.output && !reply.value?.ask) return { status: reply.value.status };
         await verify({ profileId, targetId: local.serverId, targetKey: local.serverKey, serverId, serverKey: remote.serverKey });
       }
       if (reply.error) throw new Error(reply.error);

@@ -80,7 +80,7 @@ test("asking a teammate runs it in its own session and returns its reply to the 
   assert.match(system(log, helper), /A teammate is asking for your help on the person's behalf; each message says which one\./);
   assert.doesNotMatch(system(log, helper), /Pip/);
   assert.doesNotMatch(system(log, helper), /Your team\n|today_\* tools/, "a helper has no team of its own and no dashboard tools");
-  assert.deepEqual(log.sessions.get(helper).toolNames(), ["memory_read", "profile_read", "wiki_read", "wiki_search"], "a helper reads its memory and the wiki, and changes nothing (a session's tools come in order of name)");
+  assert.deepEqual(log.sessions.get(helper).toolNames(), ["how_to_botkins", "memory_read", "profile_read", "session_read", "session_search", "wiki_read", "wiki_search"], "a helper reads its memory, past chats, the wiki and the Botkins FAQ, and changes nothing (a session's tools come in order of name)");
   // What the turn recorded for the chat to show.
   const [ask] = ws.state.runs[0].teamwork;
   assert.deepEqual(
@@ -88,7 +88,9 @@ test("asking a teammate runs it in its own session and returns its reply to the 
     { botId: "scout", fromBotId: "pip", message: "Find sources on tide tables", expecting: "three links", status: "answered", reply: "Scout found 3 sources for: Find sources on tide tables" },
   );
   assert.ok(ask.finished >= ask.started);
-  assert.deepEqual(chat.helpers.scout, { established: true, sessionProvider: "copilot" });
+  assert.equal(chat.helpers.scout.established, true);
+  assert.equal(chat.helpers.scout.sessionProvider, "copilot");
+  assert.deepEqual(chat.helpers.scout.sessions, { copilot: { through: 2 } });
   assert.equal(ws.state.runs[0].status, "Completed");
   // A second turn asks the same teammate again: its session for this chat continues.
   await ws.send(id, "And tide charts");

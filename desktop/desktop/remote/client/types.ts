@@ -197,6 +197,7 @@ export type Bot = {
   name: string;
   role: string;
   instructions: string;
+  bundle?: AgentTemplateBundle;
   clarificationInstructions?: string;
   face: string;
   model?: ModelChoice;
@@ -215,7 +216,7 @@ export type Bot = {
   access?: BotAccessGrant;
   origin?: { provider: string; agent: string; file?: string };
 };
-export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary">>;
+export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "bundle">>;
 /** An agent the person already has in a provider's own tool (a Copilot or Codex agent), which can become a bot. */
 export type ImportableAgent = {
   key: string;
@@ -245,7 +246,14 @@ export type ProjectChanges = { repo: false; files: [] } | { repo: true; root: st
 /** The computer's app, for About. */
 export type AppInfo = { version: string; electron: string; chrome: string; platform: string };
 export type Section = { id: string; name: string };
+/** Content copied to the new bot by a computer with agent-template-bundles-v1. */
+export type AgentTemplateBundle = {
+  skills?: { name: string; description: string; instructions: string }[];
+  routines?: { name: string; instructions: string; cadence: Extract<Cadence, { kind: "daily" | "weekdays" | "weekly" }> }[];
+};
+
 export type BotTemplate = {
+  bundle?: AgentTemplateBundle;
   id: string;
   name: string;
   role: string;
@@ -327,6 +335,42 @@ export type Message = {
   interim?: true;
   /** What the person answered to a request in a turn ("turn-timeline-v1"): `text` is the answer in words, never a secret. */
   answer?: { runId: string; requestId: string; kind: AgentRequest["kind"]; title: string };
+  /** Metadata when this message was posted by a Workflow Output step. */
+  fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
+  /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
+  actionCard?: WorkflowActionCard;
+};
+
+export type WorkflowActionCard = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  blocks: PanelBlock[];
+  link?: { label: string; url: string };
+  needsYou: boolean;
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  actedBy?: string;
+  actedAt?: number;
+};
+
+export type ChatCardActionResult = {
+  ok: true;
+  state: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  card: WorkflowActionCard;
 };
 /**
  * What the composer sends for a mention; the computer checks it and fills in the label. "board" is a
@@ -635,6 +679,8 @@ export type Run = RunSummary & {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean }[];
   options?: { label: string; prompt: string; description?: string }[];
   reasoning?: Reasoning[];
   todos?: Todo[];
@@ -712,6 +758,9 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   id: string;
   chatId: string;
   botId: string;
@@ -985,6 +1034,8 @@ export type Preferences = {
   longPromptCache?: boolean;
   /** Tools that run in Botkins on a Mac, switched there only: iMessage and Mail. Missing on an older computer or one that isn't a Mac. */
   macTools?: { imessage?: DeviceLevel; mail?: DeviceLevel };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
 };
 /**
  * One limit of a provider's plan, as the provider reports it. `percentRemaining` is 0 to 100 and is
@@ -1056,7 +1107,8 @@ export type Artifact = {
   mime: string;
   size: number | null;
   time: number;
-  source: "tool" | "media" | "upload" | "export";
+  source: "tool" | "media" | "upload" | "export" | "claude";
+  url?: string;
   messageIndex?: number;
 };
 /** A page of artifacts, newest first. `nextCursor` asks for the page after it; null at the end. */
@@ -1274,7 +1326,7 @@ export type MarketAgent = {
 /** A category's chip: how many templates the other filters leave in it. */
 export type MarketAgentCategory = { id: string; name: string; count: number };
 /** A template with what Create a bot is filled in with. */
-export type MarketAgentTemplate = MarketAgent & { instructions: string };
+export type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: AgentTemplateBundle };
 
 /** A plugin in a catalog. `id` is opaque: never read anything out of it; show `name` and `marketplace`. */
 export type PluginListing = {
@@ -1660,6 +1712,7 @@ export type Calls = {
   regenerateChatTitle(id: string): string;
   deleteChat(id: string): void;
   reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
+  "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): ChatCardActionResult;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;
@@ -1683,6 +1736,10 @@ export type Calls = {
   providers(refresh?: boolean): ProviderStatus[];
   /** The program harnesses (Pi and OMP): installed, version, and how to install. Unknown on an older computer. */
   harnesses(): HarnessStatus[];
+  "claudeArtifacts.status"(refresh?: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
+  "claudeArtifacts.revokeBotApproval"(botId: string): { available: boolean; installed: boolean; signedIn: boolean; subscription: boolean; version?: string; account?: string; plan?: string; reason?: string; model: "haiku" | "sonnet" | "opus"; models: ("haiku" | "sonnet" | "opus")[]; grants: { botId: string; botName: string; grantedAt: number }[] };
   setProviderEnabled(id: string, enabled: boolean): void;
   signIn(providerId?: string): void;
   cancelSignIn(providerId?: string): void;
@@ -1864,7 +1921,7 @@ export type Calls = {
   "piPackages.setEnabled"(name: string, version: string, enabled: boolean): InstalledPiPackage;
   "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): { agents: MarketAgent[]; categories: MarketAgentCategory[] };
   /** Refused with a sentence when the template is gone. */
-  "agents.template"(id: string): MarketAgentTemplate;
+  "agents.template"(id: string, version?: 2): MarketAgentTemplate;
   // ---- A chat's Connect card (the computer's desktop/connects.mjs): the computer's own Composio account, so its owner only
   /** Connect: starts or joins the app's sign-in. `url` is the page to open while it waits. */
   "composio.cardOpen"(chatId: string, cardId: string): ConnectCardState & { url?: string };

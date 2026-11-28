@@ -2,7 +2,7 @@
 // (the helpers and background commands a turn started) and the crew's lanes over time. Plain logic
 // with no imports from either app's framework: the same file is in desktop/src/ and in
 // mobile/src/features/chat/, and desktop/test/activity-story.test.mjs checks the two are equal.
-import { classifyStep, parseStepInput, summarizeSteps, type StepKind } from "./activityModel";
+import { classifyStep, isStepCoveredByRail, parseStepInput, summarizeSteps, type StepKind } from "./activityModel";
 
 /** What this file reads of a step. Both apps' `Step` fits it. */
 export type StoryStep = {
@@ -42,6 +42,8 @@ export type StoryRun<S extends StoryStep = StoryStep> = {
   steps?: S[];
   reasoning?: StoryThought[];
   agents?: StoryHelper[];
+  teamwork?: { id?: string; toolCallId?: string; botId?: string; message?: string; expecting?: string; reply?: string; remote?: { hostId?: string; botName?: string } }[];
+  taskHandoffs?: { id?: string; taskId?: string; toolCallId?: string }[];
 };
 /** Text the bot wrote before it moved on (an interim message), with its time. */
 export type StoryUpdate = { key: string; at: number; text: string };
@@ -100,9 +102,11 @@ export function isBackground(step: StoryStep): boolean {
   }
 }
 
-/** The bot's own steps for the story: not a helper's, not a background command's, and not quiet bookkeeping. */
-export const storySteps = <S extends StoryStep>(steps: S[] | undefined): S[] => (steps ?? []).filter((step) => !step.agentId && !isBackground(step) && !!classifyStep(step));
-
+/** The bot's own steps for the story: not a helper's, not a background command's, not quiet bookkeeping, and not already drawn by an agent-message rail card. */
+export const storySteps = <S extends StoryStep>(steps: S[] | undefined, run?: Pick<StoryRun<S>, "steps" | "teamwork" | "taskHandoffs">): S[] => {
+  const runWithSteps = run && !run.steps && steps ? { ...run, steps } : run;
+  return (steps ?? []).filter((step) => !step.agentId && !isBackground(step) && !!classifyStep(step) && !isStepCoveredByRail(step, runWithSteps));
+};
 function countKinds(steps: StoryStep[]): { kind: StepKind; count: number }[] {
   const counts = new Map<StepKind, number>();
   for (const step of steps) {
@@ -128,7 +132,7 @@ export function storyChapters<S extends StoryStep>(run: StoryRun<S>, updates: St
   // An update that came with a step reads first, as in the chat.
   updates.filter((update) => /\S/.test(update.text)).forEach((update, i) => entries.push({ kind: "update", key: "update-" + update.key, at: update.at, order: offset + i, update }));
   const stepsFrom = entries.length;
-  storySteps(run.steps).forEach((step, i) => entries.push({ kind: "step", key: "step-" + step.id, at: step.started, order: stepsFrom + i, step }));
+  storySteps(run.steps, run).forEach((step, i) => entries.push({ kind: "step", key: "step-" + step.id, at: step.started, order: stepsFrom + i, step }));
   entries.sort((a, b) => a.at - b.at || a.order - b.order);
 
   type Open = { key: string; at: number; thoughts: StoryThought[]; items: ChapterItem<S>[] };
@@ -273,6 +277,17 @@ export function crewLine(crew: Crew): string {
   ].filter(Boolean);
   if (crew.running) parts.push(crew.running + " working");
   else if (crew.steps) parts.push(crew.steps + (crew.steps === 1 ? " step" : " steps"));
+  if (crew.failed) parts.push(crew.failed + " failed");
+  return parts.join(" · ");
+}
+
+/** Finished crew summary folded into a turn's fold/receipt line ("3 helpers finished · 28 commands"). */
+export function finishedCrewLine(crew: Crew): string {
+  const helpers = crew.members.filter((member) => member.kind === "helper").length;
+  const commands = crew.members.length - helpers;
+  const parts: string[] = [];
+  if (helpers) parts.push(helpers + (helpers === 1 ? " helper finished" : " helpers finished"));
+  if (commands) parts.push(commands + (commands === 1 ? " command" : " commands") + (helpers ? "" : " finished"));
   if (crew.failed) parts.push(crew.failed + " failed");
   return parts.join(" · ");
 }

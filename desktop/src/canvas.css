@@ -58,28 +58,6 @@
 .chathead-icon:disabled {
   opacity: 0.45;
 }
-.chathead .chathead-tools .chat-model {
-  margin-left: 0;
-  height: 30px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font-size: calc(12px * var(--text-scale));
-  font-weight: 600;
-}
-.chathead .chathead-tools .chat-model:hover {
-  color: var(--ink);
-  background: var(--hover);
-  filter: none;
-}
-/* Details opens the side panel, which only fits in a wide window. */
-@media (max-width: 1079px) {
-  .chathead-details {
-    display: none;
-  }
-}
 
 /* Replies: the bot's small avatar and name on the first reply of a run. */
 article.assistant > b.speaker {
@@ -1510,28 +1488,6 @@ article:focus-within .msg-actions {
 .context-meter small {
   font-size: calc(12px * var(--text-scale));
   font-weight: 600;
-}
-.meter {
-  display: block;
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--sunken);
-  overflow: hidden;
-}
-.meter i {
-  display: block;
-  height: 100%;
-  background: var(--muted);
-}
-.meter i.high {
-  background: var(--warning);
-}
-@media (max-width: 1000px) {
-  .context-meter .meter,
-  .context-words {
-    display: none;
-  }
 }
 .context-open {
   display: inline-flex;

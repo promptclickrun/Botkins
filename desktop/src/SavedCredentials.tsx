@@ -8,8 +8,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ChevronLeft,
+  Clock,
   Copy,
   ExternalLink,
+  History,
   KeyRound,
   Lock,
   LockKeyhole,
@@ -18,6 +20,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  ShieldOff,
   StickyNote,
   Trash2,
   User,
@@ -25,6 +28,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type {
+  CredentialAuditEntry,
+  CredentialGrant,
   CredentialKind,
   PasswordManagerId,
   PasswordManagerItem,
@@ -44,9 +49,34 @@ const api = window.botkins;
 export const MANAGER_NAMES: Record<PasswordManagerId, string> = { onepassword: "1Password", bitwarden: "Bitwarden", protonpass: "Proton Pass" };
 // Simple glyphs of our own, never the companies' logos.
 const MANAGER_ICON: Record<PasswordManagerId, LucideIcon> = { onepassword: Vault, bitwarden: ShieldCheck, protonpass: LockKeyhole };
-const KIND_ICON: Record<CredentialKind, LucideIcon> = { "api-key": KeyRound, login: User, note: StickyNote };
-const KIND_LABEL: Record<CredentialKind, string> = { "api-key": "API key", login: "Login", note: "Note" };
-const VALUE_LABEL: Record<CredentialKind, string> = { "api-key": "Key", login: "Password", note: "Note" };
+const KIND_ICON: Record<CredentialKind, LucideIcon> = { "api-key": KeyRound, login: User, note: StickyNote, totp: Clock };
+const KIND_LABEL: Record<CredentialKind, string> = { "api-key": "API key", login: "Login", note: "Note", totp: "2FA / TOTP" };
+const VALUE_LABEL: Record<CredentialKind, string> = { "api-key": "Key", login: "Password", note: "Note", totp: "2FA secret (Base32 or otpauth://)" };
+const GRANT_LABEL: Record<string, { label: string; tone: string }> = {
+  always: { label: "Always allow", tone: "ok" },
+  today: { label: "Allow for today", tone: "warn" },
+  deny: { label: "Always deny", tone: "bad" },
+  ask: { label: "Ask every time", tone: "" },
+};
+const OUTCOME_TONE: Record<string, string> = {
+  allowed: "ok",
+  used: "ok",
+  denied: "warn",
+  cancelled: "warn",
+  blocked: "bad",
+  origin_mismatch: "bad",
+  rate_limited: "warn",
+  locked: "warn",
+  error: "bad",
+};
+function formatWhen(ms?: number | null): string {
+  if (!ms) return "Never used";
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "Just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
 const managerName = (id: string) => MANAGER_NAMES[id as PasswordManagerId] ?? id;
 
 /** The state of a manager in a few words, and how it looks. */
@@ -89,6 +119,8 @@ export default function SavedCredentials() {
   const [managers, setManagers] = useState<PasswordManagerStatus[]>();
   const [checking, setChecking] = useState(false);
   const [list, setList] = useState<{ locked?: boolean; entries: SavedCredential[] }>();
+  const [grants, setGrants] = useState<CredentialGrant[]>();
+  const [audit, setAudit] = useState<CredentialAuditEntry[]>();
   const [checks, setChecks] = useState<Record<string, { ok: boolean; message?: string } | "checking">>({});
   const [unlockedHere, setUnlockedHere] = useState<PasswordManagerId[]>([]);
   const [editing, setEditing] = useState<SavedCredential | "new">();
@@ -100,6 +132,16 @@ export default function SavedCredentials() {
     api
       .savedCredentials()
       .then((v) => setList({ locked: v.locked, entries: [...v.entries].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })) }))
+      .catch((e) => setError(errorText(e)));
+  const loadGrants = () =>
+    api
+      .credentialGrants?.()
+      .then((rows) => setGrants(rows))
+      .catch((e) => setError(errorText(e)));
+  const loadAudit = () =>
+    api
+      .credentialAudit?.({ limit: 50 })
+      .then((rows) => setAudit(rows))
       .catch((e) => setError(errorText(e)));
   const loadManagers = async (refresh = false) => {
     setChecking(true);
@@ -114,6 +156,8 @@ export default function SavedCredentials() {
   useEffect(() => {
     void load();
     void loadManagers();
+    void loadGrants();
+    void loadAudit();
   }, []);
   const put = (status: PasswordManagerStatus) => setManagers((now) => now?.map((m) => (m.id === status.id ? status : m)) ?? [status]);
   const proton = useProtonSetup(protonCalls, (status) => {
@@ -149,6 +193,19 @@ export default function SavedCredentials() {
       setError(errorText(e));
     }
     await load();
+    void loadGrants();
+  }
+  async function revokeGrant(g: CredentialGrant) {
+    setNote("");
+    setError("");
+    try {
+      await api.revokeCredentialGrant(g.id);
+      setNote(`Revoked ${g.botName || g.botId} access to ${g.credentialName || g.credentialId} on ${g.destination}.`);
+      await loadGrants();
+      void loadAudit();
+    } catch (e) {
+      setError(errorText(e));
+    }
   }
   async function lock(m: PasswordManagerStatus) {
     try {
@@ -234,8 +291,18 @@ export default function SavedCredentials() {
         ) : (
           list.entries.map((c) => {
             const Glyph = c.source === "vault" ? (KIND_ICON[c.kind] ?? KeyRound) : (MANAGER_ICON[c.source] ?? KeyRound);
-            const facts = c.source === "vault" ? [c.username, hostOf(c.website)].filter(Boolean).join(" · ") : [c.reference, c.username, hostOf(c.website)].filter(Boolean).join(" · ");
+            const aliasHosts = (c.aliases ?? []).map((a) => hostOf(a)).filter(Boolean);
+            const facts =
+              c.source === "vault"
+                ? [c.username, hostOf(c.website), aliasHosts.length ? `+${aliasHosts.length} alias${aliasHosts.length > 1 ? "es" : ""}` : undefined].filter(Boolean).join(" · ")
+                : [c.reference, c.username, hostOf(c.website)].filter(Boolean).join(" · ");
             const state = checks[c.id];
+            const originText =
+              c.source === "vault"
+                ? c.copied && c.copiedFrom
+                  ? `${KIND_LABEL[c.kind]} · Copied from ${managerName(c.copiedFrom.manager)}`
+                  : `${KIND_LABEL[c.kind]} · Typed in here`
+                : "From " + managerName(c.source);
             return (
               <div className="set-row int-item scred-item" key={c.id} aria-label={c.name}>
                 <span className="int-glyph" aria-hidden="true">
@@ -244,7 +311,9 @@ export default function SavedCredentials() {
                 <div className="set-label">
                   <span className="int-title">
                     <span className="set-name">{c.name}</span>
-                    <span className="int-origin">{c.source === "vault" ? KIND_LABEL[c.kind] + " · Typed in here" : "From " + managerName(c.source)}</span>
+                    <span className="int-origin">{originText}</span>
+                    {c.hasTotp && <span className="set-pill ok">2FA</span>}
+                    {c.copied && <span className="set-pill warn">Copy</span>}
                   </span>
                   {facts && <small className="int-line">{facts}</small>}
                   {state && (
@@ -272,6 +341,103 @@ export default function SavedCredentials() {
           })
         )}
       </Group>
+      <Group
+        title="Standing bot grants"
+        footer="Standing grants pin one bot, one credential, one destination origin or command, and one operation. Default is Ask every time. Group chats and non-owner members never get standing grants."
+        actions={
+          <button type="button" className="set-button" onClick={() => void loadGrants()}>
+            <RefreshCw size={14} aria-hidden="true" />
+            Refresh
+          </button>
+        }
+      >
+        {grants === undefined ? (
+          <div className="set-row">
+            <small>Loading…</small>
+          </div>
+        ) : !grants.length ? (
+          <div className="int-empty">
+            <span className="int-empty-icon" aria-hidden="true">
+              <ShieldCheck size={20} />
+            </span>
+            <strong>No standing grants</strong>
+            <p>Bots ask for your approval every time they need a saved credential until you pick Allow for today, Always allow for this site, or Always deny.</p>
+          </div>
+        ) : (
+          grants.map((g) => {
+            const pill = GRANT_LABEL[g.level] ?? { label: g.level, tone: "" };
+            return (
+              <div className="set-row int-item scred-grant-row" key={g.id} aria-label={`${g.botName || g.botId} — ${g.credentialName || g.credentialId}`}>
+                <span className="int-glyph" aria-hidden="true">
+                  {g.level === "deny" ? <ShieldOff size={14} /> : <ShieldCheck size={14} />}
+                </span>
+                <div className="set-label">
+                  <span className="int-title">
+                    <span className="set-name">{g.botName || g.botId}</span>
+                    <span className="int-origin">{g.credentialName || g.credentialId}</span>
+                    <span className={"set-pill " + pill.tone}>{pill.label}</span>
+                  </span>
+                  <small className="int-line">
+                    <code className="int-mono">{g.destination}</code> · <code className="int-mono">{g.operation}</code> · Last used: {formatWhen(g.lastUsedAt)}
+                    {g.expiresAt ? ` · Expires ${new Date(g.expiresAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+                  </small>
+                </div>
+                <div className="set-control int-trailing">
+                  <button type="button" className="set-button scred-small danger" aria-label={`Revoke ${g.botName || g.botId} grant for ${g.credentialName || g.credentialId}`} onClick={() => void revokeGrant(g)}>
+                    Revoke
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </Group>
+      <Group
+        title="Credential audit log"
+        footer="Records who requested a credential, which item, where it went, when, and the outcome. Secret values are never logged."
+        actions={
+          <button type="button" className="set-button" onClick={() => void loadAudit()}>
+            <RefreshCw size={14} aria-hidden="true" />
+            Refresh
+          </button>
+        }
+      >
+        {audit === undefined ? (
+          <div className="set-row">
+            <small>Loading…</small>
+          </div>
+        ) : !audit.length ? (
+          <div className="int-empty">
+            <span className="int-empty-icon" aria-hidden="true">
+              <History size={20} />
+            </span>
+            <strong>No credential activity yet</strong>
+            <p>Every credential use, denial, and blocked attempt appears here.</p>
+          </div>
+        ) : (
+          audit.slice(0, 25).map((entry) => (
+            <div className="set-row int-item scred-audit-row" key={entry.id}>
+              <span className="int-glyph" aria-hidden="true">
+                <History size={14} />
+              </span>
+              <div className="set-label">
+                <span className="int-title">
+                  <span className="set-name">{entry.botName || entry.botId}</span>
+                  <span className="int-origin">
+                    {entry.credentialName || entry.credentialId || "Credential"}
+                    {entry.source ? ` (${entry.source === "vault" ? "Botkins vault" : managerName(entry.source)})` : ""}
+                  </span>
+                  <span className={"set-pill " + (OUTCOME_TONE[entry.outcome] ?? "")}>{entry.outcome}</span>
+                </span>
+                <small className="int-line">
+                  {entry.destination ? <code className="int-mono">{entry.destination}</code> : "—"} · <code className="int-mono">{entry.operation}</code> · {formatWhen(entry.at)}
+                  {entry.reason ? ` · ${entry.reason}` : ""}
+                </small>
+              </div>
+            </div>
+          ))
+        )}
+      </Group>
       {editing && (
         <CredentialSheet
           credential={editing === "new" ? undefined : editing}
@@ -288,10 +454,14 @@ export default function SavedCredentials() {
         <BrowseSheet
           status={browsing}
           close={() => setBrowsing(undefined)}
-          linked={(name) => {
+          linked={(name, copied) => {
             setBrowsing(undefined);
             setError("");
-            setNote("Saved " + name + ". It is read from " + browsing.name + " each time it is used.");
+            setNote(
+              copied
+                ? `Copied ${name} into the Botkins vault (marked as a copy from ${browsing.name}).`
+                : `Saved ${name}. It is read from ${browsing.name} each time it is used.`,
+            );
             void load();
           }}
         />
@@ -456,8 +626,11 @@ function CredentialSheet({ credential, close, saved }: { credential?: SavedCrede
   const [kind, setKind] = useState<CredentialKind>(credential?.kind ?? "api-key");
   const [username, setUsername] = useState(credential?.username ?? "");
   const [website, setWebsite] = useState(credential?.website ?? "");
+  const [aliasesText, setAliasesText] = useState((credential?.aliases ?? []).join(", "));
   const [notes, setNotes] = useState(credential?.notes ?? "");
   const [value, setValue] = useState("");
+  const [totpSecret, setTotpSecret] = useState("");
+  const [replacingTotp, setReplacingTotp] = useState(false);
   const [replacing, setReplacing] = useState(!credential);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -466,25 +639,34 @@ function CredentialSheet({ credential, close, saved }: { credential?: SavedCrede
     if (busy) return;
     if (!name.trim()) return setError("Give it a name.");
     if (!credential && !value.trim()) return setError("Enter the " + VALUE_LABEL[kind].toLowerCase() + " to save.");
+    const aliases = aliasesText
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const input: SavedCredentialInput = {
       ...(credential && { id: credential.id }),
       name: name.trim(),
       ...(!linked && { kind }),
       username: username.trim(),
       website: website.trim(),
+      aliases,
       notes: notes.trim(),
       value: !linked && replacing && value ? value : null,
+      ...(!linked && kind !== "totp" && (replacingTotp || (!credential?.hasTotp && totpSecret.trim())) ? { totpSecret: totpSecret.trim() || "" } : {}),
     };
     // The value leaves the field as soon as it is on its way, and is never shown again.
     setValue("");
+    setTotpSecret("");
     setBusy(true);
     setError("");
     try {
       await api.saveSavedCredential(input);
       input.value = null;
+      input.totpSecret = null;
       saved(name.trim(), !credential);
     } catch (e) {
       input.value = null;
+      input.totpSecret = null;
       setError(errorText(e));
       setBusy(false);
     }
@@ -540,9 +722,41 @@ function CredentialSheet({ credential, close, saved }: { credential?: SavedCrede
         <input maxLength={300} spellCheck={false} placeholder="https://github.com" value={website} onChange={(e) => setWebsite(e.target.value)} />
       </label>
       <label>
+        Other domains / aliases <span className="int-hint">(optional, comma-separated)</span>
+        <input maxLength={600} spellCheck={false} placeholder="login.example.com, app.example.com" value={aliasesText} onChange={(e) => setAliasesText(e.target.value)} />
+        <small className="int-hint">Matches subdomains and saved aliases when a bot looks up logins for a site.</small>
+      </label>
+      <label>
         Notes <span className="int-hint">(optional)</span>
         <textarea maxLength={2000} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </label>
+      {!linked && kind !== "totp" && (
+        credential?.hasTotp && !replacingTotp ? (
+          <div className="int-field">
+            <span className="int-field-label">2FA / TOTP secret</span>
+            <span className="scred-kept">
+              <small className="int-hint">Saved for 2FA codes. It isn't shown.</small>
+              <button type="button" className="set-button scred-small" onClick={() => setReplacingTotp(true)}>
+                Replace 2FA secret
+              </button>
+            </span>
+          </div>
+        ) : (
+          <label>
+            2FA / TOTP secret <span className="int-hint">(optional)</span>
+            <input
+              type="password"
+              spellCheck={false}
+              autoComplete="off"
+              maxLength={512}
+              placeholder="Base32 key or otpauth://totp/…"
+              value={totpSecret}
+              onChange={(e) => setTotpSecret(e.target.value)}
+            />
+            <small className="int-hint">Generates 6-digit 2FA codes on demand under the same approval rules.</small>
+          </label>
+        )
+      )}
       {linked ? (
         <p className="int-hint scred-linked">
           Read from {managerName(credential.source)}
@@ -577,8 +791,8 @@ function CredentialSheet({ credential, close, saved }: { credential?: SavedCrede
 
 type ItemField = NonNullable<PasswordManagerItem["fields"]>[number];
 
-/** Pick a vault, an item and one of its fields, name it, and save a credential that points there. */
-function BrowseSheet({ status, close, linked }: { status: PasswordManagerStatus; close: () => void; linked: (name: string) => void }) {
+/** Pick a vault, an item and one of its fields, name it, and link (recommended) or explicitly copy into Botkins. */
+function BrowseSheet({ status, close, linked }: { status: PasswordManagerStatus; close: () => void; linked: (name: string, copied?: boolean) => void }) {
   const manager = status.id;
   const [vaults, setVaults] = useState<PasswordManagerVault[] | null>();
   const [vault, setVault] = useState<PasswordManagerVault>();
@@ -588,6 +802,7 @@ function BrowseSheet({ status, close, linked }: { status: PasswordManagerStatus;
   const [detail, setDetail] = useState<PasswordManagerItem | null>();
   const [field, setField] = useState<ItemField>();
   const [name, setName] = useState("");
+  const [mode, setMode] = useState<"link" | "copy">("link");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [round, setRound] = useState(0);
@@ -674,8 +889,14 @@ function BrowseSheet({ status, close, linked }: { status: PasswordManagerStatus;
     setBusy(true);
     setError("");
     try {
-      await api.linkPasswordManagerField({ manager, vaultId: vault.id, itemId: item.id, fieldId: field.id, name: name.trim() });
-      linked(name.trim());
+      const payload = { manager, vaultId: vault.id, itemId: item.id, fieldId: field.id, name: name.trim() };
+      if (mode === "copy") {
+        await api.copyPasswordManagerField(payload);
+        linked(name.trim(), true);
+      } else {
+        await api.linkPasswordManagerField(payload);
+        linked(name.trim(), false);
+      }
     } catch (e) {
       setError(errorText(e));
       setBusy(false);
@@ -768,11 +989,30 @@ function BrowseSheet({ status, close, linked }: { status: PasswordManagerStatus;
         </div>
       </div>
       {field && (
-        <label>
-          Name
-          <input required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} />
-          <small className="int-hint">Botkins saves only where to find it. The value stays in {status.name} and is read from there each time it is used.</small>
-        </label>
+        <>
+          <label>
+            Name
+            <input required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <div className="int-field">
+            <span className="int-field-label" id="scred-storage-mode">
+              How to store it
+            </span>
+            <div className="segmented" role="radiogroup" aria-labelledby="scred-storage-mode">
+              <button type="button" role="radio" aria-checked={mode === "link"} onClick={() => setMode("link")}>
+                Link (read on demand)
+              </button>
+              <button type="button" role="radio" aria-checked={mode === "copy"} onClick={() => setMode("copy")}>
+                Copy into Botkins vault
+              </button>
+            </div>
+            <small className="int-hint">
+              {mode === "link"
+                ? `Recommended: Botkins saves only where to find it. The value stays in ${status.name} and is read on demand.`
+                : `Explicit copy: the current value is encrypted in Botkins' local vault and marked as a copy. Future changes in ${status.name} will not sync.`}
+            </small>
+          </div>
+        </>
       )}
     </>
   );

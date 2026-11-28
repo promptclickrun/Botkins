@@ -65,6 +65,68 @@ function mapKeys(record, mapKey, mapValue) {
   return out;
 }
 
+function scopeActionCard(card, s) {
+  if (!card || typeof card !== "object") return card;
+  return {
+    ...card,
+    ...(hasText(card.dispatchedChatId) && { dispatchedChatId: s(card.dispatchedChatId) }),
+    ...(hasText(card.dispatchedBotId) && { dispatchedBotId: s(card.dispatchedBotId) }),
+    ...(card.dispatch && typeof card.dispatch === "object" && {
+      dispatch: {
+        ...card.dispatch,
+        ...(hasText(card.dispatch.botId) && { botId: s(card.dispatch.botId) }),
+      },
+    }),
+  };
+}
+
+function scopeChannel(conn, s, meta) {
+  if (!conn || typeof conn !== "object") return conn;
+  return {
+    ...conn,
+    id: s(conn.id),
+    ...(hasText(conn.botId) && { botId: s(conn.botId) }),
+    ...(Array.isArray(conn.pendingPairings) && {
+      pendingPairings: conn.pendingPairings.map((p) =>
+        p && typeof p === "object"
+          ? { ...p, ...(hasText(p.connectionId) && { connectionId: s(p.connectionId) }) }
+          : p,
+      ),
+    }),
+    ...(meta ?? {}),
+  };
+}
+
+function scopeWorkflow(wf, s, meta) {
+  if (!wf || typeof wf !== "object") return wf;
+  return {
+    ...wf,
+    id: s(wf.id),
+    ...(Array.isArray(wf.nodes) && {
+      nodes: wf.nodes.map((node) => {
+        if (!node || typeof node !== "object" || !node.config || typeof node.config !== "object") return node;
+        const cfg = { ...node.config };
+        if (hasText(cfg.botId)) cfg.botId = s(cfg.botId);
+        if (hasText(cfg.chatId)) cfg.chatId = s(cfg.chatId);
+        if (hasText(cfg.routineChatId)) cfg.routineChatId = s(cfg.routineChatId);
+        if (hasText(cfg.taskId)) cfg.taskId = s(cfg.taskId);
+        return { ...node, config: cfg };
+      }),
+    }),
+    ...(meta ?? {}),
+  };
+}
+
+function scopeWorkflowRun(run, s, meta) {
+  if (!run || typeof run !== "object") return run;
+  return {
+    ...run,
+    id: s(run.id),
+    ...(hasText(run.workflowId) && { workflowId: s(run.workflowId) }),
+    ...(meta ?? {}),
+  };
+}
+
 /** Tags local entities with `hostId: "local"` and `hostName` without altering any IDs. */
 export function tagLocalSnapshot(snap, { hostName = "This computer", hostId = LOCAL_HOST_ID } = {}) {
   if (!snap || typeof snap !== "object") return snap;
@@ -79,6 +141,9 @@ export function tagLocalSnapshot(snap, { hostName = "This computer", hostId = LO
     runs: addTag(snap.runs ?? []),
     requests: addTag(snap.requests ?? []),
     tasks: addTag(snap.tasks ?? []),
+    ...(Array.isArray(snap.workflows) && { workflows: addTag(snap.workflows) }),
+    ...(Array.isArray(snap.workflowRuns) && { workflowRuns: addTag(snap.workflowRuns) }),
+    ...(Array.isArray(snap.channels) && { channels: addTag(snap.channels) }),
     projects: addTag(snap.projects ?? []),
     panels: addTag(snap.panels ?? []),
     board: addTag(snap.board ?? []),
@@ -138,6 +203,7 @@ export function scopeRemoteSnapshot(snap, { hostId, hostName, member = false, te
         ...msg,
         ...(hasText(msg?.botId) && { botId: s(msg.botId) }),
         ...(hasText(msg?.runId) && { runId: s(msg.runId) }),
+        ...(msg?.actionCard && { actionCard: scopeActionCard(msg.actionCard, s) }),
       })),
     }),
     ...meta,
@@ -168,6 +234,18 @@ export function scopeRemoteSnapshot(snap, { hostId, hostName, member = false, te
     ...(hasText(task.projectId) && { projectId: s(task.projectId) }),
     ...meta,
   }));
+
+  const workflows = Array.isArray(snap.workflows)
+    ? snap.workflows.map((wf) => scopeWorkflow(wf, s, meta))
+    : undefined;
+
+  const workflowRuns = Array.isArray(snap.workflowRuns)
+    ? snap.workflowRuns.map((run) => scopeWorkflowRun(run, s, meta))
+    : undefined;
+
+  const channels = Array.isArray(snap.channels)
+    ? snap.channels.map((conn) => scopeChannel(conn, s, meta))
+    : undefined;
 
   const projects = (Array.isArray(snap.projects) ? snap.projects : []).map((project) => ({
     ...project,
@@ -235,6 +313,9 @@ export function scopeRemoteSnapshot(snap, { hostId, hostName, member = false, te
     queued: mapKeys(snap.queued, s),
     ...(snap.steerable && { steerable: mapKeys(snap.steerable, s) }),
     tasks,
+    ...(workflows && { workflows }),
+    ...(workflowRuns && { workflowRuns }),
+    ...(channels && { channels }),
     projects,
     panels,
     board,
@@ -273,6 +354,9 @@ export function composeUnifiedDesktopState(localSnap, { localName = "This comput
   const queued = { ...(local.queued ?? {}) };
   const steerable = local.steerable ? { ...local.steerable } : {};
   const tasks = [...(local.tasks ?? [])];
+  let workflows = Array.isArray(local.workflows) ? [...local.workflows] : undefined;
+  let workflowRuns = Array.isArray(local.workflowRuns) ? [...local.workflowRuns] : undefined;
+  let channels = Array.isArray(local.channels) ? [...local.channels] : undefined;
   const projects = [...(local.projects ?? [])];
   const panels = [...(local.panels ?? [])];
   const board = [...(local.board ?? [])];
@@ -299,6 +383,15 @@ export function composeUnifiedDesktopState(localSnap, { localName = "This comput
     Object.assign(queued, remote.queued ?? {});
     if (remote.steerable) Object.assign(steerable, remote.steerable);
     tasks.push(...(remote.tasks ?? []));
+    if (Array.isArray(remote.workflows)) {
+      workflows = [...(workflows ?? []), ...remote.workflows];
+    }
+    if (Array.isArray(remote.workflowRuns)) {
+      workflowRuns = [...(workflowRuns ?? []), ...remote.workflowRuns];
+    }
+    if (Array.isArray(remote.channels)) {
+      channels = [...(channels ?? []), ...remote.channels];
+    }
     projects.push(...(remote.projects ?? []));
     panels.push(...(remote.panels ?? []));
     board.push(...(remote.board ?? []));
@@ -316,6 +409,9 @@ export function composeUnifiedDesktopState(localSnap, { localName = "This comput
   chats.sort((a, b) => (Number(b?.updated ?? b?.created ?? 0) - Number(a?.updated ?? a?.created ?? 0)));
   runs.sort((a, b) => (Number(b?.time ?? 0) - Number(a?.time ?? 0)));
   requests.sort((a, b) => (Number(a?.time ?? 0) - Number(b?.time ?? 0)));
+  if (workflowRuns) {
+    workflowRuns.sort((a, b) => Number(b?.startedAt ?? b?.createdAt ?? 0) - Number(a?.startedAt ?? a?.createdAt ?? 0));
+  }
 
   return {
     ...local,
@@ -333,6 +429,9 @@ export function composeUnifiedDesktopState(localSnap, { localName = "This comput
     queued,
     ...(Object.keys(steerable).length > 0 && { steerable }),
     tasks,
+    ...(workflows && { workflows }),
+    ...(workflowRuns && { workflowRuns }),
+    ...(channels && { channels }),
     projects,
     panels,
     board,
@@ -370,7 +469,7 @@ export function findHostInValue(value, depth = 0) {
   }
   if (typeof value === "object") {
     if (hasText(value.hostId) && value.hostId !== LOCAL_HOST_ID) return value.hostId;
-    for (const key of ["chatId", "botId", "id", "requestId", "spaceId", "projectId", "sectionId", "taskId", "routineId", "botIds"]) {
+    for (const key of ["chatId", "botId", "id", "requestId", "spaceId", "projectId", "sectionId", "taskId", "routineId", "botIds", "workflowId", "runId", "connectionId", "routineChatId", "nodes"]) {
       if (key in value) {
         const found = findHostInValue(value[key], depth + 1);
         if (found) return found;
@@ -426,6 +525,68 @@ export function rescopeResult(name, hostId, result) {
     };
   }
   if (name === "forkChat" && typeof result === "string") return s(result);
+  if (name === "chat.cardAction" && result && typeof result === "object") {
+    return {
+      ...result,
+      ...(hasText(result.chatId) && { chatId: s(result.chatId) }),
+      ...(hasText(result.botId) && { botId: s(result.botId) }),
+      ...(result.card && { card: scopeActionCard(result.card, s) }),
+    };
+  }
+  if (name === "channelsList" && Array.isArray(result)) {
+    return result.map((conn) => scopeChannel(conn, s, { hostId }));
+  }
+  if ((name === "channelAdd" || name === "channelUpdate" || name === "channelBind" || name === "channelSetPolicy" || name === "channelPause" || name === "channelResume") && result && typeof result === "object") {
+    return scopeChannel(result, s, { hostId });
+  }
+  if (name === "channelRemove" && result && typeof result === "object") {
+    return { ...result, ...(hasText(result.id) && { id: s(result.id) }) };
+  }
+  if (name === "channelPairList" && Array.isArray(result)) {
+    return result.map((p) => (p && typeof p === "object" ? { ...p, ...(hasText(p.connectionId) && { connectionId: s(p.connectionId) }), hostId } : p));
+  }
+  if ((name === "channelPairApprove" || name === "channelPairDeny") && result && typeof result === "object") {
+    return { ...result, ...(hasText(result.connectionId) && { connectionId: s(result.connectionId) }) };
+  }
+  if (name === "channelLogs" && Array.isArray(result)) {
+    return result.map((entry) =>
+      entry && typeof entry === "object"
+        ? {
+            ...entry,
+            ...(hasText(entry.connectionId) && { connectionId: s(entry.connectionId) }),
+            ...(hasText(entry.turnId) && { turnId: s(entry.turnId) }),
+            hostId,
+          }
+        : entry,
+    );
+  }
+  if (name === "workflowsList" && result && typeof result === "object") {
+    return {
+      ...result,
+      ...(Array.isArray(result.workflows) && { workflows: result.workflows.map((wf) => scopeWorkflow(wf, s, { hostId })) }),
+      ...(Array.isArray(result.runs) && { runs: result.runs.map((r) => scopeWorkflowRun(r, s, { hostId })) }),
+    };
+  }
+  if ((name === "workflowCreate" || name === "workflowUpdate" || name === "workflowPause" || name === "workflowResume") && result && typeof result === "object") {
+    return scopeWorkflow(result, s, { hostId });
+  }
+  if ((name === "workflowRun" || name === "workflowRetryRun" || name === "workflowRespondApproval" || name === "workflowCancelRun") && result && typeof result === "object") {
+    return scopeWorkflowRun(result, s, { hostId });
+  }
+  if (name === "workflowImportText" && result && typeof result === "object" && result.workflow) {
+    return { ...result, workflow: scopeWorkflow(result.workflow, s, { hostId }) };
+  }
+  if (name === "startProjectJob" && Array.isArray(result)) {
+    return result.map((id) => (typeof id === "string" ? s(id) : id));
+  }
+  if ((name === "claudeArtifacts.status" || name === "claudeArtifacts.setModel" || name === "claudeArtifacts.setBotApproval" || name === "claudeArtifacts.revokeBotApproval") && result && typeof result === "object") {
+    return {
+      ...result,
+      ...(Array.isArray(result.grants) && {
+        grants: result.grants.map((g) => (g && typeof g === "object" && hasText(g.botId) ? { ...g, botId: s(g.botId) } : g)),
+      }),
+    };
+  }
   if (name === "proactiveAct" && result && typeof result === "object" && hasText(result.chatId)) {
     return { ...result, chatId: s(result.chatId) };
   }
@@ -438,6 +599,7 @@ export function rescopeResult(name, hostId, result) {
           ...m,
           ...(hasText(m?.botId) && { botId: s(m.botId) }),
           ...(hasText(m?.runId) && { runId: s(m.runId) }),
+          ...(m?.actionCard && { actionCard: scopeActionCard(m.actionCard, s) }),
         })),
       }),
       ...(Array.isArray(result.runs) && {
@@ -627,6 +789,32 @@ const HOST_SCOPED_CALLS = new Set([
   "addProject",
   "spaces.create",
   "saveTask",
+  "channelsList",
+  "channelAdd",
+  "channelPairList",
+  "channelPairApprove",
+  "channelPairDeny",
+  "channelLogs",
+  "workflowsList",
+  "workflowCreate",
+  "workflowImportText",
+  "workflowGithubStatus",
+  "workflowGithubSignInStart",
+  "workflowGithubSignInCancel",
+  "claudeArtifacts.status",
+  "claudeArtifacts.setModel",
+  "market.catalog",
+  "market.skillImage",
+  "market.skillPreview",
+  "market.skillInstall",
+  "market.packPreview",
+  "market.packInstall",
+  "market.templatePreview",
+  "market.templateInstall",
+  "credentialGrants",
+  "revokeCredentialGrant",
+  "credentialAudit",
+  "setCredentialGrant",
 ]);
 
 /**
@@ -679,6 +867,41 @@ export function routeUnifiedCall(name, args = [], { settingsHost = LOCAL_HOST_ID
       kind: "fanout",
       calls: [...groups.entries()].map(([hostId, ids]) => ({ hostId, name, args: [ids] })),
     };
+  }
+
+  if (name === "channelBind" && args.length >= 2) {
+    const connHost = hostOfId(args[0]);
+    if (hasText(args[1]) && hostOfId(args[1]) !== connHost) {
+      throw new Error("A channel can only be bound to a bot on the same computer.");
+    }
+  }
+  if (name === "channelUpdate" && args[1] && typeof args[1] === "object" && hasText(args[1].botId)) {
+    const connHost = hostOfId(args[0]);
+    if (hostOfId(args[1].botId) !== connHost) {
+      throw new Error("A channel can only be bound to a bot on the same computer.");
+    }
+  }
+  if (name === "channelAdd" && args[0] && typeof args[0] === "object" && !Array.isArray(args[0])) {
+    const input = args[0];
+    const targetHost = hasText(input.hostId)
+      ? input.hostId
+      : hasText(input.botId)
+        ? hostOfId(input.botId)
+        : settingsHost || LOCAL_HOST_ID;
+    if (hasText(input.hostId) && hasText(input.botId) && hostOfId(input.botId) !== targetHost) {
+      throw new Error("A channel can only be bound to a bot on the same computer.");
+    }
+    const { hostId: _strip, ...rest } = input;
+    const nextArgs = [rest, ...args.slice(1)];
+    if (targetHost === LOCAL_HOST_ID) return { kind: "local", args: nextArgs };
+    return { kind: "remote", hostId: targetHost, name, args: unscopeValueForHost(nextArgs, targetHost) };
+  }
+  if (name === "channelsList" || (name === "channelPairList" && !hasText(args[0])) || (name === "channelLogs" && !hasText(args[0]))) {
+    // Host-scoped reads without a connection id go to settingsHost (never broadcast secrets).
+    if (hasText(settingsHost) && settingsHost !== LOCAL_HOST_ID) {
+      return { kind: "remote", hostId: settingsHost, name, args };
+    }
+    return { kind: "local", args };
   }
 
   // Explicit `hostId` on creation payloads (`addBot({ ..., hostId })`, `createProject({ ..., hostId })`, etc.).

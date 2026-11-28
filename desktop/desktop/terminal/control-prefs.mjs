@@ -15,6 +15,7 @@ import { HARNESSES } from "../harness/index.mjs";
 import { AUTO_SUMMARIZE_MAX, AUTO_SUMMARIZE_MIN } from "../summaries.mjs";
 import { MAC_LEVELS, MAC_TOOLS } from "../mactools.mjs";
 import { defaultProactive } from "../proactive-settings.mjs";
+import { TASK_LIMITS, taskLimits } from "../task-limits.mjs";
 import { usageCsv } from "../usage.mjs";
 import { ControlError } from "./socket.mjs";
 
@@ -32,7 +33,8 @@ const choice = (values, about) => ({ type: "choice", values, about });
 /**
  * Every preference that `setPreferences` takes, by the name the command line uses (a dot goes one
  * level down). `type` says what a value is: "boolean" (on or off), "choice" (one of `values`),
- * "list" (some of `values`, or none), "color", "clock" (HH:MM), "turns" (off, or 5 to 30) or "text" (up to `max` characters).
+ * "list" (some of `values`, or none), "color", "clock" (HH:MM), "turns" (off, or 5 to 30), "count" (a whole number from `min`
+ * to `max`, or "default" to clear it) or "text" (up to `max` characters).
  * "macTools" is not here: the app changes it only through its own call (`macTools.set`).
  */
 export const PREFERENCES = {
@@ -48,9 +50,13 @@ export const PREFERENCES = {
   onboarded: switches("The welcome is done"),
   linkPreviews: switches("Show a preview of a linked page (this computer fetches the page)"),
   readAloud: switches("Read replies aloud"),
+  showRoutineChats: switches("Show routine-owned chats in the chat list"),
   teamwork: switches("Bots may ask each other for help from a chat"),
   longPromptCache: switches("Keep a chat's prompt cache for about an hour where the provider supports it"),
   autoSummarize: { type: "turns", about: "Turns between a chat's summaries into a new title, on the Default routines model: off, or 5 to 30" },
+  tasksMax: { type: "count", min: TASK_LIMITS.tasksMax.min, max: TASK_LIMITS.tasksMax.max, about: "Task Board tasks that run at once on this computer (default: $BOTKINS_TASKS_MAX, else " + TASK_LIMITS.tasksMax.fallback + ")" },
+  tasksPerBot: { type: "count", min: TASK_LIMITS.tasksPerBot.min, max: TASK_LIMITS.tasksPerBot.max, about: "Task Board tasks that one bot runs at once, each in its own chat (default: $BOTKINS_TASKS_PER_BOT, else " + TASK_LIMITS.tasksPerBot.fallback + ")" },
+  tasksCreatorReviewExisting: switches("Hand existing bot-created tasks currently in Review to their creator bot"),
   approval: choice(["ask", "read", "assisted", "all"], "How tool requests are approved: ask for each, read-only tools without asking, the provider decides, or all without asking"),
   clarify: { type: "list", values: Object.keys(clarificationPrompts), about: "When a bot asks a clarifying question: any of " + Object.keys(clarificationPrompts).join(", ") + ", or none" },
   clarificationInstructions: { type: "text", max: 4000, about: "Your own words for when a bot asks a clarifying question" },
@@ -106,6 +112,9 @@ function wholeSettings(settings = {}) {
     background: backgroundField(settings.background),
     sidebar: sidebarField(settings.sidebar),
     proactive: { ...defaultProactive, ...settings.proactive },
+    // The limits in force: the person's setting, else the environment's, else the default.
+    tasksMax: taskLimits(settings).tasksMax,
+    tasksPerBot: taskLimits(settings).tasksPerBot,
   };
 }
 const lookup = (settings, key) => key.split(".").reduce((value, part) => value?.[part], settings);
@@ -157,6 +166,13 @@ function parsePreference(key, spec, value) {
       const turns = OFF.includes(word) ? 0 : typeof word === "number" ? word : /^\d{1,2}$/.test(word) ? Number(word) : NaN;
       if (turns !== 0 && !(Number.isInteger(turns) && turns >= AUTO_SUMMARIZE_MIN && turns <= AUTO_SUMMARIZE_MAX)) throw refuse("off, or a number of turns from " + AUTO_SUMMARIZE_MIN + " to " + AUTO_SUMMARIZE_MAX);
       return turns;
+    }
+    case "count": {
+      // "default" clears the person's setting: the limit is then the environment's, else the built-in one.
+      if (value === null || (typeof value === "string" && value.trim().toLowerCase() === "default")) return null;
+      const n = typeof value === "number" ? value : typeof value === "string" && /^\d{1,3}$/.test(value.trim()) ? Number(value.trim()) : NaN;
+      if (!Number.isInteger(n) || n < spec.min || n > spec.max) throw refuse("a number from " + spec.min + " to " + spec.max + ", or default");
+      return n;
     }
     case "text":
       if (typeof value !== "string" || value.length > spec.max) throw refuse("text of up to " + spec.max + " characters");

@@ -27,11 +27,39 @@ export function findMainChat(chats, botId, person) {
 
 // These belong to the conversation the bot is continuing. The address, recipient,
 // model choice, chat flags, schedules and work history remain attached to the chat.
-const forkFields = ["messages", "sessionId", "sessionProvider", "sessionFolder", "established", "forkContext", "restartSession",
+const forkFields = ["messages", "sessionId", "sessionProvider", "sessionFolder", "sessions", "established", "forkContext", "restartSession",
   "context", "compacted", "posted", "helpers", "todos", "planApplied", "planModel"];
+
+/** What a Main chat shows where its context was cleared. */
+export const CONTEXT_CLEARED = "Context cleared. The bot starts fresh from here; the messages above stay for you.";
+
+/**
+ * Clears what the bot carries into its next turn and keeps the conversation on screen, in the same
+ * chat: the next turn opens a new provider session that starts after this point (mainTranscript reads
+ * from `compacted.through`). A Main chat never looks new because of it.
+ */
+function clearMainContext(chat) {
+  if (chat.messages.length) chat.messages.push({ role: "command", plain: true, time: Date.now(), text: CONTEXT_CLEARED });
+  chat.compacted = { text: "", through: chat.messages.length };
+  chat.restartSession = true;
+  for (const key of ["forkContext", "context", "posted", "todos", "planApplied", "planModel"]) delete chat[key];
+  chat.time = Date.now();
+}
+
+/**
+ * Archiving or deleting is the only way a person's Main chat changes. An archived one becomes an
+ * ordinary chat with its messages, so it can never compete with the Main chat made next.
+ */
+export function retireMainChat(chat) {
+  delete chat.main;
+  delete chat.activeFork;
+  delete chat.forks;
+  if (!chat.titleSet) chat.title = "Earlier Main chat";
+}
 
 export function changeMainContext(chat, action, value, transcript) {
   if (!chat.main) throw new Error("Choose a Main chat.");
+  if (action === "reset") return clearMainContext(chat);
   let id, next;
   if (action === "switch") {
     if (!chat.forks.some(fork => fork.id === value)) throw new Error("Choose a fork of this Main chat.");
@@ -40,14 +68,14 @@ export function changeMainContext(chat, action, value, transcript) {
     next = chat.savedForks?.[id];
     if (!next) throw new Error("This fork is no longer available.");
   } else {
-    if (action !== "reset" && action !== "fork") throw new Error("Choose reset, fork or switch.");
-    if (action === "fork" && (!Number.isInteger(value) || value < 0 || value >= chat.messages.length)) throw new Error("Choose a message to fork from.");
+    if (action !== "fork") throw new Error("Choose reset, fork or switch.");
+    if (!Number.isInteger(value) || value < 0 || value >= chat.messages.length) throw new Error("Choose a message to fork from.");
     id = randomUUID();
-    const messages = action === "reset" ? [] : structuredClone(chat.messages.slice(0, value + 1));
+    const messages = structuredClone(chat.messages.slice(0, value + 1));
     next = { sessionId: id, established: false, messages };
     if (chat.compacted && messages.length >= chat.compacted.through) next.compacted = chat.compacted;
     if (messages.length && transcript) next.forkContext = transcript(messages);
-    chat.forks.push({ id, name: (action === "reset" ? "Reset " : "Fork ") + (chat.forks.length + 1) });
+    chat.forks.push({ id, name: "Fork " + (chat.forks.length + 1) });
   }
   const held = {};
   for (const key of forkFields) {
@@ -61,8 +89,14 @@ export function changeMainContext(chat, action, value, transcript) {
 
 /** Inactive transcripts stay in the workspace file. Clients get the fork picker and the active conversation. */
 export function visibleChat(chat) {
-  if (!chat.main || !(chat.savedForks || chat.compacted || chat.forkContext)) return chat;
-  const { savedForks, compacted, forkContext, ...active } = chat;
+  if (!chat.main && !chat.sessions && !chat.savedForks) return chat;
+  if (!chat.main) {
+    // An earlier Main chat keeps its other forks' transcripts for its sessions' cleanup only.
+    const { sessions: _sessions, savedForks: _forks, ...active } = chat;
+    return active;
+  }
+  if (!(chat.savedForks || chat.compacted || chat.forkContext || chat.sessions)) return chat;
+  const { savedForks, compacted, forkContext, sessions, ...active } = chat;
   return active;
 }
 

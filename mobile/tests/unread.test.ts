@@ -35,29 +35,30 @@ const PARITY_CHATS: ChatSummary[] = [
   chat("c_other", { botId: "milo", title: "Milo", time: 1500, unread: true }),
 ];
 
-test("shared parity fixture: group and routine chats light Pip's dot and clear together; panel and archived stay excluded", () => {
+test("shared parity fixture: group chats light Pip's dot; routine, panel, and archived chats stay excluded", () => {
   assert.deepEqual([...unreadBotIds(PARITY_CHATS)].sort(), ["milo", "pip"]);
   assert.deepEqual(
     botUnreadChats(PARITY_CHATS, "pip").map((c) => c.id),
-    ["c_group", "c_routine"],
+    ["c_group"],
   );
   assert.deepEqual(
     allUnreadChats(PARITY_CHATS).map((c) => c.id),
-    ["c_group", "c_routine", "c_other"],
+    ["c_group", "c_other"],
   );
   assert.equal(isUnreadChat(PARITY_CHATS[1]), true);
-  assert.equal(isUnreadChat(PARITY_CHATS[2]), true);
+  assert.equal(isUnreadChat(PARITY_CHATS[2]), false);
   assert.equal(isUnreadChat(PARITY_CHATS[3]), false);
   assert.equal(isUnreadChat(PARITY_CHATS[4]), false);
 
-  // Chats page predicate matches desktop's Chats page: lists, counts, and clears unread panel and routine chats; excludes archived.
+  // Chats page predicate matches desktop's Chats page: lists, counts, and clears unread panel chats; excludes routine and archived chats.
   const chatsPageUnread = chatsPageUnreadChats(PARITY_CHATS).map((c) => c.id);
-  assert.deepEqual(chatsPageUnread, ["c_group", "c_routine", "c_panel", "c_other"]);
-  const listed = new Set(PARITY_CHATS.filter(isChatsPageChat).map((c) => c.id));
+  assert.deepEqual(chatsPageUnread, ["c_group", "c_panel", "c_other"]);
+  const listed = new Set(PARITY_CHATS.filter((c) => isChatsPageChat(c)).map((c) => c.id));
   for (const id of chatsPageUnread) assert.equal(listed.has(id), true, `Chats page lists ${id}`);
+  assert.equal(listed.has("c_routine"), false, "routine chat is hidden by default");
   assert.equal(listed.has("c_archived"), false);
   assert.equal(isChatsPageUnread(PARITY_CHATS[3]), true, "unread panel chat is included on Chats page");
-  assert.equal(isChatsPageUnread(PARITY_CHATS[2]), true, "unread routine chat is included on Chats page");
+  assert.equal(isChatsPageUnread(PARITY_CHATS[2]), false, "routine chat never counts as unread on Chats page");
   assert.equal(isChatsPageUnread(PARITY_CHATS[4]), false, "archived chat is excluded on Chats page");
 });
 

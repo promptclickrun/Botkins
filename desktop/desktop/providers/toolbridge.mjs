@@ -10,6 +10,13 @@ import { createServer } from "node:http";
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const MAX_BODY = 8_000_000;
 
+/** What a backend lists: each tool's name, description and schema. */
+const signature = (tools) => JSON.stringify([...tools.values()].map((tool) => [tool.name, tool.description ?? "", tool.parameters ?? null]));
+/** Tells the backends listening on an address that its tools changed. */
+function notify(endpoint) {
+  const event = "event: message\ndata: " + JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }) + "\n\n";
+  for (const stream of endpoint.streams) stream.write(event);
+}
 /** A tool's result as MCP content. Handlers return text (usually JSON) or throw. */
 function content(value) {
   const text = typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
@@ -61,19 +68,30 @@ export class ToolBridge {
    *
    * With `key`, the address belongs to that conversation and stays the same each time it is
    * opened: a backend that keeps a conversation loaded goes on using the address it was first
-   * given. Closing it then only takes the tools away; `forget(key)` removes the address.
+   * given. Closing it keeps the tools listed but refuses their calls until the next turn's `set`;
+   * `forget(key)` removes the address. A change to the list is pushed on the address's event stream.
+   *
+   * A transport adapter can supply `dispatch(method, params)` for tools/list and tools/call
+   * instead of local definitions. The adapter must authorize each upstream invocation.
    */
-  async open(tools = [], { key } = {}) {
+  async open(tools = [], { key, dispatch } = {}) {
     const port = await this.start();
     let id = key && this.kept.get(key);
     let endpoint = id && this.endpoints.get(id);
     if (!endpoint) {
       id = randomBytes(12).toString("hex");
-      endpoint = { secret: Buffer.from(randomBytes(24).toString("base64url")), tools: new Map() };
+      endpoint = { secret: Buffer.from(randomBytes(24).toString("base64url")), tools: new Map(), streams: new Set(), idle: false, dispatch };
       this.endpoints.set(id, endpoint);
       if (key) this.kept.set(key, id);
     }
-    const set = (list) => (endpoint.tools = new Map((list ?? []).map((tool) => [tool.name, tool])));
+    const set = (list) => {
+      const next = new Map((list ?? []).map((tool) => [tool.name, tool]));
+      const changed = signature(next) !== signature(endpoint.tools);
+      endpoint.tools = next;
+      endpoint.idle = false;
+      // A backend that keeps its connection (Pi, OMP) lists the tools once; it is told when they change.
+      if (changed) notify(endpoint);
+    };
     set(tools);
     const authorization = "Bearer " + endpoint.secret.toString();
     return {
@@ -81,15 +99,22 @@ export class ToolBridge {
       authorization,
       headers: { Authorization: authorization },
       set,
-      close: () => void (key ? set([]) : this.endpoints.delete(id)),
+      // A kept address keeps listing its tools between turns, so a backend that connects late (a chat warmed
+      // ahead of its message) never caches an empty list; a call then says no turn is running.
+      close: () => void (key ? (endpoint.idle = true) : this.drop(id)),
     };
+  }
+  drop(id) {
+    const endpoint = this.endpoints.get(id);
+    for (const stream of endpoint?.streams ?? []) stream.end();
+    this.endpoints.delete(id);
   }
   /** Removes a conversation's kept address, when the conversation is deleted or let go. */
   forget(key) {
     const id = this.kept.get(key);
     if (!id) return;
     this.kept.delete(key);
-    this.endpoints.delete(id);
+    this.drop(id);
   }
   endpointFor(request) {
     const id = /^\/mcp\/([0-9a-f]{24})\/?$/.exec(new URL(request.url, "http://127.0.0.1").pathname)?.[1];
@@ -111,7 +136,15 @@ export class ToolBridge {
       const endpoint = this.endpointFor(request);
       if (!endpoint) return send(401, { error: "Unauthorized" });
       if (request.method === "DELETE") return send(200, {});
-      // This server only answers requests; it has nothing to push, so it offers no event stream.
+      // The event stream: the only thing it carries is that the tools changed (notifications/tools/list_changed).
+      if (request.method === "GET") {
+        if (!/text\/event-stream/.test(request.headers.accept ?? "")) return send(405, { error: "Method not allowed" });
+        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+        response.write(": open\n\n");
+        endpoint.streams.add(response);
+        response.on("close", () => endpoint.streams.delete(response));
+        return;
+      }
       if (request.method !== "POST") return send(405, { error: "Method not allowed" });
       // Decoded as one stream, so a character split across two chunks arrives whole.
       request.setEncoding("utf8");
@@ -141,11 +174,18 @@ export class ToolBridge {
     const { id, method, params } = message;
     if (id === undefined || id === null) return null;
     const ok = (result) => ({ jsonrpc: "2.0", id, result });
+    if (endpoint.dispatch && (method === "tools/list" || method === "tools/call")) {
+      try {
+        return ok(await endpoint.dispatch(method, params));
+      } catch (error) {
+        return { jsonrpc: "2.0", id, error: { code: -32603, message: error.message } };
+      }
+    }
     switch (method) {
       case "initialize":
         return ok({
           protocolVersion: PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: true } },
           serverInfo: this.info,
         });
       case "ping":
@@ -160,8 +200,9 @@ export class ToolBridge {
         });
       case "tools/call": {
         const tool = endpoint.tools.get(params?.name);
-        // A tool that is gone (its turn ended) fails as a tool error, so the model reads why.
+        // A tool that is gone, or called between turns, fails as a tool error, so the model reads why.
         if (!tool) return ok({ content: content("This tool is not available right now."), isError: true });
+        if (endpoint.idle) return ok({ content: content("No turn is running in this chat right now. Try again in a moment."), isError: true });
         try {
           return ok({ content: content(await tool.handler(params.arguments ?? {})) });
         } catch (error) {

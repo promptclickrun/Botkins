@@ -10,7 +10,8 @@
 // (src/state/device.ts) and sends answers given on a card or a notification (src/state/answers.ts).
 import * as Application from "expo-application";
 import { type Href, router } from "expo-router";
-import { spaceRoute } from "@/features/spaces/logic";
+import { createResponseDeduper } from "@/features/chat/chatNavigation";
+import { openChat } from "@/features/chat/navigate";
 import { keep, readKept } from "@/state/keep";
 import { AppState, Platform } from "react-native";
 import { create } from "zustand";
@@ -24,7 +25,8 @@ import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, attempt, callHost, chatOnScreen, isUnifiedActive, onChatOnScreen, pooledEntries, restIfAway, switchComputer, syncForPush, tellOthers } from "./link";
+import { api, attempt, callHost, chatOnScreen, holdBackgroundLink, isUnifiedActive, onChatOnScreen, pooledEntries, restIfAway, switchComputer, syncForPush, tellOthers, wakeForNotification } from "./link";
+import { routeForNotification } from "./pushRouting";
 import { hostOfId, idForHost, unscopeId } from "./unified";
 import { useApp } from "./store";
 import { createRegistrar } from "./pushRegistrar";
@@ -279,8 +281,7 @@ function alertOf(response: import("expo-notifications").NotificationResponse): {
 function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
   const send = async () => {
     const answer = await attempt(api.proactiveAct(alert.bot, alert.run, "take"));
-    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId && chatOnScreen() !== answer.chatId)
-      router.push({ pathname: "/chat/[id]", params: { id: answer.chatId } });
+    if (answer?.chatId && serverId === useApp.getState().pairing?.serverId) openChat(answer.chatId);
   };
   const ready = (state: ReturnType<typeof useApp.getState>) => state.link === "online" && state.pairing?.serverId === serverId;
   if (ready(useApp.getState())) return void send();
@@ -292,58 +293,66 @@ function takeAlert(alert: { bot: string; run: string }, serverId?: string) {
     void send();
   });
 }
+function requestIdOf(response: import("expo-notifications").NotificationResponse): string | undefined {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const id = payload?.requestId ?? (request.content.data as Record<string, unknown> | undefined)?.requestId;
+  return typeof id === "string" && id ? id : undefined;
+}
+function nodeJobOf(response: import("expo-notifications").NotificationResponse): boolean {
+  const request = response.notification.request;
+  const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
+  const data = request.content.data as Record<string, unknown> | undefined;
+  return payload?.nodeJob === true || data?.nodeJob === true;
+}
 /** A notification's actions that answer a bot where they are (the native side queues them; src/state/answers.ts sends them). */
 const ANSWERED_THERE = /^(approve|remember|deny|reply|choice\.\d)$/;
+const handledResponses = createResponseDeduper();
 function openFrom(response: import("expo-notifications").NotificationResponse | null) {
-  if (!response || !native) return;
+  if (!response || !native || !handledResponses.claim(response)) return;
+  wakeForNotification();
   const chatId = chatOf(response);
+  const requestId = requestIdOf(response);
   const host = hostOf(response);
   const kind = kindOf(response);
+  const nodeJob = nodeJobOf(response);
   native.Notifications.clearLastNotificationResponse();
   if (ANSWERED_THERE.test(response.actionIdentifier)) return;
-  // "Allow once" on a risky approval opens the app: it asks for Face ID before it answers.
-  if (response.actionIdentifier === "approve.risky") {
-    const request = (response.notification.request.content.data as Record<string, unknown> | undefined)?.requestId;
-    if (typeof request === "string" && chatId) router.push({ pathname: "/open/answer", params: { request, chat: chatId, ...(host && { host }) } });
-    return;
-  }
   const about = spaceOf(response);
-  if (!chatId && kind !== "team" && kind !== "update" && kind !== "space") return;
-  // The app may still be starting: the chat opens once the pairing is read. An alert from another
+  // The app may still be starting: the target opens once the pairing is read. An alert from another
   // paired computer makes the phone use that computer first.
   const go = () => {
     const state = useApp.getState();
     const primaryId = state.pairing?.serverId ?? null;
     const inUnifiedPool = !!state.unified && !!host && state.unifiedHosts.some((h) => h.id === host && h.included);
-    const other = !inUnifiedPool && !!host && host !== primaryId && state.pairings.some((pairing) => pairing.serverId === host);
-    if (other) void switchComputer(host);
-    const scope = (raw: string) => (inUnifiedPool && host ? idForHost(host, raw, primaryId) : raw);
-    if (kind === "team") {
-      router.push({ pathname: "/settings/team", params: { section: "requests" } });
-      return;
+    const scope = (raw: string | undefined) => (raw && inUnifiedPool && host ? idForHost(host, raw, primaryId) : raw);
+    const decision = routeForNotification({
+      chatId: scope(chatId),
+      requestId: scope(requestId),
+      host,
+      kind,
+      nodeJob,
+      actionIdentifier: response.actionIdentifier,
+      spaceId: scope(about.spaceId),
+      panelId: scope(about.panelId),
+      activeHostId: inUnifiedPool && host ? host : state.pairing?.serverId,
+      pairedHostIds: state.pairings.map((pairing) => pairing.serverId),
+      chatOnScreen: chatOnScreen(),
+    });
+    if (decision.switchHost) void switchComputer(decision.switchHost);
+    if (response.actionIdentifier === "alert.take" && chatId) {
+      const offered = alertOf(response);
+      if (offered) {
+        takeAlert(
+          inUnifiedPool && host ? { bot: idForHost(host, offered.bot, primaryId), run: idForHost(host, offered.run, primaryId) } : offered,
+          inUnifiedPool ? primaryId ?? undefined : decision.switchHost ?? state.pairing?.serverId,
+        );
+      }
     }
-    // "A newer Botkins is out" ("app-update-v1"): the computer's page, where it is installed.
-    if (kind === "update") {
-      router.push("/settings/desktop");
-      return;
-    }
-    // A note or a change in a space: the panel it is about, else the space, else (several spaces changed) the list.
-    if (kind === "space") {
-      router.push(spaceRoute(about.spaceId ? scope(about.spaceId) : undefined, about.panelId ? scope(about.panelId) : undefined) as unknown as Href);
-      return;
-    }
-    if (!chatId) return;
-    const targetChatId = scope(chatId);
-    // The button on a proactive alert: the bot starts on what it offered, in the chat that opens.
-    const offered = response.actionIdentifier === "alert.take" ? alertOf(response) : undefined;
-    if (offered) {
-      takeAlert(
-        inUnifiedPool && host ? { bot: scope(offered.bot), run: scope(offered.run) } : offered,
-        inUnifiedPool ? primaryId ?? undefined : other ? host : primaryId ?? undefined,
-      );
-    }
-    if (chatOnScreen() === targetChatId) return;
-    router.push({ pathname: "/chat/[id]", params: { id: targetChatId } });
+    const { route } = decision;
+    if (!route) return;
+    if (typeof route === "object" && route.pathname === "/chat/[id]") openChat(route.params.id);
+    else router.push(route as unknown as Href);
   };
   if (useApp.getState().booted && useApp.getState().pairing) go();
   else {
@@ -602,6 +611,7 @@ if (native) {
     native.TaskManager.defineTask(TASK, async () => {
       // Woken in the background, the link is at rest (or the app was just started): follow until one
       // sync has come back, so what follows reads the computer's state now, not what was held before.
+      const releaseHold = holdBackgroundLink("push");
       try {
         await syncForPush(20_000);
         // The same wake brings a chat's card up to date (a turn ended while the app was closed) and
@@ -611,6 +621,7 @@ if (native) {
         const answered = await answerPendingAsks().catch(() => 0);
         return answered > 0 ? native.Notifications.BackgroundNotificationTaskResult.NewData : native.Notifications.BackgroundNotificationTaskResult.NoData;
       } finally {
+        releaseHold();
         // Back to rest: a phone in the background does no work for the link.
         restIfAway();
       }

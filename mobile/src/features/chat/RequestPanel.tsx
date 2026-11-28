@@ -99,7 +99,7 @@ function Detail({ request }: { request: AgentRequest }) {
 
 function Permission({ request, danger, room }: { request: AgentRequest; danger: boolean; room: number }) {
   const { busy, respond } = useRespond(request);
-  const words = wordsFor("permission", request.dispatch);
+  const words = wordsFor("permission", request.dispatch, request.artifactGrant, request.botName, request.credentialGrant);
   const approve = () => void respond({ action: "approve" }, "approve");
   const always = () => void respond({ action: "remember" }, "remember");
   return (
@@ -117,6 +117,9 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
           />
           {request.dispatch && (
             <Button title="Allow for today" variant="secondary" wide loading={busy === "today"} disabled={!!busy} onPress={() => void respond({ action: "today" }, "today")} />
+          )}
+          {request.credentialGrant && (
+            <Button title="Always deny" variant="secondary" wide loading={busy === "deny_always"} disabled={!!busy} onPress={() => void respond({ action: "deny_always" }, "deny_always")} />
           )}
           {(request.dispatch || !!request.remember) && !!words.remember && (
             <Button
@@ -142,12 +145,21 @@ function Permission({ request, danger, room }: { request: AgentRequest; danger: 
       }
     >
       <Head request={request} />
-      {!!request.preview && <Code danger={danger}>{shownText(request.preview, { lines: true })}</Code>}
+      {request.credentialGrant && (
+        <View style={{ gap: 4 }}>
+          {!!request.credentialName && <T variant="footnote" color="muted">{"Credential: " + shownText(request.credentialName)}</T>}
+          {!!request.credentialSource && <T variant="footnote" color="muted">{"Source vault: " + shownText(request.credentialSource)}</T>}
+          {!!request.destination && <T variant="footnote" color="muted">{"Pinned destination: " + shownText(request.destination)}</T>}
+          {!!request.operation && <T variant="footnote" color="muted">{"Operation: " + shownText(request.operation)}</T>}
+          <T variant="footnote" color="muted">Destination is pinned; the value never enters the chat.</T>
+        </View>
+      )}
+      {!!request.preview && !request.credentialGrant && <Code danger={danger}>{shownText(request.preview, { lines: true })}</Code>}
       <Detail request={request} />
       {!!request.url && <LinkLine url={request.url} />}
       {!!request.remember && !request.dispatch && (
         <T variant="footnote" color="muted">
-          {rememberNote(request.remember)}
+          {rememberNote(request.remember, request.artifactGrant, request.botName)}
         </T>
       )}
     </Frame>

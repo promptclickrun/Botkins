@@ -431,9 +431,22 @@ button.lg-button.to-latest.shown:active {
   transition: opacity 220ms ease;
 }
 
-/* Mesh backdrop: vibrant blurred radial blobs + subtle -35deg diagonal sheen */
+/* Mesh backdrop: Hazeglow grainy mesh (with CSS radial-blob fallback when WebGL2 is unavailable) */
 .backdrop-mesh {
   background: var(--canvas);
+  --bd-mesh-red-mix: 55%;
+  --bd-mesh-blue-mix: 48%;
+  --bd-mesh-green-mix: 55%;
+  --bd-mesh-red: color-mix(in srgb, #ff3b30 var(--bd-mesh-red-mix), var(--canvas));
+  --bd-mesh-blue: color-mix(in srgb, #007aff var(--bd-mesh-blue-mix), var(--canvas));
+  --bd-mesh-green: color-mix(in srgb, #34c759 var(--bd-mesh-green-mix), var(--canvas));
+  --bd-mesh-mid: color-mix(in srgb, var(--canvas) 92%, #808080);
+}
+
+:root[data-mode="dark"] .backdrop-mesh {
+  --bd-mesh-red-mix: 68%;
+  --bd-mesh-blue-mix: 60%;
+  --bd-mesh-green-mix: 68%;
 }
 
 .backdrop-mesh .bd-blob {
@@ -470,25 +483,6 @@ button.lg-button.to-latest.shown:active {
   bottom: -10%;
   left: 14%;
   background: radial-gradient(circle, #34c759 0%, rgba(52, 199, 89, 0.52) 55%, transparent 78%);
-}
-
-.backdrop-mesh .bd-sheen {
-  position: absolute;
-  inset: 0;
-  /* A faint sheen with soft edges: narrow bands, so it never reads as a pattern over the color. */
-  background-image: repeating-linear-gradient(
-    -35deg,
-    rgba(255, 255, 255, 0.05) 0 10px,
-    transparent 14px 36px
-  );
-}
-
-:root[data-mode="light"] .backdrop-mesh .bd-sheen {
-  background-image: repeating-linear-gradient(
-    -35deg,
-    rgba(255, 255, 255, 0.12) 0 10px,
-    transparent 14px 36px
-  );
 }
 
 /* Botkins backdrop: ambient indigo, pink, and teal radial orbs */
@@ -573,9 +567,9 @@ button.lg-button.to-latest.shown:active {
 }
 
 :root[data-backdrop]:not([data-backdrop="clean"]) .chathead {
-  background: color-mix(in srgb, var(--canvas) 44%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
-  backdrop-filter: blur(18px) saturate(1.35);
+  background: var(--canvas);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 :root[data-backdrop]:not([data-backdrop="clean"]) :is(
@@ -680,40 +674,39 @@ button.lg-button.to-latest.shown:active {
 }
 
 .backdrop-preview-mesh .bp-mesh-red {
-  width: 56%;
-  height: 75%;
-  top: -15%;
-  left: -10%;
-  background: #ff3b30;
-  opacity: 0.78;
-}
-
-.backdrop-preview-mesh .bp-mesh-blue {
-  width: 62%;
-  height: 82%;
-  top: 10%;
-  right: -12%;
-  background: #007aff;
-  opacity: 0.78;
-}
-
-.backdrop-preview-mesh .bp-mesh-green {
-  width: 54%;
-  height: 70%;
-  bottom: -20%;
-  left: 16%;
-  background: #34c759;
+  width: 60%;
+  height: 78%;
+  top: -18%;
+  left: -12%;
+  background: radial-gradient(circle, #ff3b30 0%, transparent 72%);
   opacity: 0.72;
 }
 
-.backdrop-preview-mesh .bp-sheen {
+.backdrop-preview-mesh .bp-mesh-blue {
+  width: 64%;
+  height: 82%;
+  top: 10%;
+  right: -14%;
+  background: radial-gradient(circle, #007aff 0%, transparent 72%);
+  opacity: 0.62;
+}
+
+.backdrop-preview-mesh .bp-mesh-green {
+  width: 58%;
+  height: 74%;
+  bottom: -22%;
+  left: 14%;
+  background: radial-gradient(circle, #34c759 0%, transparent 72%);
+  opacity: 0.68;
+}
+
+.backdrop-preview-mesh .bp-grain {
   position: absolute;
   inset: 0;
-  background-image: repeating-linear-gradient(
-    -35deg,
-    rgba(255, 255, 255, 0.08) 0 3px,
-    transparent 5px 12px
-  );
+  opacity: 0.24;
+  mix-blend-mode: overlay;
+  background-size: 96px 96px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 .backdrop-preview-botkins .bp-botkins-indigo {

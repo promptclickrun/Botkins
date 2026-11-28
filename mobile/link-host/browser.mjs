@@ -188,6 +188,16 @@ export const BROWSER_TOOLS = [
 ];
 
 const BY_NAME = new Map(BROWSER_TOOLS.map((tool) => [tool.name, tool]));
+const SAFE_SECURE_CODES = new Set(["origin_mismatch", "password_type_mismatch", "type_mismatch"]);
+const SAFE_SUBMIT_REFUSALS = new Set(["cross_site_action", "origin_changed"]);
+
+function zeroSecureFields(fields) {
+  if (!Array.isArray(fields)) return;
+  for (const field of fields) {
+    if (field && typeof field === "object") field.value = "";
+  }
+  fields.length = 0;
+}
 
 const cleanLine = (value, max = 80) => (typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, max) : "");
 
@@ -292,6 +302,21 @@ export class BrowserTools {
     return view;
   }
 
+  /** Lists paired browser extensions with live connection and control state. */
+  listDevices() {
+    return this.devices().map((device) => ({
+      id: device.id,
+      name: device.name,
+      platform: device.platform,
+      connected: this.isLive(device.id),
+      enabled: device.browser ? device.browser.enabled !== false : true,
+      mode: device.browser?.mode ?? "all",
+      ...(device.browser?.browser && { browser: device.browser.browser }),
+      ...(device.browser?.profile && { profile: device.browser.profile }),
+      lastSeenAt: device.lastSeenAt,
+    }));
+  }
+
   /** Resolves a target browser by id or name (or picks the most recently active enabled browser). */
   pickDevice(selector) {
     const enabled = this.enabledDevices();
@@ -311,6 +336,88 @@ export class BrowserTools {
     throw new Error(`Could not match browser "${query}". Connected browsers: ${available}.`);
   }
 
+  /**
+   * Sends a dedicated internal `secure.fill` ask to a connected enabled browser extension.
+   * Never exposed as a bot-callable browser tool; zeroes field values and clears cached asks on completion.
+   */
+  secureFill(deviceId, payload = {}, { signal } = {}) {
+    const device = this.enabledDevices().find((d) => d.id === String(deviceId || ""));
+    if (!device || !this.isLive(device.id)) {
+      return Promise.reject(new Error("The approved browser extension is no longer connected or enabled."));
+    }
+    if (this.pending.size >= MAX_ASKS) {
+      return Promise.reject(new Error("Too many browser tool calls are waiting. Try again in a moment."));
+    }
+    if (signal?.aborted) return Promise.reject(new Error("Stopped."));
+
+    const tabId = Number(payload?.tabId);
+    const origin = String(payload?.origin || "").trim();
+    const rawFields = Array.isArray(payload?.fields) ? payload.fields : [];
+    if (!Number.isInteger(tabId) || tabId < 0 || !origin || rawFields.length === 0) {
+      return Promise.reject(new Error("Invalid secure fill payload."));
+    }
+    const allowedKeys = new Set();
+    const fields = [];
+    for (const item of rawFields) {
+      const key = String(item?.key || "").trim();
+      const kind = ["text", "password", "code", "secret"].includes(item?.kind) ? item.kind : "text";
+      const value = typeof item?.value === "string" ? item.value : "";
+      if (!key || !value) {
+        zeroSecureFields(fields);
+        return Promise.reject(new Error("Invalid secure fill field."));
+      }
+      allowedKeys.add(key);
+      fields.push({ key, kind, value });
+    }
+
+    const id = randomBytes(9).toString("base64url");
+    const ask = {
+      id,
+      deviceId: device.id,
+      tool: "secure.fill",
+      args: {
+        tabId,
+        origin,
+        fields,
+        submit: Boolean(payload?.submit),
+        ...(payload?.allowLocalHttp === true && { allowLocalHttp: true }),
+      },
+      at: this.now(),
+    };
+
+    return new Promise((resolve, reject) => {
+      const done = (settle, value) => {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        for (const timer of entry.timers) clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        zeroSecureFields(ask.args.fields);
+        // Drop cached asks JSON immediately so sealed secret payloads are never retained in memory.
+        this.views.get(device.id)?.delete("asks");
+        this.changed();
+        settle(value);
+      };
+      const onAbort = () => done(reject, new Error("Stopped."));
+      const timers = [
+        setTimeout(
+          () => done(reject, new Error(`Browser "${device.name}" didn't answer in time.`)),
+          CALL_MS,
+        ),
+      ];
+      for (const timer of timers) timer.unref?.();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, {
+        ask,
+        tool: { name: "secure.fill", secure: true, allowedKeys },
+        timers,
+        resolve: (value) => done(resolve, value),
+        reject: (error) => done(reject, error),
+      });
+      this.changed();
+    });
+  }
+
   /** Runs a browser tool call and waits for the extension to answer via `link.browser.answer`. */
   call(name, args = {}, { botId, chatId, signal } = {}) {
     const tool = BY_NAME.get(String(name));
@@ -319,18 +426,7 @@ export class BrowserTools {
       return Promise.reject(new Error("The arguments must be an object."));
     }
     if (tool.hostOnly) {
-      const list = this.devices().map((device) => ({
-        id: device.id,
-        name: device.name,
-        platform: device.platform,
-        connected: this.isLive(device.id),
-        enabled: device.browser ? device.browser.enabled !== false : true,
-        mode: device.browser?.mode ?? "all",
-        ...(device.browser?.browser && { browser: device.browser.browser }),
-        ...(device.browser?.profile && { profile: device.browser.profile }),
-        lastSeenAt: device.lastSeenAt,
-      }));
-      return Promise.resolve({ browsers: list });
+      return Promise.resolve({ browsers: this.listDevices() });
     }
     let device;
     try {
@@ -382,9 +478,24 @@ export class BrowserTools {
     const entry = this.pending.get(String(id));
     if (!entry || entry.ask.deviceId !== deviceId) throw new Failure("That browser request is no longer open.");
     if (answer?.ok !== true) {
-      return entry.reject(new Error(typeof answer?.error === "string" && answer.error ? answer.error.slice(0, 600) : "The browser extension couldn't complete that action."));
+      const error = new Error(typeof answer?.error === "string" && answer.error ? answer.error.slice(0, 600) : "The browser extension couldn't complete that action.");
+      if (entry.tool.secure && typeof answer?.code === "string" && SAFE_SECURE_CODES.has(answer.code)) {
+        error.secureCode = answer.code;
+      }
+      return entry.reject(error);
     }
     let result = answer.result ?? null;
+    if (entry.tool.secure) {
+      const allowed = entry.tool.allowedKeys;
+      const filled = Array.isArray(result?.filled) ? result.filled.filter((k) => typeof k === "string" && allowed.has(k)) : [];
+      const missing = Array.isArray(result?.missing) ? result.missing.filter((k) => typeof k === "string" && allowed.has(k)) : [];
+      const out = { filled, missing };
+      if (entry.ask.args?.submit) {
+        out.submitted = result?.submitted === true;
+        if (SAFE_SUBMIT_REFUSALS.has(result?.submitRefused)) out.submitRefused = result.submitRefused;
+      }
+      return entry.resolve(out);
+    }
     if (entry.tool.file && (result?.path || result?.uploadId)) {
       const path = this.uploads?.ownFile(deviceId, result.path ?? result.uploadId);
       if (!path) return entry.reject(new Error("The browser screenshot didn't arrive."));

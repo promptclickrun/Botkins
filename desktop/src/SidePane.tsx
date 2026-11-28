@@ -3,19 +3,25 @@
 // table, a website in the app's own viewer, or the Screen panel. The tabs live in the chat's state,
 // so a phone sees the same ones; what the person does with them goes back through sidePane().
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, ListTree, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, Users, X } from "lucide-react";
+import { AppWindow, ArrowLeft, ArrowRight, ExternalLink, File, FileAudio, FileImage, FileText, FileVideo, Folder, Globe, Info, ListTree, Maximize2, MonitorUp, Pin, RotateCw, Table2, TriangleAlert, Users, X } from "lucide-react";
 import { BotAvatar, type AvatarState } from "./Avatar";
 import { PullRequestPanel } from "./PullRequestPanel";
-import ChatSide from "./ChatSide";
+import ChatSide, { type ChatDetails } from "./ChatSide";
+import OpenedPanel from "./SpacePanelOpen";
+import { isPanelFullscreenShortcut } from "./panelOpen";
+import { MOD } from "./places";
 import HtmlFrame from "./HtmlFrame";
 import { ScreenPanel } from "./ScreenSettings";
 import { ComputerScreenGate } from "./ComputerScreen";
 import { AddToProjectDialog, canAddToProject } from "./ProjectExtras";
 import { ActivityPanel, CrewPanel, canStopHelpers, type InspectTarget } from "./ActivityInspector";
+import type { ChatFiles } from "./ChatFileLink";
 import { crewOf, storySteps, type StoryUpdate } from "./activityStory";
+import { isVoiceTranscriptInterim } from "./chatTimeline";
 import type { Artifact, Bot, Chat, PanePanel, State } from "./types";
 import "./blocks.css";
 import "./sidepane.css";
+import "./spaces.css";
 
 // The website viewer is Electron's <webview>. The main process lets one in only with this partition
 // and an http(s) address, and sets everything else about it (desktop/webviewer.mjs).
@@ -118,6 +124,8 @@ export default function SidePane({
   pull,
   inspect,
   latestRunId,
+  details,
+  files,
 }: {
   state: State;
   chat: Chat;
@@ -140,6 +148,10 @@ export default function SidePane({
   inspect?: Inspect;
   /** The chat's latest turn: what Activity and Crew show until something in the chat is clicked. */
   latestRunId?: string;
+  /** What Details shows about the chat itself (ChatSide.tsx). */
+  details?: ChatDetails;
+  /** Chat artifact resolution context so interim updates in Activity render MEDIA: attachments. */
+  files?: ChatFiles;
 }) {
   const panels = chat.pane?.panels ?? [];
   const active = chat.pane?.active ?? null;
@@ -162,10 +174,10 @@ export default function SidePane({
   const crew = useMemo(() => (crewRun ? crewOf(crewRun) : null), [crewRun?.steps, crewRun?.agents]);
   // The turn's updates: what the bot wrote before it moved on, keyed as the chat keys them.
   const updates = useMemo<StoryUpdate[]>(
-    () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
+    () => (activityRun ? chat.messages.flatMap((m, i) => (m.interim && !isVoiceTranscriptInterim(m) && m.runId === activityRun.id && m.text.trim() ? [{ key: "interim-" + i, at: m.time ?? activityRun.time, text: m.text }] : [])) : []),
     [chat.messages, activityRun?.id],
   );
-  const hasActivity = !!activityRun && (storySteps(activityRun.steps).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
+  const hasActivity = !!activityRun && (storySteps(activityRun.steps, activityRun).length > 0 || !!activityRun.reasoning?.some((t) => t.text.trim()) || updates.length > 0);
   const wanted = picked !== undefined ? picked : active;
   // A chat-path preview is an explicit navigation request from ChatView. Keep this
   // local to the pane so it does not mutate the bot's persisted pane selection.
@@ -221,12 +233,42 @@ export default function SidePane({
   };
 
   const opener = shownPanel ? botOf(shownPanel.botId) : undefined;
+  // A bot's panel opened to fill the window (the opened panel of a space, SpacePanelOpen.tsx). While
+  // it is open the pane shows a note in its place, so a website or page isn't loaded twice.
+  const [full, setFull] = useState<string | null>(null);
+  const fullPanel = full ? panels.find((p) => p.id === full) : undefined;
+  useEffect(() => {
+    if (full && !fullPanel) setFull(null);
+  }, [full, fullPanel]);
+  const panelBody = (panel: PanePanel, large: boolean) =>
+    panel.kind === "web" ? (
+      <WebPanel panel={panel} />
+    ) : panel.kind === "table" ? (
+      <TablePanel panel={panel} />
+    ) : panel.kind === "rich_ui" ? (
+      panel.frame ? (
+        <div className="pane-rich">
+          <HtmlFrame key={panel.frame} frame={panel.frame} height={large ? 720 : 480} title={panel.title} />
+        </div>
+      ) : null
+    ) : state.remote?.using ? (
+      <ComputerScreenGate host={state.remote.using} open={openComputer} />
+    ) : (
+      <ScreenPanel state={state} />
+    );
   return (
     <aside
       className={"side-pane" + (shownPanel || inspecting ? " wide" : "") + (inspecting ? " inspector" : "") + (drawer ? " drawer" : "")}
       aria-label="Side pane"
       onKeyDown={(e) => {
-        if (drawer && e.key === "Escape" && !e.defaultPrevented) {
+        // ⇧⌘F on a panel in front opens it full screen; the opened panel takes the key from there.
+        if (shownPanel && front === shownPanel.id && !full && isPanelFullscreenShortcut(e.nativeEvent)) {
+          e.preventDefault();
+          setFull(shownPanel.id);
+          return;
+        }
+        // Esc in the full-screen panel is that dialog's own.
+        if (drawer && e.key === "Escape" && !e.defaultPrevented && !(e.target instanceof Element && e.target.closest("dialog"))) {
           e.preventDefault();
           close();
         }
@@ -306,6 +348,15 @@ export default function SidePane({
           >
             <Pin size={14} aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            className="pane-tool"
+            aria-label={"Full screen: " + shownPanel.title}
+            title={"Full screen (" + (MOD === "⌘" ? "⇧⌘F" : "Ctrl+Shift+F") + ")"}
+            onClick={() => setFull(shownPanel.id)}
+          >
+            <Maximize2 size={14} aria-hidden="true" />
+          </button>
           <button type="button" className="pane-tool" aria-label={"Close " + shownPanel.title} title="Close tab" onClick={() => remove(shownPanel)}>
             <X size={15} aria-hidden="true" />
           </button>
@@ -314,7 +365,7 @@ export default function SidePane({
       <div className="pane-bodies">
         {!group && front === DETAILS && (
           <Body chatId={chat.id} id={DETAILS} tabs={showTabs}>
-            <ChatSide state={state} bot={bot} face={face} openRoutines={openRoutines} openBot={openBot} />
+            <ChatSide state={state} bot={bot} face={face} openRoutines={openRoutines} openBot={openBot} details={details} />
           </Body>
         )}
         {front === "pull" && pull && <Body chatId={chat.id} id="pull" tabs><PullRequestPanel key={pull.url} url={pull.url} /></Body>}
@@ -324,6 +375,7 @@ export default function SidePane({
               key={activityRun.id}
               run={activityRun}
               updates={updates}
+              files={files}
               target={targets.activity?.runId === activityRun.id ? targets.activity : undefined}
               onCrew={crew && crewRun?.id === activityRun.id ? (id) => {
                 if (id) setTargets((old) => ({ ...old, crew: { runId: activityRun.id, select: id, seq: (old.crew?.seq ?? 0) + 1 } }));
@@ -350,29 +402,38 @@ export default function SidePane({
         {panels.map((panel) =>
           panel.id === front || panel.kind === "web" ? (
             <Body key={panel.id} chatId={chat.id} id={panel.id} tabs={showTabs} away={panel.id !== front} kind={panel.kind}>
-              {panel.kind === "web" ? (
-                <WebPanel panel={panel} />
-              ) : panel.kind === "table" ? (
-                <TablePanel panel={panel} />
-              ) : panel.kind === "rich_ui" ? (
-                panel.frame ? (
-                  <div className="pane-rich">
-                    <HtmlFrame key={panel.frame} frame={panel.frame} height={480} title={panel.title} />
-                  </div>
-                ) : null
+              {panel.id === full ? (
+                <p className="pane-empty pane-full-note">Shown full screen.</p>
               ) : (
-                state.remote?.using ? <ComputerScreenGate host={state.remote.using} open={openComputer} /> : <ScreenPanel state={state} />
+                panelBody(panel, false)
               )}
             </Body>
           ) : null,
         )}
       </div>
+      {fullPanel && (
+        <OpenedPanel
+          key={fullPanel.id}
+          title={fullPanel.title}
+          frameIds={fullPanel.kind === "rich_ui" && fullPanel.frame ? [fullPanel.frame] : []}
+          initialFullscreen
+          close={() => setFull(null)}
+        >
+          <div className={"pane-opened " + fullPanel.kind}>
+            <div className="pane-opened-head">
+              {botOf(fullPanel.botId) && <BotAvatar bot={botOf(fullPanel.botId)!} size={22} badge={false} />}
+              <strong>{fullPanel.title}</strong>
+            </div>
+            {panelBody(fullPanel, true)}
+          </div>
+        </OpenedPanel>
+      )}
     </aside>
   );
 }
 
 const artifactIcon = (item: Artifact) => item.kind === "folder" ? Folder : item.kind === "image" ? FileImage : item.kind === "video" ? FileVideo : item.kind === "audio" ? FileAudio : item.mime === "application/pdf" || item.mime.startsWith("text/") ? FileText : File;
-const artifactSourceLabel: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported" };
+const artifactSourceLabel: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported", claude: "Claude artifact" };
 const readableSize = (size: number | null) => size == null ? "" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 102.4) / 10} KB` : `${Math.round(size / 104857.6) / 10} MB`;
 const readableTime = (time: number) => Number.isFinite(time) && time > 0 ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(time) : "";
 const artifactApi = () => window.botkins;
@@ -432,7 +493,7 @@ function ArtifactsPanel({ bot, chat, state, openChat, preview }: { bot: Bot; cha
     for (const item of items.filter((i) => (i.kind === "image" || i.kind === "video" || i.mime === "application/pdf") && !thumbs[i.id])) artifactThumbnail(item.id, { size: 160 }).then((image) => image && setThumbs((old) => ({ ...old, [item.id]: `data:${image.mime};base64,${image.data}` }))).catch(() => {});
   }, [items]);
   const enterFolder = (item: Artifact) => { setSelected(item); setSelectedLocal(false); setFolder(item); };
-  const open = (item: Artifact) => void artifactApi().openChatPath(item.path, "open").catch(() => {});
+  const open = (item: Artifact) => void (item.url ? artifactApi().openLink(item.url) : artifactApi().openChatPath(item.path, "open")).catch(() => {});
   const reveal = (item: Artifact) => void artifactApi().openChatPath(item.path, "reveal").catch(() => {});
   const hasMore = botIds.some((botId) => !!nextCursors[botId]);
   const rows = items.map((item) => (
@@ -504,7 +565,7 @@ function ArtifactRow({ item, selected, thumbnail, onSelect, onOpen, onReveal, on
         <small>{[artifactSourceLabel[item.source], readableSize(item.size), readableTime(item.time), item.chatTitle].filter(Boolean).join(" · ")}</small>
       </span>
     </button>
-    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>Open</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}{onProject && <button type="button" onClick={onProject}>Add to a project…</button>}</div>}
+    {selected && <div className="artifact-actions"><button type="button" onClick={onOpen}>{item.url ? "Open on claude.ai" : "Open"}</button><button type="button" onClick={onReveal}>Show in folder</button>{onChat && <button type="button" onClick={onChat}>Go to message</button>}{onProject && <button type="button" onClick={onProject}>Add to a project…</button>}</div>}
   </li>;
 }
 

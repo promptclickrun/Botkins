@@ -60,6 +60,8 @@ export function workspaceActions(backend, inject) {
     framePage: (id) => backend.frames.page(id),
     frameChat: (id) => backend.frames.chatFor(id),
     adoptMcpSignIn: (...args) => backend.extras.adoptMcpSignIn(...args),
+    startMcpSignIn: (...args) => backend.extras.startMcpSignIn(...args),
+    finishMcpSignIn: (...args) => backend.extras.finishMcpSignIn(...args),
     displays: () => backend.screen.displays(),
     permissions: () => backend.screen.permissions(),
     pointer: () => backend.screen.pointer?.() ?? null,

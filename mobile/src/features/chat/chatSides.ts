@@ -3,6 +3,7 @@
 // with their name over it and their badge at its top left, once for each run of their messages.
 // Plain logic (no React Native imports; tested by tests/chat-sides.test.ts).
 import type { Message, RunSummary } from "@/link/types";
+import { isAnswerReceipt } from "./agentRailModel";
 import { OWNER } from "./people";
 
 /** Who wrote a person's message: the member named on it, else the owner. */
@@ -35,12 +36,13 @@ export function personTag(
  * The keys of the people's messages that follow one by the same person with nothing between them:
  * these show no name and no badge. `items` are in the chat's order, oldest first.
  */
-export function continuingKeys(items: readonly { kind: string; key: string; message?: Pick<Message, "role" | "author"> }[], me: string): Set<string> {
+export function continuingKeys(items: readonly { kind: string; key: string; receipt?: boolean; message?: Pick<Message, "role" | "author" | "from" | "text" | "answer" | "receipt"> }[], me: string): Set<string> {
   const out = new Set<string>();
   let before: string | null = null;
   for (const item of items) {
     const message = item.kind === "message" ? item.message : undefined;
-    if (!message || message.role !== "user") {
+    const isReceipt = !!item.receipt || isAnswerReceipt(message);
+    if (!message || message.role !== "user" || message.from?.kind === "bot" || isReceipt) {
       before = null;
       continue;
     }

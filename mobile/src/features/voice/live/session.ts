@@ -2,7 +2,7 @@
 // controller, so transcript/history, tools and turn control cannot drift between devices.
 import type { LiveProvider } from "@/link/types";
 import { loadDevicePrefs, useDevicePrefs } from "@/state/devicePrefs";
-import { api } from "@/state/link";
+import { api, holdBackgroundLink } from "@/state/link";
 import { showToast, useApp } from "@/state/store";
 import { VoiceTurns } from "../../../../link-host/voice-history.mjs";
 import { CallOutput } from "./routing";
@@ -78,6 +78,7 @@ export class LiveSessionController {
   private writer: VoiceHistoryWriter | null = null;
   private ended = false;
   private started = false;
+  private releaseBackgroundHold: (() => void) | null = null;
   private errorTimer: ReturnType<typeof setTimeout> | null = null;
   private output = new CallOutput();
   private lastMeter = 0;
@@ -176,6 +177,7 @@ export class LiveSessionController {
       return;
     }
     stopSpeech();
+    this.releaseBackgroundHold ??= holdBackgroundLink(this.options.kit.watchRtc ? "watch" : "voice");
     this.update({ started: true });
 
     const writer = new VoiceHistoryWriter(
@@ -239,8 +241,8 @@ export class LiveSessionController {
           return session;
         };
         const next = this.options.kit.watchRtc
-          ? watchRtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language)
-          : webrtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language);
+          ? watchRtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language, provider)
+          : webrtcTransport(this.options.kit, negotiate, run, voiceSettings()?.stt.language, provider);
         held = next;
         next.setInput(mode);
         this.attach(next, { heard, inputItem });
@@ -297,6 +299,8 @@ export class LiveSessionController {
   end(reason?: string) {
     if (this.ended) return;
     this.ended = true;
+    this.releaseBackgroundHold?.();
+    this.releaseBackgroundHold = null;
     if (this.errorTimer) clearTimeout(this.errorTimer);
     this.errorTimer = null;
     this.transport?.end();

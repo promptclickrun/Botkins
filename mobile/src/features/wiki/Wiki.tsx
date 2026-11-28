@@ -3,6 +3,7 @@ import { router, Stack } from "expo-router";
 import { BookOpen, ChevronRight, CircleHelp, Ellipsis, FileText, Inbox, Plus, Search, Share, Sparkles, X } from "lucide-react-native";
 import { type ReactElement, useEffect, useState } from "react";
 import { Alert, TextInput, View } from "react-native";
+import { openChat } from "@/features/chat/navigate";
 import type { WikiTree } from "@/link/types";
 import { useBots } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -320,7 +321,7 @@ function AskBot() {
   if (!bot) return null;
   const start = async (prompt: string) => {
     const id = await attempt(api.createChat(bot.id));
-    if (id) router.push({ pathname: "/chat/[id]", params: { id, draft: prompt } });
+    if (id) openChat(id, { draft: prompt });
   };
   return (
     <View>

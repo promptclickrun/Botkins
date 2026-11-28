@@ -10,10 +10,26 @@
 // never passed on: a driver throws a Failure whose message is a short sentence.
 import { Failure, findShim, findTool, inherit, parseJson, runTool, toolEnv } from "./tools.mjs";
 import { protonVaults } from "./proton-setup.mjs";
+import { generateTotp } from "./totp.mjs";
 
 const IDLE_LOCK = 8 * 60 * 60_000;
 const UNLOCK_TRIES = 5; // a minute's worth
 const MAX_ITEMS = 200;
+
+/** Extract up to 10 non-empty URL strings from a manager item's URL list. */
+function cleanUrls(items) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of list(items)) {
+    const url = typeof raw === "string" ? raw : typeof raw?.href === "string" ? raw.href : typeof raw?.uri === "string" ? raw.uri : "";
+    const trimmed = url.trim().slice(0, 300);
+    if (!trimmed || seen.has(trimmed.toLowerCase())) continue;
+    seen.add(trimmed.toLowerCase());
+    out.push(trimmed);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
 
 /** An id from a phone, before it goes to a command. A leading "-" could be taken for an option. */
 function cleanId(value, what) {
@@ -88,9 +104,20 @@ export function onePassword(ctx) {
       const q = cleanQuery(query);
       const items = parseJson(name, await op(["item", "list", "--vault", vault, "--format", "json"]));
       return list(items)
-        .filter((i) => text(i?.id) && matches(q, i.title, i.additional_information))
+        .filter((i) => {
+          const urls = cleanUrls(i?.urls);
+          return text(i?.id) && matches(q, i.title, i.additional_information, ...urls);
+        })
         .slice(0, MAX_ITEMS)
-        .map((i) => ({ id: i.id, title: text(i.title) || "Untitled", ...(text(i.additional_information) && { subtitle: text(i.additional_information) }) }));
+        .map((i) => {
+          const urls = cleanUrls(i?.urls);
+          return {
+            id: i.id,
+            title: text(i.title) || "Untitled",
+            ...(text(i.additional_information) && { subtitle: text(i.additional_information) }),
+            ...(urls.length > 0 && { urls }),
+          };
+        });
     },
     async item(vaultId, itemId) {
       const vault = cleanId(vaultId, "vault");
@@ -98,12 +125,31 @@ export function onePassword(ctx) {
       const found = parseJson(name, await op(["item", "get", item, "--vault", vault, "--format", "json"]));
       // The answer holds the values. Only each field's id, label and whether it is hidden are kept.
       const fields = list(found?.fields)
-        .filter((f) => text(f?.id) && (text(f.label) || text(f.id)) && f.type !== "OTP" && f.value != null && f.value !== "")
-        .map((f) => ({ id: f.id, label: text(f.label) || f.id, secret: f.type === "CONCEALED" }));
-      return { id: item, title: text(found?.title) || "Untitled", fields };
+        .filter((f) => text(f?.id) && (text(f.label) || text(f.id)) && ((f.type === "OTP" && (f.value != null || f.totp != null)) || (f.type !== "OTP" && f.value != null && f.value !== "")))
+        .map((f) => ({
+          id: f.id,
+          label: text(f.label) || (f.type === "OTP" ? "One-time password" : f.id),
+          secret: f.type === "CONCEALED" || f.type === "OTP",
+          ...(f.type === "OTP" && { totp: true }),
+        }));
+      const urls = cleanUrls(found?.urls);
+      return { id: item, title: text(found?.title) || "Untitled", ...(urls.length > 0 && { urls }), fields };
     },
-    async read({ vaultId, itemId, fieldId }) {
-      const uri = "op://" + cleanId(vaultId, "vault") + "/" + cleanId(itemId, "item") + "/" + cleanId(fieldId, "field");
+    async read({ vaultId, itemId, fieldId, totp = false }) {
+      const vault = cleanId(vaultId, "vault");
+      const item = cleanId(itemId, "item");
+      const field = cleanId(fieldId, "field");
+      if (totp) {
+        try {
+          const code = String(await op(["item", "get", item, "--vault", vault, "--otp"])).trim();
+          if (/^\d{6,10}$/.test(code)) return code;
+        } catch {
+          // Fall back to reading the OTP field directly (e.g. otpauth:// URI or op read ?attribute=otp).
+        }
+        const raw = String(await op(["read", "--no-newline", "op://" + vault + "/" + item + "/" + field + "?attribute=otp"])).trim();
+        return generateTotp(raw, { allowCodePassthrough: true }).code;
+      }
+      const uri = "op://" + vault + "/" + item + "/" + field;
       return String(await op(["read", "--no-newline", uri]));
     },
   };
@@ -201,15 +247,24 @@ export function bitwarden(ctx) {
       return list(items)
         .filter((i) => text(i?.id))
         .slice(0, MAX_ITEMS)
-        .map((i) => ({ id: i.id, title: text(i.name) || "Untitled", ...(text(i.login?.username) && { subtitle: text(i.login.username) }) }));
+        .map((i) => {
+          const urls = cleanUrls(i.login?.uris);
+          return {
+            id: i.id,
+            title: text(i.name) || "Untitled",
+            ...(text(i.login?.username) && { subtitle: text(i.login.username) }),
+            ...(urls.length > 0 && { urls }),
+          };
+        });
     },
     async item(_vaultId, itemId) {
       const item = await getItem(itemId);
-      return { id: itemId, title: text(item?.name) || "Untitled", fields: fieldsOf(item) };
+      const urls = cleanUrls(item?.login?.uris);
+      return { id: itemId, title: text(item?.name) || "Untitled", ...(urls.length > 0 && { urls }), fields: fieldsOf(item) };
     },
-    async read({ itemId, fieldId }) {
+    async read({ itemId, fieldId, totp = false }) {
       // A one-time password is read as the code that is valid now, not as its seed.
-      if (fieldId === "totp") return String(await authed(["get", "totp", cleanId(itemId, "item")])).trim();
+      if (totp || fieldId === "totp") return String(await authed(["get", "totp", cleanId(itemId, "item")])).trim();
       const item = await getItem(itemId);
       const value = fieldId === "username" ? item?.login?.username : fieldId === "password" ? item?.login?.password : list(item?.fields).find((f) => typeof f?.name === "string" && "field:" + f.name.slice(0, 100) === fieldId)?.value;
       if (typeof value !== "string" || !value) throw new Failure("That field is empty or gone.");
@@ -271,29 +326,58 @@ export function protonPass(ctx, setup) {
       // No --show-secrets: the list holds titles, not values.
       const items = array(parseJson(name, await pass((shareId) => ["item", "list", "--share-id=" + shareId, "--output", "json"], share)), "items");
       return items
-        .map((i) => ({ id: pick(i, "id", "item_id", "itemId"), title: text(pick(i, "title", "name") ?? i?.content?.title ?? i?.content?.name), subtitle: text(loginOf(i).username ?? loginOf(i).email) }))
-        .filter((i) => text(i.id) && matches(q, i.title, i.subtitle))
+        .map((i) => {
+          const login = loginOf(i);
+          const urls = cleanUrls(login.urls ?? i?.content?.urls ?? i?.urls);
+          return {
+            id: pick(i, "id", "item_id", "itemId"),
+            title: text(pick(i, "title", "name") ?? i?.content?.title ?? i?.content?.name),
+            subtitle: text(login.username ?? login.email),
+            urls,
+          };
+        })
+        .filter((i) => text(i.id) && matches(q, i.title, i.subtitle, ...i.urls))
         .slice(0, MAX_ITEMS)
-        .map((i) => ({ id: i.id, title: i.title || "Untitled", ...(i.subtitle && { subtitle: i.subtitle }) }));
+        .map((i) => ({
+          id: i.id,
+          title: i.title || "Untitled",
+          ...(i.subtitle && { subtitle: i.subtitle }),
+          ...(i.urls.length > 0 && { urls: i.urls }),
+        }));
     },
     async item(vaultId, itemId) {
       const share = cleanId(vaultId, "vault");
       const item = cleanId(itemId, "item");
       const found = parseJson(name, await pass((shareId) => ["item", "view", "--share-id=" + shareId, "--item-id=" + item, "--output", "json"], share));
       const body = found?.item ?? found;
-      return { id: item, title: text(pick(body, "title", "name") ?? body?.content?.title ?? body?.content?.name) || "Untitled", fields: fieldsOf(body) };
+      const login = loginOf(body);
+      const urls = cleanUrls(login.urls ?? body?.content?.urls ?? body?.urls);
+      return {
+        id: item,
+        title: text(pick(body, "title", "name") ?? body?.content?.title ?? body?.content?.name) || "Untitled",
+        ...(urls.length > 0 && { urls }),
+        fields: fieldsOf(body),
+      };
     },
-    async read({ vaultId, itemId, fieldId }) {
+    async read({ vaultId, itemId, fieldId, totp = false }) {
       const share = cleanId(vaultId, "vault");
       const item = cleanId(itemId, "item");
       const field = String(fieldId ?? "").replace(/^extra:/, "");
       if (!field || /^[\s-]/.test(field) || field.length > 120 || /[\x00-\x1f]/.test(field)) throw new Failure("That field isn't valid.");
-      if (setup?.record()?.agent && fieldId === "totp") {
+      if (setup?.record()?.agent && (totp || fieldId === "totp")) {
         const code = String(await pass((shareId) => ["item", "view", "pass://" + shareId + "/" + item + "/totp?totp=code"], share)).trim();
         if (!/^\d{6,10}$/.test(code)) throw new Failure("Proton Pass didn't return a one-time code.");
         return code;
       }
-      return String(await pass((shareId) => ["item", "view", "--share-id=" + shareId, "--item-id=" + item, "--field=" + field], share)).replace(/\r?\n$/, "");
+      const raw = String(await pass((shareId) => ["item", "view", "--share-id=" + shareId, "--item-id=" + item, "--field=" + field], share)).replace(/\r?\n$/, "");
+      if (totp || fieldId === "totp") {
+        try {
+          return generateTotp(raw, { allowCodePassthrough: true }).code;
+        } catch {
+          return raw;
+        }
+      }
+      return raw;
     },
   };
 }

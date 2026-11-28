@@ -534,11 +534,14 @@ test("a chat on a ChatGPT model runs through the workspace with Botkins' tools o
   assert.equal(called.result.result.isError, undefined);
   assert.match(sent("thread/start")[0].developerInstructions, /Pip/);
   assert.equal(run.eventId, "turn-1");
-  // Between turns the conversation keeps its bridge address, but there is no tool behind it.
+  // Between turns the conversation keeps its bridge address and its tools stay listed (a backend that
+  // lists them then must not cache an empty list), but a call runs nothing until the next turn.
   const { url, http_headers } = sent("thread/start")[0].config["mcp_servers." + BRIDGE];
   const late = (body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...http_headers }, body: JSON.stringify(body) }).then((r) => r.json());
-  assert.deepEqual((await late({ jsonrpc: "2.0", id: 1, method: "tools/list" })).result.tools, []);
-  assert.equal((await late({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "memory_read", arguments: {} } })).result.isError, true);
+  assert.ok((await late({ jsonrpc: "2.0", id: 1, method: "tools/list" })).result.tools.some((tool) => tool.name === "memory_read"));
+  const between = (await late({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "memory_read", arguments: {} } })).result;
+  assert.equal(between.isError, true);
+  assert.match(between.content[0].text, /No turn is running/);
   // The next message goes to the thread Codex still has loaded, at the same bridge address:
   // a loaded thread would not learn of a new one.
   await ws.send(id, "And green");

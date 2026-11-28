@@ -16,6 +16,7 @@ import { DRAG } from "@/features/home/drag";
 import type { Bot, ChatSummary, Section } from "@/link/types";
 import { activityLabel, useCan, useChatActivity, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { openFromList, useChatSplit } from "./split";
@@ -23,7 +24,7 @@ import { Badge, BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, type Te
 import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
-import { arrangeChats, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
+import { arrangeChats, arrangeChatsFlat, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
 import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
 
 function remove(chat: ChatSummary) {
@@ -70,7 +71,7 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
   const mine = myPlace(chat, me) === "manages";
   const canRegenerate = useCanRegenerateTitle(chat, mine);
   const starters = mine && !chat.main ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
-  const ends = mine && !chat.main ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
+  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
   // A section is the person's own way to group their chats, like a pin.
   const filing = sections ? [moveToSection(chat, sections)] : [];
   const menu = chat.archived
@@ -78,9 +79,9 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
     : [
         { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
         ...filing,
-        { id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" },
+        ...(!isRoutineChat(chat) ? [{ id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" }] : []),
         ...starters,
-        ...(chat.main ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
+        ...(chat.main && !mine ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
         ...ends,
       ];
   const viewOnlyMenu = canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];
@@ -118,12 +119,12 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <T variant="callout" weight={chat.unread ? "700" : "600"} numberOfLines={1} style={{ flexShrink: 1 }}>
+              <T variant="callout" weight={chat.unread && !isRoutineChat(chat) ? "700" : "600"} numberOfLines={1} style={{ flexShrink: 1 }}>
                 {title}
               </T>
               {!!hostName && <Badge label={hostName} tone="neutral" />}
               <View style={{ flex: 1 }} />
-              <T variant="footnote" color={chat.unread ? "accentText" : "faint"} weight={chat.unread ? "600" : "400"}>
+              <T variant="footnote" color={chat.unread && !isRoutineChat(chat) ? "accentText" : "faint"} weight={chat.unread && !isRoutineChat(chat) ? "600" : "400"}>
                 {chat.time ? ago(chat.time) : ""}
               </T>
             </View>
@@ -133,11 +134,11 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
                   {live}
                 </T>
               ) : (
-                <T variant="subhead" color={chat.unread ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
+                <T variant="subhead" color={chat.unread && !isRoutineChat(chat) ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
                   {preview}
                 </T>
               )}
-              {chat.unread && <Dot size={9} />}
+              {chat.unread && !isRoutineChat(chat) && <Dot size={9} />}
             </View>
           </View>
         </View>
@@ -357,19 +358,21 @@ export type ChatBoardProps = {
   scroll: BoardScroll;
   /** A drag started or ended: the screen stops the page's own scrolling while one is under way. */
   onDragging: (on: boolean) => void;
+  /** One list ("Recent") with pinned chats left out (the screen draws them as a row), as the Chats screen does since the redesign. */
+  flat?: boolean;
 };
 
-export function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging }: ChatBoardProps) {
+export function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging, flat }: ChatBoardProps) {
   const canChat = useCan("agents", "chat");
   const [dragging, setDragging] = useState<string | null>(null);
   // Sections fold while the app is open, as on Home.
   const [folded, setFolded] = useState<string[]>([]);
   const hold = useDropHold(chats, sections);
   const groups = useMemo(() => {
-    const list = arrangeChats(hold.shown, sections, Date.now(), { searching, dragging: !!dragging && !!sections });
+    const list = flat ? arrangeChatsFlat(hold.shown, sections, { dragging: !!dragging && !!sections }) : arrangeChats(hold.shown, sections, Date.now(), { searching, dragging: !!dragging && !!sections });
     const old = [...archived].sort((a, b) => b.time - a.time);
     return old.length ? [...list, { key: "archived", title: "Archived", chats: old }] : list;
-  }, [hold.shown, archived, sections, searching, dragging]);
+  }, [hold.shown, archived, sections, searching, dragging, flat]);
   // A folded section opens while a search is on, so its matches show.
   const closed = searching ? NO_FOLDS : folded;
   const items = useMemo(() => listItems(groups, closed), [groups, closed]);

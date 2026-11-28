@@ -24,15 +24,15 @@ const PARITY_CHATS = [
   { id: "c_other", botId: "milo", title: "Milo", time: 1500, unread: true },
 ];
 
-test("shared parity fixture: group and routine chats light Pip's dot and clear together; panel and archived stay excluded", () => {
+test("shared parity fixture: group chats light Pip's dot; routine, panel, and archived chats stay excluded", () => {
   assert.deepEqual([...unreadBotIds(PARITY_CHATS)].sort(), ["milo", "pip"]);
   assert.deepEqual(
     botUnreadChats(PARITY_CHATS, "pip").map((c) => c.id),
-    ["c_group", "c_routine"],
+    ["c_group"],
   );
   assert.deepEqual(
     allUnreadChats(PARITY_CHATS).map((c) => c.id),
-    ["c_group", "c_routine", "c_other"],
+    ["c_group", "c_other"],
   );
 
   // Marking only the newest 1:1 chat read leaves Pip's dot lit; marking botUnreadChats clears it.
@@ -44,22 +44,31 @@ test("shared parity fixture: group and routine chats light Pip's dot and clear t
   assert.equal(unreadBotIds(afterBotClear).has("pip"), false);
   assert.equal(unreadBotIds(afterBotClear).has("milo"), true, "other bots stay untouched");
 
-  // Chats page predicate matches across desktop and phone: includes unread panel and routine chats, excludes archived.
+  // Chats page predicate matches across desktop and phone: includes unread panel chats, excludes routine and archived chats.
   const chatsPageUnread = chatsPageUnreadChats(PARITY_CHATS).map((c) => c.id);
-  assert.deepEqual(chatsPageUnread, ["c_group", "c_routine", "c_panel", "c_other"]);
+  assert.deepEqual(chatsPageUnread, ["c_group", "c_panel", "c_other"]);
   const listedAll = new Set(chatGroups({ chats: PARITY_CHATS, filter: "All", today: 0 }).flatMap((g) => g.chats.map((c) => c.id)));
   const listedUnread = chatGroups({ chats: PARITY_CHATS, filter: "Unread", today: 0 }).flatMap((g) => g.chats.map((c) => c.id));
   assert.deepEqual(listedUnread, chatsPageUnread);
   for (const id of chatsPageUnread) assert.equal(listedAll.has(id), true, `Chats page lists ${id}`);
+  assert.equal(listedAll.has("c_routine"), false, "routine chat is hidden by default");
   assert.equal(listedAll.has("c_archived"), false);
 });
 
-test("archived and panel chats never count as unread in the side menu", () => {
+test("archived, panel, and routine chats never count as unread in the side menu", () => {
   assert.equal(isUnreadChat({ unread: true }), true);
   assert.equal(isUnreadChat({ unread: false }), false);
   assert.equal(isUnreadChat({ unread: true, archived: true }), false);
   assert.equal(isUnreadChat({ unread: true, panelId: "p_1" }), false);
-  assert.equal(unreadBotIds([{ botId: "pip", unread: true, archived: true }, { botId: "pip", unread: true, panelId: "p_1" }]).size, 0);
+  assert.equal(isUnreadChat({ unread: true, schedules: [{ id: 1, routine: true }] }), false);
+  assert.equal(
+    unreadBotIds([
+      { botId: "pip", unread: true, archived: true },
+      { botId: "pip", unread: true, panelId: "p_1" },
+      { botId: "pip", unread: true, schedules: [{ id: 1, routine: true }] },
+    ]).size,
+    0,
+  );
 });
 
 test("Chats page unread filter, count, and Mark all as read share one predicate including panel chats", () => {

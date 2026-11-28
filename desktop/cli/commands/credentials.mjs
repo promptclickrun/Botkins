@@ -129,6 +129,66 @@ const credentials = {
         context.print(await context.client.call("credentials.remove", entry.id, { agreed: true }), (gone) => "Removed " + safe(gone.name) + ".");
       },
     },
+    grants: {
+      summary: "List standing bot credential grants (no values)",
+      usage: "botkins credentials grants",
+      async run(context) {
+        const list = await context.client.call("credentials.grants");
+        context.print(list, (grants) =>
+          grants.length
+            ? table(
+                ["BOT", "CREDENTIAL", "DESTINATION", "OPERATION", "LEVEL", "LAST USED", "ID"],
+                grants.map((g) => [
+                  safe(g.botName || g.botId),
+                  safe(g.credentialName || g.credentialId),
+                  safe(g.destination),
+                  safe(g.operation),
+                  safe(g.level),
+                  g.lastUsedAt ? ago(g.lastUsedAt) : "never",
+                  g.id,
+                ]),
+              )
+            : "No standing credential grants.",
+        );
+      },
+    },
+    revoke: {
+      summary: "Revoke a standing bot credential grant",
+      usage: "botkins credentials revoke <grant-id> [--yes]",
+      options: YES,
+      async run(context) {
+        const id = one(context, "Give the grant id (see `botkins credentials grants`).");
+        if (!(await confirm(context, "Revoke credential grant " + safe(id) + "?"))) {
+          context.note("Not revoked.");
+          return EXIT.failed;
+        }
+        context.print(await context.client.call("credentials.revokeGrant", id, { agreed: true }), (res) => "Revoked " + safe(res.revoked) + ".");
+      },
+    },
+    audit: {
+      summary: "Show recent credential use audit entries (never values)",
+      usage: "botkins credentials audit [--limit <n>]",
+      options: { limit: { type: "string", value: "n", about: "Maximum entries to show (default 50)" } },
+      async run(context) {
+        const limit = context.options.limit ? Number(context.options.limit) : 50;
+        const rows = await context.client.call("credentials.audit", { limit });
+        context.print(rows, (entries) =>
+          entries.length
+            ? table(
+                ["WHEN", "BOT", "CREDENTIAL", "DESTINATION", "OP", "OUTCOME"],
+                entries.map((e) => [
+                  ago(e.at),
+                  safe(e.botName || e.botId),
+                  safe(e.credentialName || e.credentialId),
+                  safe(e.destination),
+                  safe(e.operation),
+                  safe(e.outcome),
+                ]),
+              )
+            : "No credential audit entries yet.",
+        );
+      },
+    },
   },
 };
 

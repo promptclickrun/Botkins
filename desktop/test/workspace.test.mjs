@@ -149,13 +149,13 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ws = new Workspace(dir, async () => ({}), () => {});
   // The usual menu shows icons only.
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true });
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Home", "Today", "Chats", "Work", "Wiki", "Market"], collapsed: true });
   // A new order names the places it cares about; the rest follow in their usual order. Unknown and repeated names are dropped.
   ws.setPreferences({ sidebar: { order: ["Wiki", "Chats", "Nope", "Wiki"] } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work"], collapsed: true }, "reordering is not a choice about icons");
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: true }, "reordering is not a choice about icons");
   // Opening the menu is the person's choice, and is kept as one.
   ws.setPreferences({ sidebar: { collapsed: false } });
-  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work"], collapsed: false, picked: true }, "opening keeps the order");
+  assert.deepEqual(ws.state.settings.sidebar, { order: ["Wiki", "Chats", "Home", "Today", "Work", "Market"], collapsed: false, picked: true }, "opening keeps the order");
   ws.setPreferences({ sidebar: { order: [...SIDEBAR].reverse() } });
   assert.equal(ws.state.settings.sidebar.collapsed, false, "reordering keeps the open menu");
   for (const bad of ["Home", ["Home"], { order: "Home" }, { order: [1] }, { collapsed: "yes" }, { picked: "yes" }])
@@ -165,10 +165,10 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   assert.deepEqual(again.state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: false, picked: true });
   again.setPreferences({ sidebar: { collapsed: true } });
   assert.deepEqual(new Workspace(dir, async () => ({}), () => {}).state.settings.sidebar, { order: [...SIDEBAR].reverse(), collapsed: true, picked: true }, "so does collapsing it again");
-  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki"]);
+  assert.deepEqual(sidebarField({ order: ["Chats", "Home"] }).order, ["Chats", "Home", "Today", "Work", "Wiki", "Market"]);
   // Places that no longer exist are dropped. The remaining places keep their order.
-  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work"]);
-  assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats"]);
+  assert.deepEqual(sidebarField({ order: ["Wiki", "Old page", "Home", "Projects"], collapsed: true }).order, ["Wiki", "Home", "Today", "Chats", "Work", "Market"]);
+  assert.deepEqual(sidebarField({ order: ["Projects", "Work", "Wiki", "Home", "Today", "Chats"] }).order, ["Work", "Wiki", "Home", "Today", "Chats", "Market"]);
   const old = join(dir, "old");
   mkdirSync(old);
   writeFileSync(join(old, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: "broken" } } }));
@@ -179,7 +179,7 @@ test("the side menu's order and collapsed state are settings", async (t) => {
   mkdirSync(earlier);
   writeFileSync(join(earlier, "workspace.json"), JSON.stringify({ bots: [], chats: [], runs: [], settings: { sidebar: { order: ["Work", "Home"], collapsed: false } } }));
   const moved = new Workspace(earlier, async () => ({}), () => {});
-  assert.deepEqual(moved.state.settings.sidebar, { order: ["Work", "Home", "Today", "Chats", "Wiki"], collapsed: true });
+  assert.deepEqual(moved.state.settings.sidebar, { order: ["Work", "Home", "Today", "Chats", "Wiki", "Market"], collapsed: true });
   assert.deepEqual(sidebarField({ order: SIDEBAR, collapsed: true }), { order: [...SIDEBAR], collapsed: true });
   // Once opened by the person, it stays open across restarts.
   moved.setPreferences({ sidebar: { collapsed: false } });
@@ -369,6 +369,48 @@ test("a voice acknowledgement and tool share the input item even before its word
   await desk.liveTool("call", "ask_bot", { request: "Check the list" });
   desk.heard("call", "Anything on my list?", true, { item: "input" });
   assert.deepEqual(ws.chat(chat).messages.map(m => m.text), ["Anything on my list?", "Checking.", "ok"]);
+  const ack = ws.chat(chat).messages[1];
+  assert.equal(ack.role, "assistant");
+  assert.equal(ack.runId, undefined, "voice acknowledgement stays a standalone chat message, not part of the work block");
+  assert.equal(ack.interim, undefined);
+});
+
+test("live voice transcripts spoken while ask_bot is still running stay outside the running run", async t => {
+  const { VoiceDesk } = await import("../desktop/voicedesk.mjs");
+  const { fakeClient } = await import("./fake-copilot.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "voice-midturn-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let finishTurn;
+  const { client } = fakeClient(() => new Promise((resolve) => {
+    finishTurn = () => resolve({ data: { content: "Finished the refactor." } });
+  }));
+  const ws = new Workspace(dir, client, () => {});
+  const chat = ws.createChat("pip");
+  const desk = new VoiceDesk({ workspace: () => ws });
+  desk.noteSession("call", { chatId: chat });
+  desk.heard("call", "Refactor the parser", true, { item: "u1" });
+  const asking = desk.liveTool("call", "ask_bot", { request: "Refactor the parser" });
+  await new Promise((r) => setImmediate(r));
+  desk.heard("call", "Sure, starting on that now.", true, { role: "assistant", item: "a1" });
+  desk.heard("call", "How is it going?", true, { item: "u2" });
+  desk.heard("call", "Still running through the tests.", true, { role: "assistant", item: "a2" });
+  const during = ws.chat(chat).messages;
+  assert.deepEqual(during.map((m) => [m.role, m.text]), [
+    ["user", "Refactor the parser"],
+    ["assistant", "Sure, starting on that now."],
+    ["user", "How is it going?"],
+    ["assistant", "Still running through the tests."],
+  ]);
+  assert.ok(during[0].runId, "the ask_bot prompt owns the running turn");
+  for (const line of during.slice(1)) {
+    assert.equal(line.runId, undefined, "mid-turn voice lines are not attached to the running turn");
+    assert.equal(line.interim, undefined, "mid-turn voice lines are not marked as work-block interims");
+  }
+  finishTurn();
+  await asking;
+  const after = ws.chat(chat).messages;
+  assert.equal(after.at(-1).text, "Finished the refactor.");
+  assert.equal(after.at(-1).runId, during[0].runId);
 });
 
 test("longPromptCache is on by default, takes only on or off, and is kept across a restart", (t) => {

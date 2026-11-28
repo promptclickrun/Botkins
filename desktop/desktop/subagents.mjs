@@ -17,6 +17,8 @@ import { recordActivity } from "./activity.mjs";
 import { recordCanvas } from "./canvas.mjs";
 import { validateSelection } from "./preferences.mjs";
 
+/** What a subagent_run child is called to a plugin hook (`agentType`, `agentName`); a Copilot `task` child says its agent type. */
+export const SUBAGENT_TYPE = "botkins-subagent";
 export const MAX_SUBAGENTS = 16;
 export const MAX_PARALLEL = 8;
 const TASK_MAX = 16000;
@@ -77,10 +79,8 @@ export class Subagents {
     if (chat?.helper || chat?.subagent || chat?.panelId || run?.panelId) return "";
     return (
       "\n\n## Subagents\n" +
-      "Use subagent_run to delegate focused tasks to isolated child workers (or pass a `tasks` array to fan out in parallel). " +
-      "Subagents run through Botkins' own provider gateway, inherit your model (or accept an optional `model` override), and report live progress in Activity. " +
-      "Set `async: true` to launch in the background, then check or collect results with subagent_status, subagent_wait, or stop with subagent_stop. " +
-      "Prefer Botkins' subagent_* tools over harness-specific subagent plugins."
+      "subagent_run hands a focused task to an isolated worker on your model (`tasks` runs up to 8 in parallel; `async: true` runs it in the background for subagent_status, subagent_wait and subagent_stop). " +
+      "Prefer these over your harness's own subagent tools."
     );
   }
 
@@ -311,12 +311,15 @@ export class Subagents {
         botId: bot.id,
         title: `${chat.title || "Chat"} · ${spec.label}`,
         approval: chat.approval,
+        ...(chat.channel && { channel: chat.channel }),
         messages: [],
         projectId: chat.projectId,
         folder: spec.folderOverride ?? chat.folder,
         ...(spec.modelOverride && { model: spec.modelOverride }),
         helper: true,
         subagent: true,
+        // The child's identity to its own plugin hooks (Workspace childHooks) and to subagentStart/Stop.
+        subagentId: id,
         temporary: true,
         established: false,
         extraInstructions: this.childInstructions(bot),
@@ -350,10 +353,21 @@ export class Subagents {
         });
 
         const whose = this.ws.speakerLine(chat, run, task, { helping: true });
-        const prompt = (whose ? whose + "\n" : "") + this.childTask(spec);
-        const { text } = await session.send({ prompt });
+        // The parent turn's plugins hear the child start, once, before its first message, and what
+        // they add goes before that message (a Copilot `task` child: test/subagent-hooks-probe-live.mjs).
+        const hook = (name, input) => this._hook(task, chat.id, name, { ...this._identity(record, run), ...input });
+        const started = await hook("onSubagentStart", {});
+        if (over()) throw new Error("Subagent stopped.");
+        const extra = typeof started?.additionalContext === "string" && started.additionalContext.trim() ? started.additionalContext.trim() + "\n\n" : "";
+        let { text } = await session.send({ prompt: extra + (whose ? whose + "\n" : "") + this.childTask(spec) });
         if (over()) throw new Error(record.stoppedByTool ? "Subagent stopped." : "Parent turn stopped.");
         if (!text) throw new Error("Subagent returned an empty reply.");
+        // subagentStop once, when the child has answered (not when it failed or was stopped). A
+        // plugin's answer can only rewrite the reply (modifiedResponse): Botkins' reading of hook
+        // output keeps no "block" for this event on any harness (plugin-runtime.mjs parseHookOutput).
+        const stopped = await hook("onSubagentStop", { stopReason: "end_turn", stopHookActive: false, response: text });
+        if (over()) throw new Error(record.stoppedByTool ? "Subagent stopped." : "Parent turn stopped.");
+        if (typeof stopped?.modifiedResponse === "string" && stopped.modifiedResponse) text = stopped.modifiedResponse;
 
         record.reply = text.slice(0, RESULT_MAX);
         record.status = "Done";
@@ -415,6 +429,24 @@ export class Subagents {
 
     record.promise = execute();
     return record;
+  }
+
+  /** Who a child is, to a plugin hook: stable for its whole life, and the parent turn it belongs to. */
+  _identity(record, run) {
+    return { agentId: record.id, agentType: SUBAGENT_TYPE, agentName: SUBAGENT_TYPE, agentDisplayName: record.label, parentAgentId: run?.id, transcriptPath: "" };
+  }
+
+  /** One of the parent turn's plugin hooks (Workspace.openSession keeps them on the task), or null. A hook that fails said nothing. */
+  async _hook(task, sessionId, name, input) {
+    const handler = task?.pluginHooks?.handlers?.[name];
+    if (typeof handler !== "function") return null;
+    // A plugin switched off, removed, taken from this bot or updated to another revision while the child ran hears nothing more.
+    if (task.pluginAuthorized && !task.pluginAuthorized()) return null;
+    try {
+      return (await handler({ sessionId, timestamp: new Date(), workingDirectory: "", ...input }, { sessionId })) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   _summary(rec) {

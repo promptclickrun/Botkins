@@ -1,18 +1,29 @@
-// Eligible tab filtering, Botkins tab group management, and CDP/chrome.debugger automation.
+// Eligible tab filtering, Botkins tab group management, DOM-first scripting automation,
+// and ephemeral CDP/chrome.debugger fallback.
 //
-// Follows the OpenClaw / Claude model:
-// - Uses chrome.debugger (no blocking remote-debugging consent modal, works unattended).
-// - Lazily attaches debugger on demand and detaches after idle so the yellow banner disappears
-//   when bots are not actively browsing.
+// Architecture (DOM-first, browser-use style):
+// - Primary path uses `chrome.scripting.executeScript` with the injected isolated-world
+//   DOM driver (`dist/dom-driver.js`), `world: "MAIN"` for `browser_eval`, and
+//   `chrome.tabs.captureVisibleTab` for viewport screenshots.
+// - Never attaches `chrome.debugger` during ordinary browsing, so tabs containing other
+//   extensions' iframes (Proton Pass, 1Password, Bitwarden, Grammarly, etc.) work without
+//   hitting Chrome's "Cannot access a chrome-extension:// URL of different extension" block.
+// - Falls back to ephemeral `chrome.debugger` CDP sessions ONLY when required (fullPage
+//   screenshots, CSP-blocked eval, raw `browser_cdp`, trusted input / file upload, or a
+//   DOM path that reported failure) and ALWAYS detaches immediately in `finally`.
 // - Respects `mode`:
 //     "all":   every eligible ordinary tab (excluding chrome://, edge://, chrome-extension://,
 //              devtools://, incognito, and user-paused tabs).
 //     "group": only tabs in the orange "Botkins" tab group. Tabs opened by bots automatically land
 //              in the group.
 
+import { DRIVER_VERSION } from "./dom-driver.mjs";
+
 const BLOCKED_SCHEMES = ["chrome:", "edge:", "chrome-extension:", "devtools:", "view-source:", "chrome-untrusted:"];
 const CDP_VERSION = "1.3";
-const IDLE_DETACH_MS = 20_000;
+const DOM_DRIVER_FILE = "dist/dom-driver.js";
+const SECRET_TAB_ERROR = "This tab holds a securely filled value. Submit the form or navigate first.";
+const SECRET_TABS_SESSION_KEY = "botkinsSecretTabs";
 
 export function isEligibleUrl(url) {
   if (typeof url !== "string" || !url) return true; // newly created blank/loading tab
@@ -37,11 +48,97 @@ export function isEligibleTab(tab, settings, groupId) {
   return true;
 }
 
+export function isDifferentExtensionCdpError(err) {
+  const msg = String(err?.message || err || "");
+  return /cannot access a chrome-extension:\/\/.*different extension|cannot access a chrome-extension/i.test(msg);
+}
+
+export function formatCdpError(err, action = "this action") {
+  if (err?.__botkinsCdpFormatted) return err;
+  const msg = err instanceof Error ? err.message : String(err || "Chrome DevTools Protocol error");
+  if (isDifferentExtensionCdpError(msg)) {
+    const formatted = new Error(
+      `Chrome blocked DevTools debugger access on this tab because another extension (such as Proton Pass, 1Password, Bitwarden, or Grammarly) injected a chrome-extension:// iframe. Standard DOM actions work without the debugger, but ${action} required CDP fallback. (${msg})`,
+    );
+    formatted.__botkinsCdpFormatted = true;
+    return formatted;
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Runs inside the target page via Runtime.evaluate to produce a compact accessibility/DOM snapshot
-// with stable `data-botkins-ref` handles (`e1`, `e2`, ...) for reliable clicking and typing.
-const SNAPSHOT_EXPR = (maxChars) => `(() => {
+function urlOrigin(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    return parsed.origin && parsed.origin !== "null" ? parsed.origin : parsed.protocol;
+  } catch {
+    return "";
+  }
+}
+
+function stripUrlHash(url) {
+  const s = String(url || "");
+  const idx = s.indexOf("#");
+  return idx >= 0 ? s.slice(0, idx) : s;
+}
+
+function screenshotAbortedError(message) {
+  const err = new Error(message);
+  err.__botkinsScreenshotAborted = true;
+  return err;
+}
+
+// Zero-closure function serialized by chrome.scripting.executeScript into target frame(s).
+function DISPATCH_DRIVER_FUNC(action, payload, expectedVersion) {
+  const driver = globalThis.__botkinsDomDriver;
+  if (!driver || driver.version !== expectedVersion) {
+    return { __needInstall: true };
+  }
+  return driver.dispatch(action, payload);
+}
+
+// Zero-closure function serialized by chrome.scripting.executeScript into world: "MAIN".
+async function EVAL_MAIN_WORLD_FUNC(expression, awaitPromise) {
+  try {
+    let value;
+    try {
+      const fn = new Function(`"use strict"; return (\n${expression}\n);`);
+      value = fn();
+    } catch (syntaxErr) {
+      if (syntaxErr instanceof SyntaxError) {
+        value = (0, eval)(expression);
+      } else {
+        throw syntaxErr;
+      }
+    }
+    if (
+      awaitPromise &&
+      value &&
+      (typeof value === "object" || typeof value === "function") &&
+      typeof value.then === "function"
+    ) {
+      value = await value;
+    }
+    if (value === undefined) return { ok: true, value: null };
+    try {
+      return { ok: true, value: JSON.parse(JSON.stringify(value)) };
+    } catch {
+      return { ok: true, value: String(value) };
+    }
+  } catch (err) {
+    const name = err?.name || "";
+    const message = err instanceof Error ? err.message : String(err);
+    const cspBlocked =
+      name === "EvalError" ||
+      /unsafe-eval|Content Security Policy|EvalError/i.test(message);
+    return { ok: false, cspBlocked, error: message };
+  }
+}
+
+// Minimal CDP fallback expressions (only used if chrome.scripting cannot run on a page).
+const CDP_SNAPSHOT_EXPR = (maxChars) => `(() => {
   const MAX = ${Math.min(Math.max(Number(maxChars) || 12000, 1000), 50000)};
   const visible = (el) => {
     if (!el || el.nodeType !== 1) return false;
@@ -50,31 +147,7 @@ const SNAPSHOT_EXPR = (maxChars) => `(() => {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  const cssPath = (el) => {
-    if (el.id && /^[A-Za-z][A-Za-z0-9_-]*$/.test(el.id)) return '#' + el.id;
-    const parts = [];
-    let cur = el;
-    while (cur && cur.nodeType === 1 && parts.length < 5) {
-      let part = cur.tagName.toLowerCase();
-      if (cur.getAttribute('data-testid')) {
-        parts.unshift(part + '[data-testid=' + JSON.stringify(cur.getAttribute('data-testid')) + ']');
-        break;
-      }
-      if (cur.getAttribute('name') && ['input','textarea','select','button'].includes(part)) {
-        part += '[name=' + JSON.stringify(cur.getAttribute('name')) + ']';
-      } else {
-        const parent = cur.parentElement;
-        if (parent) {
-          const sibs = [...parent.children].filter((c) => c.tagName === cur.tagName);
-          if (sibs.length > 1) part += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
-        }
-      }
-      parts.unshift(part);
-      cur = cur.parentElement;
-    }
-    return parts.join(' > ');
-  };
-  const selector = 'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [contenteditable="true"]';
+  const selector = 'a[href], button, input:not([type="hidden"]), textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [contenteditable="true"]';
   const nodes = [...document.querySelectorAll(selector)].filter(visible).slice(0, 180);
   const elements = [];
   let idx = 0;
@@ -83,17 +156,21 @@ const SNAPSHOT_EXPR = (maxChars) => `(() => {
     try { el.setAttribute('data-botkins-ref', ref); } catch {}
     const r = el.getBoundingClientRect();
     const tag = el.tagName.toLowerCase();
-    const text = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+    const isPw = tag === 'input' && (el.type || '').toLowerCase() === 'password';
+    const name = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('title') || el.getAttribute('placeholder') || (isPw ? '' : el.value) || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+    const box = { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
     const entry = {
       ref,
       tag,
-      selector: cssPath(el),
+      role: el.getAttribute('role') || tag,
       x: Math.round(r.left + r.width / 2),
       y: Math.round(r.top + r.height / 2),
+      box,
     };
     if (el.type && tag === 'input') entry.type = el.type;
-    if (el.getAttribute('role')) entry.role = el.getAttribute('role');
-    if (text) entry.text = text;
+    if (name) { entry.name = name; entry.text = name; }
+    if (isPw) { entry.hasValue = Boolean(el.value); entry.valueState = el.value ? 'filled' : 'empty'; }
+    else if (tag === 'input' || tag === 'textarea' || tag === 'select') entry.value = String(el.value || '').slice(0, 200);
     if (tag === 'a' && el.href) entry.href = String(el.href).slice(0, 200);
     if (el.disabled) entry.disabled = true;
     elements.push(entry);
@@ -109,7 +186,7 @@ const SNAPSHOT_EXPR = (maxChars) => `(() => {
   };
 })()`;
 
-const FIND_ELEMENT_EXPR = ({ selector, ref, text }) => `(() => {
+const CDP_FIND_ELEMENT_EXPR = ({ selector, ref, text }) => `(() => {
   const sel = ${JSON.stringify(selector || "")};
   const ref = ${JSON.stringify(ref || "")};
   const txt = ${JSON.stringify(text || "")};
@@ -154,7 +231,7 @@ const KEY_CODES = {
 export function parseKeyCombo(combo) {
   const parts = String(combo || "").split("+").map((p) => p.trim()).filter(Boolean);
   let modifiers = 0;
-  let main = parts.pop() || "Enter";
+  const main = parts.pop() || "Enter";
   for (const mod of parts) {
     const m = mod.toLowerCase();
     if (m === "alt" || m === "option") modifiers |= 1;
@@ -164,7 +241,7 @@ export function parseKeyCombo(combo) {
   }
   const known = KEY_CODES[main];
   if (known) return { ...known, modifiers };
-  const ch = main.length === 1 ? main : main;
+  const ch = main;
   const upper = ch.toUpperCase();
   const code = ch.length === 1 && /[a-z]/i.test(ch) ? "Key" + upper : ch.length === 1 && /[0-9]/.test(ch) ? "Digit" + ch : ch;
   return {
@@ -176,19 +253,172 @@ export function parseKeyCombo(combo) {
   };
 }
 
+function stripDataUrlPrefix(dataUrl) {
+  const str = String(dataUrl || "");
+  const idx = str.indexOf("base64,");
+  return idx >= 0 ? str.slice(idx + 7) : str;
+}
+
 export class BrowserController {
   constructor({ getSettings, uploadScreenshot }) {
     this.getSettings = getSettings;
     this.uploadScreenshot = uploadScreenshot;
-    this.attached = new Map(); // tabId -> { timer }
+    this.attached = new Set(); // active ephemeral debugger sessions
+    this.cdpQueues = new Map(); // tabId -> Promise chain
+    this.tabRefs = new Map(); // tabId -> Map<globalRef, { frameId, localRef, tag, type, role }>
+    this.secretTabs = new Map(); // tabId -> { origin, urlNoHash, navGen, docToken }
+    this.tabNavGen = new Map(); // tabId -> number
+    this.secretTabsHydrated = false;
+    this._secretWatchersAttached = false;
+    this._onSecretTabUpdated = (tabId, changeInfo) => {
+      if (typeof tabId !== "number") return;
+      if (changeInfo?.status === "loading") {
+        this.tabNavGen.set(tabId, (this.tabNavGen.get(tabId) || 0) + 1);
+      }
+      const entry = this.secretTabs.get(tabId);
+      if (!entry) return;
+      if (typeof changeInfo?.url === "string" && urlOrigin(changeInfo.url) !== entry.origin) {
+        this.clearSecretTab(tabId);
+        return;
+      }
+      if (changeInfo?.status === "complete" && (this.tabNavGen.get(tabId) || 0) !== entry.navGen) {
+        this.clearSecretTab(tabId);
+      }
+    };
+    this._onSecretWebNav = (details) => {
+      if (details?.frameId === 0 && typeof details.tabId === "number") {
+        this.tabNavGen.set(details.tabId, (this.tabNavGen.get(details.tabId) || 0) + 1);
+        this.clearSecretTab(details.tabId);
+      }
+    };
+
     if (typeof chrome !== "undefined" && chrome.debugger?.onDetach) {
       chrome.debugger.onDetach.addListener((source) => {
         if (typeof source?.tabId === "number") {
-          const entry = this.attached.get(source.tabId);
-          if (entry?.timer) clearTimeout(entry.timer);
           this.attached.delete(source.tabId);
         }
       });
+    }
+    if (typeof chrome !== "undefined" && chrome.tabs?.onRemoved) {
+      chrome.tabs.onRemoved.addListener((tabId) => {
+        this.tabRefs.delete(tabId);
+        this.attached.delete(tabId);
+        this.tabNavGen.delete(tabId);
+        this.clearSecretTab(tabId);
+      });
+    }
+  }
+
+  syncSecretWatchers() {
+    if (typeof chrome === "undefined") return;
+    const need = this.secretTabs.size > 0;
+    if (need && !this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.addListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.addListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = true;
+    } else if (!need && this._secretWatchersAttached) {
+      chrome.tabs?.onUpdated?.removeListener?.(this._onSecretTabUpdated);
+      chrome.webNavigation?.onCommitted?.removeListener?.(this._onSecretWebNav);
+      this._secretWatchersAttached = false;
+    }
+  }
+
+  async hydrateSecretTabs() {
+    if (this.secretTabsHydrated) return;
+    this.secretTabsHydrated = true;
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.get !== "function") return;
+    try {
+      const data = await chrome.storage.session.get(SECRET_TABS_SESSION_KEY);
+      const saved = data?.[SECRET_TABS_SESSION_KEY];
+      if (!saved || typeof saved !== "object") return;
+      for (const [k, v] of Object.entries(saved)) {
+        const tabId = Number(k);
+        if (!Number.isInteger(tabId) || this.secretTabs.has(tabId)) continue;
+        if (v && typeof v === "object" && typeof v.origin === "string") {
+          this.secretTabs.set(tabId, {
+            origin: v.origin,
+            urlNoHash: typeof v.urlNoHash === "string" ? v.urlNoHash : "",
+            navGen: Number(v.navGen) || 0,
+            docToken: typeof v.docToken === "string" ? v.docToken : "",
+          });
+        }
+      }
+      this.syncSecretWatchers();
+    } catch {}
+  }
+
+  persistSecretTabs() {
+    if (typeof chrome === "undefined" || typeof chrome.storage?.session?.set !== "function") return;
+    const obj = {};
+    for (const [tabId, entry] of this.secretTabs.entries()) {
+      obj[String(tabId)] = entry;
+    }
+    try {
+      const res = chrome.storage.session.set({ [SECRET_TABS_SESSION_KEY]: obj });
+      if (res && typeof res.catch === "function") res.catch(() => {});
+    } catch {}
+  }
+
+  markSecretTab(tabId, info) {
+    this.secretTabs.set(tabId, info);
+    this.syncSecretWatchers();
+    this.persistSecretTabs();
+  }
+
+  clearSecretTab(tabId) {
+    if (this.secretTabs.delete(tabId)) {
+      this.syncSecretWatchers();
+      this.persistSecretTabs();
+    }
+  }
+
+  async isTabSecretBearing(tab) {
+    if (!tab || typeof tab.id !== "number") return false;
+    await this.hydrateSecretTabs();
+    const entry = this.secretTabs.get(tab.id);
+    if (!entry) return false;
+
+    const currentUrl = tab.url || "";
+    const currentOrigin = urlOrigin(currentUrl);
+    if (currentOrigin && currentOrigin !== entry.origin) {
+      this.clearSecretTab(tab.id);
+      return false;
+    }
+
+    if (this.hasScripting()) {
+      try {
+        const { frames } = await this.execDriver(
+          tab.id,
+          "secretStatus",
+          { docToken: entry.docToken },
+          { frameIds: [0] },
+        );
+        const status = frames[0]?.result;
+        if (status?.ok === true) {
+          if (!status.sameDoc || status.active === false) {
+            this.clearSecretTab(tab.id);
+            return false;
+          }
+          return true;
+        }
+      } catch {
+        // Fail closed while the tab is marked secret-bearing.
+        return true;
+      }
+    }
+
+    if ((this.tabNavGen.get(tab.id) || 0) !== entry.navGen && tab.status === "complete") {
+      this.clearSecretTab(tab.id);
+      return false;
+    }
+    return true;
+  }
+
+  async assertNotSecretBearing(tab) {
+    if (await this.isTabSecretBearing(tab)) {
+      const err = new Error(SECRET_TAB_ERROR);
+      err.code = "secret_tab_restricted";
+      throw err;
     }
   }
 
@@ -218,58 +448,193 @@ export class BrowserController {
   }
 
   async detachAllExcept(keepIds = new Set()) {
-    for (const [tabId, entry] of [...this.attached.entries()]) {
+    for (const tabId of [...this.attached]) {
       if (keepIds.has(tabId)) continue;
-      if (entry?.timer) clearTimeout(entry.timer);
-      this.attached.delete(tabId);
-      try {
-        await chrome.debugger.detach({ tabId });
-      } catch {}
+      await this.detach(tabId);
     }
-  }
-
-  async ensureAttached(tabId) {
-    const existing = this.attached.get(tabId);
-    if (existing) {
-      if (existing.timer) clearTimeout(existing.timer);
-      existing.timer = setTimeout(() => void this.detach(tabId), IDLE_DETACH_MS);
-      return;
-    }
-    try {
-      await chrome.debugger.attach({ tabId }, CDP_VERSION);
-    } catch (err) {
-      if (!/already attached/i.test(String(err?.message || err))) throw err;
-    }
-    const timer = setTimeout(() => void this.detach(tabId), IDLE_DETACH_MS);
-    this.attached.set(tabId, { timer });
   }
 
   async detach(tabId) {
-    const entry = this.attached.get(tabId);
-    if (entry?.timer) clearTimeout(entry.timer);
     this.attached.delete(tabId);
     try {
-      await chrome.debugger.detach({ tabId });
+      await chrome.debugger?.detach?.({ tabId });
     } catch {}
   }
 
-  async cdp(tabId, method, params = {}) {
-    await this.ensureAttached(tabId);
-    return await chrome.debugger.sendCommand({ tabId }, method, params);
+  // Runs a CDP session ephemerally and ALWAYS detaches in `finally` so no debugger
+  // is ever left attached to the tab.
+  async withDebugger(tabId, fn, actionDesc = "this action") {
+    const prev = this.cdpQueues.get(tabId) || Promise.resolve();
+    let release;
+    const current = new Promise((r) => (release = r));
+    this.cdpQueues.set(tabId, prev.then(() => current));
+
+    await prev;
+    let shouldDetach = false;
+    const attachOnce = async () => {
+      try {
+        await chrome.debugger.attach({ tabId }, CDP_VERSION);
+        this.attached.add(tabId);
+        shouldDetach = true;
+      } catch (err) {
+        const msg = String(err?.message || err || "");
+        if (/already attached/i.test(msg) && !/another debugger/i.test(msg)) {
+          this.attached.add(tabId);
+          shouldDetach = true;
+        } else {
+          throw formatCdpError(err, actionDesc);
+        }
+      }
+    };
+    try {
+      if (!chrome.debugger?.attach || !chrome.debugger?.sendCommand) {
+        throw new Error("chrome.debugger API is unavailable.");
+      }
+      await attachOnce();
+      return await fn(async (method, params = {}) => {
+        try {
+          return await chrome.debugger.sendCommand({ tabId }, method, params);
+        } catch (err) {
+          const msg = String(err?.message || err || "");
+          // Background tabs (active: false) can briefly lose debugger attachment across
+          // navigation / RenderFrameHost swaps right after attach; re-attach once and retry.
+          if (/debugger is not attached/i.test(msg)) {
+            this.attached.delete(tabId);
+            await attachOnce();
+            try {
+              return await chrome.debugger.sendCommand({ tabId }, method, params);
+            } catch (retryErr) {
+              throw formatCdpError(retryErr, actionDesc);
+            }
+          }
+          throw formatCdpError(err, actionDesc);
+        }
+      });
+    } catch (err) {
+      throw formatCdpError(err, actionDesc);
+    } finally {
+      if (shouldDetach) {
+        await this.detach(tabId);
+      }
+      release();
+      if (this.cdpQueues.get(tabId) === current) {
+        this.cdpQueues.delete(tabId);
+      }
+    }
   }
 
-  async evaluate(tabId, expression, awaitPromise = true) {
-    const res = await this.cdp(tabId, "Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise,
-      userGesture: true,
-    });
-    if (res?.exceptionDetails) {
-      const msg = res.exceptionDetails.exception?.description || res.exceptionDetails.text || "Script evaluation failed";
-      throw new Error(msg);
+  async cdp(tabId, method, params = {}, actionDesc = `CDP ${method}`) {
+    return await this.withDebugger(tabId, (send) => send(method, params), actionDesc);
+  }
+
+  async evaluateCdp(tabId, expression, awaitPromise = true, actionDesc = "JavaScript evaluation") {
+    return await this.withDebugger(
+      tabId,
+      async (send) => {
+        const res = await send("Runtime.evaluate", {
+          expression,
+          returnByValue: true,
+          awaitPromise,
+          userGesture: true,
+        });
+        if (res?.exceptionDetails) {
+          const msg = res.exceptionDetails.exception?.description || res.exceptionDetails.text || "Script evaluation failed";
+          throw new Error(msg);
+        }
+        return res?.result?.value;
+      },
+      actionDesc,
+    );
+  }
+
+  hasScripting() {
+    return typeof chrome !== "undefined" && typeof chrome.scripting?.executeScript === "function";
+  }
+
+  async executeScripting(target, spec) {
+    if (!this.hasScripting()) {
+      throw new Error("chrome.scripting API is unavailable.");
     }
-    return res?.result?.value;
+    return await chrome.scripting.executeScript({ target, ...spec });
+  }
+
+  // Runs a DOM driver action in the target frame(s), automatically injecting
+  // `dist/dom-driver.js` whenever a frame does not yet have the current driver installed.
+  async execDriver(tabId, action, payload = {}, { allFrames = false, frameIds = null } = {}) {
+    let target = frameIds ? { tabId, frameIds } : allFrames ? { tabId, allFrames: true } : { tabId, frameIds: [0] };
+    let usedAllFrames = Boolean(allFrames && !frameIds);
+    const canFallbackToTop = (tgt) =>
+      Boolean(tgt?.allFrames) ||
+      (usedAllFrames && Array.isArray(tgt?.frameIds) && !(tgt.frameIds.length === 1 && tgt.frameIds[0] === 0));
+
+    const invoke = async (tgt, act, data) => {
+      try {
+        return await this.executeScripting(tgt, {
+          func: DISPATCH_DRIVER_FUNC,
+          args: [act, data, DRIVER_VERSION],
+        });
+      } catch (err) {
+        if (canFallbackToTop(tgt)) {
+          usedAllFrames = false;
+          target = { tabId, frameIds: [0] };
+          return await this.executeScripting(target, {
+            func: DISPATCH_DRIVER_FUNC,
+            args: [act, data, DRIVER_VERSION],
+          });
+        }
+        throw err;
+      }
+    };
+
+    let results = (await invoke(target, action, payload)) || [];
+    const needingInstall = results.filter((r) => r?.result?.__needInstall === true);
+
+    if (needingInstall.length > 0) {
+      const installFrameIds = needingInstall
+        .map((r) => r.frameId)
+        .filter((id) => typeof id === "number");
+      let installTarget =
+        installFrameIds.length > 0 ? { tabId, frameIds: installFrameIds } : target;
+      try {
+        await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
+      } catch (err) {
+        if (canFallbackToTop(installTarget)) {
+          usedAllFrames = false;
+          installTarget = { tabId, frameIds: [0] };
+          await this.executeScripting(installTarget, { files: [DOM_DRIVER_FILE] });
+        } else {
+          throw err;
+        }
+      }
+      const rerunPayload =
+        action === "snapshot" && !usedAllFrames
+          ? { ...payload, traverseSameOriginIframes: true }
+          : payload;
+      const rerunResults = (await invoke(installTarget, action, rerunPayload)) || [];
+      const rerunByFrame = new Map(rerunResults.map((r) => [r?.frameId ?? 0, r]));
+      results = results.map((r) => {
+        const fid = r?.frameId ?? 0;
+        return r?.result?.__needInstall && rerunByFrame.has(fid) ? rerunByFrame.get(fid) : r;
+      });
+    }
+
+    const normalized = results
+      .filter((r) => r && r.result != null && r.result.__needInstall !== true)
+      .map((r) => ({ frameId: typeof r.frameId === "number" ? r.frameId : 0, result: r.result }))
+      .sort((a, b) => (a.frameId === 0 ? -1 : b.frameId === 0 ? 1 : a.frameId - b.frameId));
+
+    return { frames: normalized, usedAllFrames };
+  }
+
+  async findTargetFrame(tabId, query) {
+    if (query.ref) {
+      const mapped = this.tabRefs.get(tabId)?.get(query.ref);
+      if (mapped) return { frameId: mapped.frameId, localRef: mapped.localRef };
+    }
+    const { frames } = await this.execDriver(tabId, "probe", query, { allFrames: true });
+    const hit = frames.find((f) => f.result?.found === true);
+    if (hit) return { frameId: hit.frameId, localRef: query.ref };
+    return null;
   }
 
   async resolveTab(tabId) {
@@ -299,12 +664,18 @@ export class BrowserController {
     );
   }
 
-  async waitForLoad(tabId, timeoutMs = 10_000) {
+  async waitForLoad(tabId, timeoutMs = 10_000, expectedUrl = "") {
+    const expectNavigated = /^https?:\/\//i.test(String(expectedUrl || ""));
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (tab.status === "complete") return tab;
+        const currentUrl = String(tab.url || "");
+        const stillInitialBlank =
+          expectNavigated &&
+          (!currentUrl || currentUrl === "about:blank") &&
+          Boolean(tab.pendingUrl);
+        if (tab.status === "complete" && !stillInitialBlank) return tab;
       } catch {
         return null;
       }
@@ -314,6 +685,938 @@ export class BrowserController {
       return await chrome.tabs.get(tabId);
     } catch {
       return null;
+    }
+  }
+
+  async runSnapshot(tab, args) {
+    const maxChars = Math.min(Math.max(Number(args.maxChars) || 12000, 1000), 50000);
+    if (this.hasScripting()) {
+      try {
+        const { frames, usedAllFrames } = await this.execDriver(
+          tab.id,
+          "snapshot",
+          {
+            maxChars,
+            maxElements: 200,
+            traverseSameOriginIframes: false,
+            includeBlankIframes: true,
+          },
+          { allFrames: true },
+        );
+
+        // If allFrames fell back to top frame only, re-run snapshot allowing same-origin iframe traversal.
+        let frameSnapshots = frames;
+        if (!usedAllFrames && frames.length === 1 && frames[0].frameId === 0) {
+          const retry = await this.execDriver(
+            tab.id,
+            "snapshot",
+            {
+              maxChars,
+              maxElements: 200,
+              traverseSameOriginIframes: true,
+              includeBlankIframes: true,
+            },
+            { frameIds: [0] },
+          );
+          if (retry.frames.length) frameSnapshots = retry.frames;
+        }
+
+        if (frameSnapshots.length > 0) {
+          const top = frameSnapshots.find((f) => f.frameId === 0) || frameSnapshots[0];
+          const refMap = new Map();
+          const elements = [];
+          const textParts = [];
+          let globalIdx = 0;
+
+          for (const frame of frameSnapshots) {
+            const snap = frame.result;
+            if (!snap) continue;
+            // Skip about:blank / about:srcdoc subframes because their parent frame already walked them.
+            const frameUrlLower = String(snap.url || "").toLowerCase();
+            if (frame.frameId !== 0 && (frameUrlLower === "about:blank" || frameUrlLower === "about:srcdoc")) {
+              continue;
+            }
+            if (snap.text) {
+              textParts.push(frame.frameId === 0 ? snap.text : `[frame ${frame.frameId}: ${snap.url || "subframe"}]\n${snap.text}`);
+            }
+            for (const el of snap.elements || []) {
+              if (elements.length >= 250) break;
+              const globalRef = "e" + ++globalIdx;
+              refMap.set(globalRef, {
+                frameId: frame.frameId,
+                localRef: el.ref,
+                tag: el.tag,
+                type: el.type || "",
+                role: el.role || "",
+              });
+              const out = { ...el, ref: globalRef };
+              if (frame.frameId !== 0) {
+                out.frameId = frame.frameId;
+                if (snap.url && snap.url !== top.result?.url) out.frameUrl = snap.url.slice(0, 200);
+              }
+              elements.push(out);
+            }
+          }
+
+          this.tabRefs.set(tab.id, refMap);
+          const combinedText = textParts.join("\n\n").trim();
+          return {
+            tabId: tab.id,
+            url: top.result?.url || tab.url || "",
+            title: top.result?.title || tab.title || "",
+            viewport: top.result?.viewport || { width: 0, height: 0, scrollX: 0, scrollY: 0 },
+            text: combinedText.slice(0, maxChars),
+            truncated: combinedText.length > maxChars || Boolean(top.result?.truncated),
+            elements,
+            ...(frameSnapshots.length > 1 && { frames: frameSnapshots.length }),
+          };
+        }
+      } catch {
+        // Fall through to ephemeral CDP fallback only when scripting fails and tab is not secret-bearing.
+      }
+    }
+
+    await this.assertNotSecretBearing(tab);
+    const snap = await this.evaluateCdp(tab.id, CDP_SNAPSHOT_EXPR(maxChars), false, "page snapshot");
+    this.tabRefs.delete(tab.id);
+    return { tabId: tab.id, ...(snap || {}) };
+  }
+
+  async runScreenshot(tab, args) {
+    const quality = Math.min(Math.max(Number(args.quality) || 70, 20), 90);
+    const targetTabId = tab.id;
+    const targetWindowId = tab.windowId;
+    const expectedUrl = tab.url || tab.pendingUrl || "";
+    const expectedOrigin = urlOrigin(expectedUrl);
+    let b64 = null;
+    let verifiedTab = tab;
+
+    const assertTargetTabStable = async (phase) => {
+      let activeAfter;
+      let currentTab;
+      try {
+        [activeAfter] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
+        currentTab = await chrome.tabs.get(targetTabId);
+      } catch {
+        throw screenshotAbortedError(
+          `Screenshot discarded: could not verify target tab ${targetTabId} in window ${targetWindowId} ${phase}.`,
+        );
+      }
+      if (!activeAfter || activeAfter.id !== targetTabId) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: active tab in window ${targetWindowId} changed away from target tab ${targetTabId} ${phase}.`,
+        );
+      }
+      if (!currentTab || currentTab.windowId !== targetWindowId || currentTab.active === false) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: target tab ${targetTabId} is no longer active in window ${targetWindowId} ${phase}.`,
+        );
+      }
+      const currentUrl = currentTab.url || currentTab.pendingUrl || "";
+      const pendingMismatch =
+        typeof currentTab.pendingUrl === "string" &&
+        currentTab.pendingUrl.length > 0 &&
+        currentTab.pendingUrl !== expectedUrl;
+      if (pendingMismatch || currentUrl !== expectedUrl || urlOrigin(currentUrl) !== expectedOrigin) {
+        throw screenshotAbortedError(
+          `Screenshot discarded: target tab ${targetTabId} URL or origin changed ${phase}.`,
+        );
+      }
+      return currentTab;
+    };
+
+    if (args.fullPage === true) {
+      const shot = await this.cdp(
+        targetTabId,
+        "Page.captureScreenshot",
+        { format: "jpeg", quality, captureBeyondViewport: true },
+        "full-page screenshot (try fullPage: false for a viewport screenshot without the debugger)",
+      );
+      b64 = shot?.data || null;
+    } else if (typeof chrome.tabs?.captureVisibleTab === "function") {
+      let prevActiveId = null;
+      let sawInterference = false;
+      try {
+        let preTab;
+        try {
+          preTab = await chrome.tabs.get(targetTabId);
+        } catch {
+          throw screenshotAbortedError(
+            `Screenshot discarded: target tab ${targetTabId} is no longer available before capture.`,
+          );
+        }
+        const preUrl = preTab.url || preTab.pendingUrl || "";
+        const prePendingMismatch =
+          typeof preTab.pendingUrl === "string" &&
+          preTab.pendingUrl.length > 0 &&
+          preTab.pendingUrl !== expectedUrl;
+        if (
+          preTab.windowId !== targetWindowId ||
+          prePendingMismatch ||
+          preUrl !== expectedUrl ||
+          urlOrigin(preUrl) !== expectedOrigin
+        ) {
+          throw screenshotAbortedError(
+            `Screenshot discarded: target tab ${targetTabId} changed window or URL before capture.`,
+          );
+        }
+
+        let latestPreTab = preTab;
+        const [activeBefore] = await chrome.tabs.query({ active: true, windowId: targetWindowId });
+        if (!activeBefore || activeBefore.id !== targetTabId) {
+          if (activeBefore && activeBefore.id !== targetTabId) prevActiveId = activeBefore.id;
+          await chrome.tabs.update(targetTabId, { active: true });
+          await sleep(80);
+          latestPreTab = await assertTargetTabStable("before capture");
+        }
+
+        const initialStatus = latestPreTab.status;
+        const MAX_CAPTURE_ATTEMPTS = 2;
+        const addListener = (event, fn) => {
+          if (typeof event?.addListener === "function") event.addListener(fn);
+        };
+        const removeListener = (event, fn) => {
+          if (typeof event?.removeListener === "function") event.removeListener(fn);
+        };
+
+        for (let attempt = 0; attempt < MAX_CAPTURE_ATTEMPTS; attempt++) {
+          let generation = 0;
+          const startGeneration = generation;
+          let dirtyReason = null;
+          let canRetry = true;
+          let targetWindowFocused = null;
+
+          const markDirty = (reason, retryable = true) => {
+            generation += 1;
+            if (!dirtyReason || (!retryable && canRetry)) {
+              dirtyReason = reason;
+            }
+            if (!retryable) canRetry = false;
+          };
+
+          const onActivated = (activeInfo) => {
+            if (!activeInfo || activeInfo.windowId === targetWindowId || activeInfo.tabId === targetTabId) {
+              markDirty(`active tab in window ${targetWindowId} changed during capture`, true);
+            }
+          };
+
+          const onFocusChanged = (windowId) => {
+            const focusedNow = windowId === targetWindowId;
+            if (targetWindowFocused === null || targetWindowFocused || focusedNow) {
+              markDirty(`window ${targetWindowId} focus changed during capture`, true);
+            }
+            targetWindowFocused = focusedNow;
+          };
+
+          const onUpdated = (tabId, changeInfo, updatedTab) => {
+            if (tabId !== targetTabId) return;
+            if (updatedTab?.windowId !== undefined && updatedTab.windowId !== targetWindowId) {
+              markDirty(`target tab ${targetTabId} moved out of window ${targetWindowId} during capture`, false);
+              return;
+            }
+            if (typeof changeInfo?.url === "string") {
+              markDirty(`target tab ${targetTabId} URL changed during capture`, false);
+              return;
+            }
+            if (changeInfo?.status === "loading") {
+              markDirty(`target tab ${targetTabId} started navigating during capture`, false);
+              return;
+            }
+            if (changeInfo?.status === "complete") {
+              markDirty(
+                `target tab ${targetTabId} finished navigating during capture`,
+                initialStatus !== "complete",
+              );
+            }
+          };
+
+          const onDetached = (tabId) => {
+            if (tabId === targetTabId) {
+              markDirty(`target tab ${targetTabId} was detached from window ${targetWindowId} during capture`, false);
+            }
+          };
+
+          const onRemoved = (tabId) => {
+            if (tabId === targetTabId) {
+              markDirty(`target tab ${targetTabId} was closed during capture`, false);
+            }
+          };
+
+          addListener(chrome.tabs?.onActivated, onActivated);
+          addListener(chrome.windows?.onFocusChanged, onFocusChanged);
+          addListener(chrome.tabs?.onUpdated, onUpdated);
+          addListener(chrome.tabs?.onDetached, onDetached);
+          addListener(chrome.tabs?.onRemoved, onRemoved);
+
+          let dataUrl = null;
+          try {
+            if (typeof chrome.windows?.get === "function") {
+              try {
+                const win = await chrome.windows.get(targetWindowId);
+                if (generation === startGeneration && typeof win?.focused === "boolean") {
+                  targetWindowFocused = win.focused;
+                }
+              } catch {}
+            }
+
+            await assertTargetTabStable("before capture");
+            if (generation !== startGeneration) {
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            try {
+              dataUrl = await chrome.tabs.captureVisibleTab(targetWindowId, { format: "jpeg", quality });
+            } catch (capErr) {
+              if (generation !== startGeneration) {
+                sawInterference = true;
+                if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+                throw screenshotAbortedError(
+                  `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+                );
+              }
+              throw capErr;
+            }
+
+            if (generation !== startGeneration) {
+              // Explicitly discard captured image data whenever a tab/window/navigation event arrived.
+              dataUrl = null;
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            try {
+              verifiedTab = await assertTargetTabStable("during capture");
+            } catch (verifyErr) {
+              dataUrl = null;
+              throw verifyErr;
+            }
+
+            if (generation !== startGeneration) {
+              dataUrl = null;
+              sawInterference = true;
+              if (canRetry && attempt + 1 < MAX_CAPTURE_ATTEMPTS) continue;
+              throw screenshotAbortedError(
+                `Screenshot discarded: ${dirtyReason || `active tab in window ${targetWindowId} changed during capture`}.`,
+              );
+            }
+
+            b64 = stripDataUrlPrefix(dataUrl);
+            break;
+          } finally {
+            removeListener(chrome.tabs?.onActivated, onActivated);
+            removeListener(chrome.windows?.onFocusChanged, onFocusChanged);
+            removeListener(chrome.tabs?.onUpdated, onUpdated);
+            removeListener(chrome.tabs?.onDetached, onDetached);
+            removeListener(chrome.tabs?.onRemoved, onRemoved);
+          }
+        }
+      } catch (err) {
+        if (err?.__botkinsScreenshotAborted) throw err;
+        await assertTargetTabStable("during capture");
+        // Fall back to ephemeral CDP viewport capture only if captureVisibleTab fails while target tab is still active and unchanged.
+        const shot = await this.cdp(targetTabId, "Page.captureScreenshot", { format: "jpeg", quality }, "viewport screenshot fallback");
+        b64 = shot?.data || null;
+      } finally {
+        if (prevActiveId != null && !sawInterference) {
+          const [activeNow] = await chrome.tabs.query({ active: true, windowId: targetWindowId }).catch(() => []);
+          if (!activeNow || activeNow.id === targetTabId) {
+            await chrome.tabs.update(prevActiveId, { active: true }).catch(() => {});
+          }
+        }
+      }
+    } else {
+      const shot = await this.cdp(targetTabId, "Page.captureScreenshot", { format: "jpeg", quality }, "screenshot");
+      b64 = shot?.data || null;
+    }
+
+    if (!b64) throw new Error("Screenshot capture returned no image data.");
+    const path = await this.uploadScreenshot(b64, `browser-tab-${targetTabId}.jpg`, "image/jpeg");
+    return {
+      tabId: targetTabId,
+      url: verifiedTab.url || tab.url || "",
+      title: verifiedTab.title || tab.title || "",
+      format: "jpeg",
+      path,
+    };
+  }
+
+  async clickViaCdp(tab, args, hintCoords = null) {
+    return await this.withDebugger(
+      tab.id,
+      async (send) => {
+        let x = Number.isFinite(hintCoords?.x) ? hintCoords.x : Number(args.x);
+        let y = Number.isFinite(hintCoords?.y) ? hintCoords.y : Number(args.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          const evalRes = await send("Runtime.evaluate", {
+            expression: CDP_FIND_ELEMENT_EXPR(args),
+            returnByValue: true,
+            awaitPromise: false,
+            userGesture: true,
+          });
+          const found = evalRes?.result?.value;
+          if (!found) throw new Error("Element not found for click.");
+          x = found.x;
+          y = found.y;
+        }
+        const clicks = args.doubleClick ? 2 : 1;
+        await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+        for (let i = 1; i <= clicks; i++) {
+          await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: i });
+          await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: i });
+        }
+        await sleep(150);
+        const after = await chrome.tabs.get(tab.id).catch(() => tab);
+        return { clicked: true, tabId: tab.id, x: Math.round(x), y: Math.round(y), url: after.url || "", title: after.title || "" };
+      },
+      "trusted click fallback",
+    );
+  }
+
+  async runClick(tab, args) {
+    if (this.hasScripting()) {
+      try {
+        let domRes = null;
+        if (args.ref) {
+          const mapped = this.tabRefs.get(tab.id)?.get(args.ref);
+          if (mapped) {
+            const { frames } = await this.execDriver(
+              tab.id,
+              "click",
+              { ref: mapped.localRef, doubleClick: Boolean(args.doubleClick) },
+              { frameIds: [mapped.frameId] },
+            );
+            domRes = frames[0]?.result || null;
+          } else {
+            const hit = await this.findTargetFrame(tab.id, { ref: args.ref });
+            if (hit) {
+              const { frames } = await this.execDriver(
+                tab.id,
+                "click",
+                { ref: hit.localRef, doubleClick: Boolean(args.doubleClick) },
+                { frameIds: [hit.frameId] },
+              );
+              domRes = frames[0]?.result || null;
+            }
+          }
+        } else if (args.selector || args.text) {
+          const payload = { selector: args.selector, text: args.text, doubleClick: Boolean(args.doubleClick) };
+          const topRun = await this.execDriver(tab.id, "click", payload, { frameIds: [0] });
+          domRes = topRun.frames[0]?.result || null;
+          if (!domRes?.ok && !domRes?.found && !domRes?.needsCdp) {
+            const hit = await this.findTargetFrame(tab.id, { selector: args.selector, text: args.text });
+            if (hit && hit.frameId !== 0) {
+              const subRun = await this.execDriver(tab.id, "click", payload, { frameIds: [hit.frameId] });
+              domRes = subRun.frames[0]?.result || domRes;
+            }
+          }
+        } else if (Number.isFinite(Number(args.x)) && Number.isFinite(Number(args.y))) {
+          const topRun = await this.execDriver(
+            tab.id,
+            "click",
+            { x: Number(args.x), y: Number(args.y), doubleClick: Boolean(args.doubleClick) },
+            { frameIds: [0] },
+          );
+          domRes = topRun.frames[0]?.result || null;
+        } else {
+          throw new Error("Provide ref, selector, text, or x/y coordinates to click.");
+        }
+
+        if (domRes?.ok) {
+          await sleep(150);
+          const after = await chrome.tabs.get(tab.id).catch(() => tab);
+          return {
+            clicked: true,
+            tabId: tab.id,
+            x: domRes.x,
+            y: domRes.y,
+            url: after.url || "",
+            title: after.title || "",
+          };
+        }
+        if (domRes && !domRes.needsCdp) {
+          throw new Error(domRes.error || "Element not found for click.");
+        }
+        if (domRes?.needsCdp) {
+          return await this.clickViaCdp(tab, args, Number.isFinite(domRes.x) && Number.isFinite(domRes.y) ? { x: domRes.x, y: domRes.y } : null);
+        }
+      } catch (err) {
+        // Re-throw clear DOM lookup errors instead of falling back to CDP unnecessarily.
+        if (err instanceof Error && /not found|provide ref|extension's iframe/i.test(err.message)) {
+          throw err;
+        }
+        // Otherwise fall back to ephemeral CDP click.
+      }
+    }
+
+    return await this.clickViaCdp(tab, args);
+  }
+
+  async typeViaCdp(tab, args) {
+    const text = String(args.text ?? "");
+    return await this.withDebugger(
+      tab.id,
+      async (send) => {
+        if (args.ref || args.selector) {
+          const evalRes = await send("Runtime.evaluate", {
+            expression: CDP_FIND_ELEMENT_EXPR(args),
+            returnByValue: true,
+            awaitPromise: false,
+            userGesture: true,
+          });
+          const found = evalRes?.result?.value;
+          if (!found) throw new Error("Input element not found.");
+          await send("Input.dispatchMouseEvent", { type: "mousePressed", x: found.x, y: found.y, button: "left", clickCount: 1 });
+          await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: found.x, y: found.y, button: "left", clickCount: 1 });
+        }
+        if (args.clear) {
+          await send("Runtime.evaluate", {
+            expression: `(() => {
+              const el = document.activeElement;
+              if (!el) return;
+              if ('value' in el) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+              else if (el.isContentEditable) { el.textContent = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+            })()`,
+            returnByValue: true,
+            awaitPromise: false,
+          });
+        }
+        if (text) {
+          await send("Input.insertText", { text });
+        }
+        if (args.submit) {
+          const enter = parseKeyCombo("Enter");
+          await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...enter });
+          await send("Input.dispatchKeyEvent", { type: "char", text: "\r" });
+          await send("Input.dispatchKeyEvent", { type: "keyUp", ...enter });
+        }
+        return { typed: true, tabId: tab.id, length: text.length };
+      },
+      "trusted typing fallback",
+    );
+  }
+
+  async runType(tab, args) {
+    const text = String(args.text ?? "");
+    if (this.hasScripting()) {
+      try {
+        const basePayload = {
+          text,
+          clear: Boolean(args.clear),
+          submit: Boolean(args.submit),
+        };
+        let domRes = null;
+
+        if (args.ref) {
+          const mapped = this.tabRefs.get(tab.id)?.get(args.ref);
+          if (mapped) {
+            const { frames } = await this.execDriver(tab.id, "type", { ...basePayload, ref: mapped.localRef }, { frameIds: [mapped.frameId] });
+            domRes = frames[0]?.result || null;
+          } else {
+            const hit = await this.findTargetFrame(tab.id, { ref: args.ref });
+            if (hit) {
+              const { frames } = await this.execDriver(tab.id, "type", { ...basePayload, ref: hit.localRef }, { frameIds: [hit.frameId] });
+              domRes = frames[0]?.result || null;
+            }
+          }
+        } else if (args.selector) {
+          const topRun = await this.execDriver(tab.id, "type", { ...basePayload, selector: args.selector }, { frameIds: [0] });
+          domRes = topRun.frames[0]?.result || null;
+          if (!domRes?.ok && !domRes?.found && !domRes?.needsCdp) {
+            const hit = await this.findTargetFrame(tab.id, { selector: args.selector });
+            if (hit && hit.frameId !== 0) {
+              const subRun = await this.execDriver(tab.id, "type", { ...basePayload, selector: args.selector }, { frameIds: [hit.frameId] });
+              domRes = subRun.frames[0]?.result || domRes;
+            }
+          }
+        } else {
+          const topRun = await this.execDriver(tab.id, "type", basePayload, { frameIds: [0] });
+          domRes = topRun.frames[0]?.result || null;
+          if (!domRes?.ok && !domRes?.found && !domRes?.needsCdp) {
+            const hit = await this.findTargetFrame(tab.id, { focused: true });
+            if (hit && hit.frameId !== 0) {
+              const subRun = await this.execDriver(tab.id, "type", basePayload, { frameIds: [hit.frameId] });
+              domRes = subRun.frames[0]?.result || domRes;
+            }
+          }
+        }
+
+        if (domRes?.ok) {
+          return { typed: true, tabId: tab.id, length: text.length };
+        }
+        if (domRes?.secretProtected) {
+          throw new Error(domRes.error || "This input holds a securely filled value. Submit the form or navigate first.");
+        }
+        if (domRes?.reason === "file-input") {
+          throw new Error(domRes.error || "File inputs cannot be filled by typing; use browser_cdp with DOM.setFileInputFiles.");
+        }
+        if (domRes && !domRes.needsCdp) {
+          throw new Error(domRes.error || "Input element not found.");
+        }
+      } catch (err) {
+        if (err instanceof Error && /not found|disabled|file input|option not found|no focused|securely filled value/i.test(err.message)) {
+          throw err;
+        }
+        // Otherwise fall back to ephemeral CDP typing unless tab is secret-bearing.
+      }
+    }
+
+    await this.assertNotSecretBearing(tab);
+    return await this.typeViaCdp(tab, args);
+  }
+
+  async runSelect(tab, args) {
+    const payload = {
+      ...(args.value != null && { value: args.value }),
+      ...(args.text != null && { text: args.text }),
+      ...(args.label != null && { label: args.label }),
+      ...(args.index != null && { index: args.index }),
+    };
+
+    let domRes = null;
+    if (args.ref) {
+      const mapped = this.tabRefs.get(tab.id)?.get(args.ref);
+      if (mapped) {
+        const { frames } = await this.execDriver(tab.id, "select", { ...payload, ref: mapped.localRef }, { frameIds: [mapped.frameId] });
+        domRes = frames[0]?.result || null;
+      } else {
+        const hit = await this.findTargetFrame(tab.id, { ref: args.ref });
+        if (hit) {
+          const { frames } = await this.execDriver(tab.id, "select", { ...payload, ref: hit.localRef }, { frameIds: [hit.frameId] });
+          domRes = frames[0]?.result || null;
+        }
+      }
+    } else if (args.selector) {
+      const topRun = await this.execDriver(tab.id, "select", { ...payload, selector: args.selector }, { frameIds: [0] });
+      domRes = topRun.frames[0]?.result || null;
+      if (!domRes?.ok && !domRes?.found) {
+        const hit = await this.findTargetFrame(tab.id, { selector: args.selector });
+        if (hit && hit.frameId !== 0) {
+          const subRun = await this.execDriver(tab.id, "select", { ...payload, selector: args.selector }, { frameIds: [hit.frameId] });
+          domRes = subRun.frames[0]?.result || domRes;
+        }
+      }
+    } else {
+      throw new Error("Provide ref or selector for select.");
+    }
+
+    if (!domRes?.ok) {
+      throw new Error(domRes?.error || "Select element not found.");
+    }
+    return { selected: true, tabId: tab.id, value: domRes.value, text: domRes.text };
+  }
+
+  async runPress(tab, args) {
+    const spec = parseKeyCombo(args.key);
+    if (this.hasScripting()) {
+      try {
+        const { frames } = await this.execDriver(
+          tab.id,
+          "press",
+          { ...spec, rawKey: String(args.key) },
+          { frameIds: [0] },
+        );
+        const domRes = frames[0]?.result;
+        if (domRes?.ok) {
+          return { pressed: String(args.key), tabId: tab.id };
+        }
+      } catch {
+        // Fall through to ephemeral CDP Input.dispatchKeyEvent fallback.
+      }
+    }
+
+    await this.withDebugger(
+      tab.id,
+      async (send) => {
+        await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...spec });
+        if (spec.text) {
+          await send("Input.dispatchKeyEvent", { type: "char", text: spec.text, modifiers: spec.modifiers });
+        }
+        await send("Input.dispatchKeyEvent", { type: "keyUp", ...spec });
+      },
+      "keyboard press fallback",
+    );
+    return { pressed: String(args.key), tabId: tab.id };
+  }
+
+  async runScroll(tab, args) {
+    const dir = args.direction || "down";
+    const amount = Math.min(Math.max(Number(args.amount) || 600, 50), 10000);
+    if (this.hasScripting()) {
+      try {
+        const mapped = args.ref ? this.tabRefs.get(tab.id)?.get(args.ref) : null;
+        const frameIds = mapped ? [mapped.frameId] : [0];
+        const { frames } = await this.execDriver(
+          tab.id,
+          "scroll",
+          {
+            direction: dir,
+            amount,
+            ...(args.selector && { selector: args.selector }),
+            ...(mapped ? { ref: mapped.localRef } : args.ref ? { ref: args.ref } : {}),
+          },
+          { frameIds },
+        );
+        const pos = frames[0]?.result;
+        if (pos?.ok) {
+          return { tabId: tab.id, scrollX: pos.scrollX, scrollY: pos.scrollY, scrollHeight: pos.scrollHeight };
+        }
+        if (pos && pos.found === false) {
+          throw new Error(pos.error || "Scroll target element not found.");
+        }
+      } catch (err) {
+        if (err instanceof Error && /not found/i.test(err.message)) throw err;
+        // Fall through to CDP fallback only if scripting fails.
+      }
+    }
+
+    const pos = await this.evaluateCdp(
+      tab.id,
+      `(() => {
+        const target = ${JSON.stringify(args.selector || "")} ? document.querySelector(${JSON.stringify(args.selector || "")}) : null;
+        const scroller = target || document.scrollingElement || document.documentElement;
+        if (${JSON.stringify(dir)} === 'top') scroller.scrollTop = 0;
+        else if (${JSON.stringify(dir)} === 'bottom') scroller.scrollTop = scroller.scrollHeight;
+        else if (${JSON.stringify(dir)} === 'up') scroller.scrollBy(0, -${amount});
+        else scroller.scrollBy(0, ${amount});
+        return { scrollX: Math.round(scroller.scrollLeft || window.scrollX), scrollY: Math.round(scroller.scrollTop || window.scrollY), scrollHeight: scroller.scrollHeight };
+      })()`,
+      false,
+      "scroll fallback",
+    );
+    return { tabId: tab.id, ...(pos || {}) };
+  }
+
+  async runWait(tab, args) {
+    const hasCondition = Boolean(args.selector || args.text || args.urlContains);
+    if (!hasCondition) {
+      const ms = Math.min(Math.max(Number(args.ms) || 1000, 50), 15_000);
+      await sleep(ms);
+      return { waitedMs: ms, tabId: tab.id };
+    }
+    const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 10_000, 200), 25_000);
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (args.urlContains) {
+        const current = await chrome.tabs.get(tab.id);
+        if ((current.url || "").includes(args.urlContains)) {
+          return { matched: "url", tabId: tab.id, url: current.url };
+        }
+      }
+      if (args.selector || args.text) {
+        let matched = false;
+        if (this.hasScripting()) {
+          try {
+            const { frames } = await this.execDriver(
+              tab.id,
+              "checkWait",
+              { selector: args.selector || "", text: args.text || "" },
+              { allFrames: true },
+            );
+            matched = frames.some((f) => f.result?.matched === true);
+          } catch {
+            matched = Boolean(
+              await this.evaluateCdp(
+                tab.id,
+                `(() => {
+                  const sel = ${JSON.stringify(args.selector || "")};
+                  const txt = ${JSON.stringify(args.text || "")};
+                  if (sel && !document.querySelector(sel)) return false;
+                  if (txt && !(document.body?.innerText || '').includes(txt)) return false;
+                  return true;
+                })()`,
+                false,
+                "wait condition fallback",
+              ),
+            );
+          }
+        } else {
+          matched = Boolean(
+            await this.evaluateCdp(
+              tab.id,
+              `(() => {
+                const sel = ${JSON.stringify(args.selector || "")};
+                const txt = ${JSON.stringify(args.text || "")};
+                if (sel && !document.querySelector(sel)) return false;
+                if (txt && !(document.body?.innerText || '').includes(txt)) return false;
+                return true;
+              })()`,
+              false,
+              "wait condition",
+            ),
+          );
+        }
+        if (matched) return { matched: args.selector ? "selector" : "text", tabId: tab.id };
+      }
+      await sleep(250);
+    }
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for page condition.`);
+  }
+
+  async runEval(tab, args) {
+    await this.assertNotSecretBearing(tab);
+    const expression = String(args.expression || "");
+    const awaitPromise = args.awaitPromise !== false;
+
+    if (this.hasScripting()) {
+      let cspBlocked = false;
+      let scriptingFailed = false;
+      try {
+        const results = await this.executeScripting(
+          { tabId: tab.id },
+          {
+            world: "MAIN",
+            func: EVAL_MAIN_WORLD_FUNC,
+            args: [expression, awaitPromise],
+          },
+        );
+        const res = results?.[0]?.result;
+        if (res?.ok === true) {
+          return { tabId: tab.id, result: res.value ?? null };
+        }
+        if (res?.ok === false && res.cspBlocked) {
+          cspBlocked = true;
+        } else if (res?.ok === false) {
+          throw new Error(res.error || "Script evaluation failed");
+        } else {
+          scriptingFailed = true;
+        }
+      } catch (err) {
+        if (!cspBlocked && !scriptingFailed) {
+          // If it's a normal error thrown from res.ok === false above, rethrow directly.
+          if (err instanceof Error && !/scripting|executeScript|Cannot access|world/i.test(err.message)) {
+            throw err;
+          }
+          scriptingFailed = true;
+        }
+      }
+
+      if (cspBlocked || scriptingFailed) {
+        const value = await this.evaluateCdp(
+          tab.id,
+          expression,
+          awaitPromise,
+          cspBlocked ? "JavaScript evaluation (page CSP blocked MAIN-world eval)" : "JavaScript evaluation fallback",
+        );
+        return { tabId: tab.id, result: value ?? null };
+      }
+    }
+
+    const value = await this.evaluateCdp(tab.id, expression, awaitPromise, "JavaScript evaluation");
+    return { tabId: tab.id, result: value ?? null };
+  }
+
+  // Dedicated secure-fill handler invoked ONLY for internal `secure.fill` asks from the
+  // Botkins host (never exposed via `run()` / bot-callable `browser_*` tools).
+  // Re-checks tab origin, targets top frame + same-origin frames only, never uses CDP/eval/type,
+  // never echoes values, never logs or persists values, and zeroes all field values after use.
+  async runSecureFill(args = {}) {
+    const rawFields = Array.isArray(args?.fields) ? args.fields : [];
+    const fields = [];
+    const allowedKeys = new Set();
+    try {
+      const settings = await this.getSettings();
+      if (settings.enabled === false) {
+        throw new Error("Botkins Browser Control is paused in the extension popup.");
+      }
+      const tabId = Number(args?.tabId);
+      if (!Number.isInteger(tabId) || tabId < 0) {
+        throw new Error("Secure fill requires a valid target tabId.");
+      }
+      const approvedOrigin = urlOrigin(String(args?.origin || "").trim());
+      if (!approvedOrigin || !/^https?:\/\//i.test(approvedOrigin)) {
+        throw new Error("Secure fill requires a valid approved origin.");
+      }
+      if (rawFields.length === 0) {
+        throw new Error("Secure fill requires at least one field.");
+      }
+      for (const item of rawFields) {
+        const key = String(item?.key || "").trim();
+        const kind = ["text", "password", "code", "secret"].includes(item?.kind) ? item.kind : "text";
+        const value = typeof item?.value === "string" ? item.value : "";
+        if (!key || !value) {
+          throw new Error("Each secure fill field requires a key and value.");
+        }
+        allowedKeys.add(key);
+        fields.push({ key, kind, value });
+      }
+
+      const tab = await this.resolveTab(tabId);
+      const currentOrigin = urlOrigin(tab.url || "");
+      const pendingOrigin = tab.pendingUrl ? urlOrigin(tab.pendingUrl) : "";
+      if (currentOrigin !== approvedOrigin || (pendingOrigin && pendingOrigin !== approvedOrigin)) {
+        const err = new Error("Refused secure fill: tab origin does not match the approved origin.");
+        err.secureCode = "origin_mismatch";
+        throw err;
+      }
+
+      if (!this.hasScripting()) {
+        throw new Error("Secure fill requires chrome.scripting and will not fall back to CDP.");
+      }
+
+      // Inject/execute ONLY in top frame (frameIds: [0]) so secret payloads never cross into
+      // cross-origin iframes. The isolated-world driver traverses same-origin iframes directly.
+      const { frames } = await this.execDriver(
+        tab.id,
+        "secureFill",
+        {
+          origin: approvedOrigin,
+          fields,
+          submit: Boolean(args?.submit),
+          allowLocalHttp: args?.allowLocalHttp === true,
+        },
+        { frameIds: [0] },
+      );
+
+      const res = frames[0]?.result;
+      if (!res) {
+        throw new Error("Secure fill could not run on the target tab.");
+      }
+      if (res.ok !== true) {
+        const err = new Error(
+          res.code === "origin_mismatch"
+            ? "Refused secure fill: tab origin does not match the approved origin."
+            : res.code === "password_type_mismatch"
+              ? "Refused secure fill: a password value can only be filled into a password input."
+              : res.code === "type_mismatch"
+                ? "Refused secure fill: target element type does not match the requested field kind."
+                : "Secure fill failed on the target tab.",
+        );
+        if (res.code) err.secureCode = res.code;
+        throw err;
+      }
+
+      const filled = Array.isArray(res.filled) ? res.filled.filter((k) => allowedKeys.has(k)) : [];
+      const missing = Array.isArray(res.missing) ? res.missing.filter((k) => allowedKeys.has(k)) : [];
+      if (filled.length > 0 && res.secretActive !== false) {
+        this.markSecretTab(tab.id, {
+          origin: approvedOrigin,
+          urlNoHash: stripUrlHash(tab.url || ""),
+          navGen: this.tabNavGen.get(tab.id) || 0,
+          docToken: typeof res.docToken === "string" ? res.docToken : "",
+        });
+      }
+      const out = { filled, missing };
+      if (args?.submit) {
+        out.submitted = res.submitted === true;
+        if (res.submitRefused === "cross_site_action" || res.submitRefused === "origin_changed") {
+          out.submitRefused = res.submitRefused;
+        }
+      }
+      return out;
+    } finally {
+      for (const f of fields) f.value = "";
+      fields.length = 0;
+      for (const item of rawFields) {
+        if (item && typeof item === "object") item.value = "";
+      }
+      if (Array.isArray(args?.fields)) args.fields.length = 0;
     }
   }
 
@@ -349,7 +1652,7 @@ export class BrowserController {
         if (settings.mode === "group") {
           await this.ensureTabInGroup(created.id, created.windowId);
         }
-        const settled = await this.waitForLoad(created.id, 8000);
+        const settled = await this.waitForLoad(created.id, 8000, url);
         return {
           tabId: created.id,
           windowId: created.windowId,
@@ -360,10 +1663,14 @@ export class BrowserController {
 
       case "browser_navigate": {
         const tab = await this.resolveTab(args.tabId);
+        const prevUrlNoHash = stripUrlHash(tab.url || "");
+        this.tabRefs.delete(tab.id);
         const action = args.action || (args.url ? "goto" : "reload");
+        let isHashOnlyGoto = false;
         if (action === "goto") {
           const url = String(args.url || "").trim();
           if (!url || !isEligibleUrl(url)) throw new Error("Provide a valid http:// or https:// URL.");
+          isHashOnlyGoto = url.includes("#") && stripUrlHash(url) === prevUrlNoHash;
           await chrome.tabs.update(tab.id, { url });
         } else if (action === "back") {
           await chrome.tabs.goBack(tab.id);
@@ -373,11 +1680,19 @@ export class BrowserController {
           await chrome.tabs.reload(tab.id);
         }
         const settled = await this.waitForLoad(tab.id, 10_000);
+        const nextUrlNoHash = stripUrlHash(settled?.url || "");
+        if (action === "reload" || (action === "goto" && !isHashOnlyGoto) || (nextUrlNoHash && nextUrlNoHash !== prevUrlNoHash)) {
+          this.tabNavGen.set(tab.id, (this.tabNavGen.get(tab.id) || 0) + 1);
+          this.clearSecretTab(tab.id);
+        }
         return { tabId: tab.id, title: settled?.title || "", url: settled?.url || "" };
       }
 
       case "browser_close_tab": {
         const tab = await this.resolveTab(args.tabId);
+        this.tabRefs.delete(tab.id);
+        this.tabNavGen.delete(tab.id);
+        this.clearSecretTab(tab.id);
         await this.detach(tab.id);
         await chrome.tabs.remove(tab.id);
         return { closed: true, tabId: tab.id };
@@ -385,159 +1700,60 @@ export class BrowserController {
 
       case "browser_snapshot": {
         const tab = await this.resolveTab(args.tabId);
-        const snap = await this.evaluate(tab.id, SNAPSHOT_EXPR(args.maxChars), false);
-        return { tabId: tab.id, ...(snap || {}) };
+        return await this.runSnapshot(tab, args);
       }
 
       case "browser_screenshot": {
         const tab = await this.resolveTab(args.tabId);
-        const quality = Math.min(Math.max(Number(args.quality) || 70, 20), 90);
-        const shot = await this.cdp(tab.id, "Page.captureScreenshot", {
-          format: "jpeg",
-          quality,
-          ...(args.fullPage === true && { captureBeyondViewport: true }),
-        });
-        if (!shot?.data) throw new Error("Screenshot capture returned no image data.");
-        const path = await this.uploadScreenshot(shot.data, `browser-tab-${tab.id}.jpg`, "image/jpeg");
-        return {
-          tabId: tab.id,
-          url: tab.url || "",
-          title: tab.title || "",
-          format: "jpeg",
-          path,
-        };
+        return await this.runScreenshot(tab, args);
       }
 
       case "browser_click": {
         const tab = await this.resolveTab(args.tabId);
-        let x = Number(args.x);
-        let y = Number(args.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          const found = await this.evaluate(tab.id, FIND_ELEMENT_EXPR(args), false);
-          if (!found) throw new Error("Element not found for click.");
-          x = found.x;
-          y = found.y;
-        }
-        const clicks = args.doubleClick ? 2 : 1;
-        await this.cdp(tab.id, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-        for (let i = 1; i <= clicks; i++) {
-          await this.cdp(tab.id, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: i });
-          await this.cdp(tab.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: i });
-        }
-        await sleep(150);
-        const after = await chrome.tabs.get(tab.id).catch(() => tab);
-        return { clicked: true, tabId: tab.id, x: Math.round(x), y: Math.round(y), url: after.url || "", title: after.title || "" };
+        return await this.runClick(tab, args);
       }
 
       case "browser_type": {
         const tab = await this.resolveTab(args.tabId);
-        const text = String(args.text ?? "");
-        if (args.ref || args.selector) {
-          const found = await this.evaluate(tab.id, FIND_ELEMENT_EXPR(args), false);
-          if (!found) throw new Error("Input element not found.");
-          await this.cdp(tab.id, "Input.dispatchMouseEvent", { type: "mousePressed", x: found.x, y: found.y, button: "left", clickCount: 1 });
-          await this.cdp(tab.id, "Input.dispatchMouseEvent", { type: "mouseReleased", x: found.x, y: found.y, button: "left", clickCount: 1 });
-        }
-        if (args.clear) {
-          await this.evaluate(
-            tab.id,
-            `(() => {
-              const el = document.activeElement;
-              if (!el) return;
-              if ('value' in el) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
-              else if (el.isContentEditable) { el.textContent = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
-            })()`,
-            false,
-          );
-        }
-        if (text) {
-          await this.cdp(tab.id, "Input.insertText", { text });
-        }
-        if (args.submit) {
-          const enter = parseKeyCombo("Enter");
-          await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...enter });
-          await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "char", text: "\r" });
-          await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", ...enter });
-        }
-        return { typed: true, tabId: tab.id, length: text.length };
+        return await this.runType(tab, args);
+      }
+
+      case "browser_select": {
+        const tab = await this.resolveTab(args.tabId);
+        return await this.runSelect(tab, args);
       }
 
       case "browser_press": {
         const tab = await this.resolveTab(args.tabId);
-        const spec = parseKeyCombo(args.key);
-        await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...spec });
-        if (spec.text) {
-          await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "char", text: spec.text, modifiers: spec.modifiers });
-        }
-        await this.cdp(tab.id, "Input.dispatchKeyEvent", { type: "keyUp", ...spec });
-        return { pressed: String(args.key), tabId: tab.id };
+        return await this.runPress(tab, args);
       }
 
       case "browser_scroll": {
         const tab = await this.resolveTab(args.tabId);
-        const dir = args.direction || "down";
-        const amount = Math.min(Math.max(Number(args.amount) || 600, 50), 10000);
-        const pos = await this.evaluate(
-          tab.id,
-          `(() => {
-            const target = ${JSON.stringify(args.selector || "")} ? document.querySelector(${JSON.stringify(args.selector || "")}) : null;
-            const scroller = target || document.scrollingElement || document.documentElement;
-            if (${JSON.stringify(dir)} === 'top') scroller.scrollTop = 0;
-            else if (${JSON.stringify(dir)} === 'bottom') scroller.scrollTop = scroller.scrollHeight;
-            else if (${JSON.stringify(dir)} === 'up') scroller.scrollBy(0, -${amount});
-            else scroller.scrollBy(0, ${amount});
-            return { scrollX: Math.round(scroller.scrollLeft || window.scrollX), scrollY: Math.round(scroller.scrollTop || window.scrollY), scrollHeight: scroller.scrollHeight };
-          })()`,
-          false,
-        );
-        return { tabId: tab.id, ...(pos || {}) };
+        return await this.runScroll(tab, args);
       }
 
       case "browser_wait": {
         const tab = await this.resolveTab(args.tabId);
-        const hasCondition = Boolean(args.selector || args.text || args.urlContains);
-        if (!hasCondition) {
-          const ms = Math.min(Math.max(Number(args.ms) || 1000, 50), 15_000);
-          await sleep(ms);
-          return { waitedMs: ms, tabId: tab.id };
-        }
-        const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || 10_000, 200), 25_000);
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-          if (args.urlContains) {
-            const current = await chrome.tabs.get(tab.id);
-            if ((current.url || "").includes(args.urlContains)) return { matched: "url", tabId: tab.id, url: current.url };
-          }
-          if (args.selector || args.text) {
-            const ok = await this.evaluate(
-              tab.id,
-              `(() => {
-                const sel = ${JSON.stringify(args.selector || "")};
-                const txt = ${JSON.stringify(args.text || "")};
-                if (sel && !document.querySelector(sel)) return false;
-                if (txt && !(document.body?.innerText || '').includes(txt)) return false;
-                return true;
-              })()`,
-              false,
-            );
-            if (ok) return { matched: args.selector ? "selector" : "text", tabId: tab.id };
-          }
-          await sleep(250);
-        }
-        throw new Error(`Timed out after ${timeoutMs}ms waiting for page condition.`);
+        return await this.runWait(tab, args);
       }
 
       case "browser_eval": {
         const tab = await this.resolveTab(args.tabId);
-        const value = await this.evaluate(tab.id, String(args.expression || ""), args.awaitPromise !== false);
-        return { tabId: tab.id, result: value ?? null };
+        return await this.runEval(tab, args);
       }
 
       case "browser_cdp": {
         const tab = await this.resolveTab(args.tabId);
+        await this.assertNotSecretBearing(tab);
         const method = String(args.method || "").trim();
         if (!method) throw new Error("CDP `method` is required.");
-        const result = await this.cdp(tab.id, method, args.params && typeof args.params === "object" ? args.params : {});
+        const result = await this.cdp(
+          tab.id,
+          method,
+          args.params && typeof args.params === "object" ? args.params : {},
+          `raw CDP command "${method}"`,
+        );
         return { tabId: tab.id, result: result ?? null };
       }
 

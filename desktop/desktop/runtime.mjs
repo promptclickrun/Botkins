@@ -5,7 +5,7 @@
 // headless one in the terminal host (`botkins serve`). A host without something says so with
 // `unavailable`, and the call fails with that sentence instead of a crash.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
@@ -27,7 +27,8 @@ import { PROVIDER_USAGE, ProviderUsage } from "./providerusage.mjs";
 import { ARTIFACTS, SIDE_PANE } from "./sidepane.mjs";
 import { cloneProjectRepository } from "./project-clone.mjs";
 import { PROJECT_ARTIFACTS, PROJECT_ARTIFACT_CALLS } from "./projects.mjs";
-import { MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS } from "./link/methods.mjs";
+import { JOB_CALLS, PROJECT_JOBS } from "./jobs.mjs";
+import { CHANNEL_METHODS, MCP_APP_METHODS, PI_PACKAGE_METHODS, REMOTE_METHODS, WORKFLOW_METHODS } from "./link/methods.mjs";
 import { chunk, fileDetails, openChatPath, publicFile, thumbnail } from "./artifact-files.mjs";
 import { REMOTE_HOSTS } from "./remotehosts.mjs";
 import { FILES, usageFile, wikiExportName, wikiFile } from "./phonefiles.mjs";
@@ -35,18 +36,31 @@ import { FOLDERS, Folders } from "./folders.mjs";
 import { ScreenBrowser } from "./host/form-browser.mjs";
 import { deviceCall } from "./device-call.mjs";
 import { PLUGINS, PLUGIN_STARTS, pluginHandlers } from "./plugins.mjs";
+import { templateForReader } from "./link/template-bundle.mjs";
 import { AGENT_TEMPLATES, MARKET_REFRESH } from "./plugin-catalog.mjs";
 import { COMPOSIO_APPS, composioHandlers } from "./composio.mjs";
 import { MCP_APPS, mcpAppHandlers } from "./mcp-apps.mjs";
+import { CLAUDE_ARTIFACTS_CAPABILITY, CLAUDE_ARTIFACT_METHODS } from "./claude-artifacts.mjs";
 import { performSecureUse } from "./secure-input.mjs";
+import { CredentialGrants } from "./credential-grants.mjs";
 import { releasePage } from "./updates.mjs";
 import { Workspace } from "./workspace.mjs";
 import { liveContextFor } from "./live-context.mjs";
 import { PHONE_PATIENCE_MS, SignIns } from "./terminal/signin.mjs";
+import {
+  buildConversionPlan,
+  inspectLocalWorkspace,
+  listConversionTargets,
+  runConversion,
+  summarizeJob,
+  undoConversion,
+} from "./node-convert.mjs";
+import { remoteNodeControl, remoteNodeStatus } from "./remote-teamwork.mjs";
 import { validateAttachments } from "./canvas.mjs";
 import { wikiPath } from "./wiki.mjs";
 import { pickedSkill, uploadSkill } from "./link/skill-import.mjs";
 import { skillsCatalog } from "./skills-catalog.mjs";
+import { MARKETPLACE_V2, MARKET_V2_METHODS, MarketV2 } from "./catalog-v2.mjs";
 import { MCP_CATALOG_CAPABILITY, MCP_CATALOG_METHODS, mcpCatalog } from "./mcp-catalog.mjs";
 import { zip } from "./zip.mjs";
 import { LinkPreviews } from "./linkpreview.mjs";
@@ -72,6 +86,7 @@ import { CodexVoice } from "./codexvoice.mjs";
 import { SavedCredentials, trialToolDirs } from "./savedcredentials.mjs";
 import { forgetChatPeople, teamHandlers } from "./team-ipc.mjs";
 import { chatSectionHandlers, withOwnerChatSections } from "./chat-sections-ipc.mjs";
+import { phoneSignIns } from "./phone-signin.mjs";
 
 /**
  * How a trial run's Copilot runtime signs in to GitHub without the keychain: with the token in
@@ -122,13 +137,17 @@ const CHAT_TITLE_REGENERATION = "chat-title-regeneration-v1";
 const MARK_CHATS_READ = "mark-chats-read-v1";
 /** One helper or background command of a turn can be stopped alone (`stopHelper`); each item says so with `stoppable`. */
 const STOP_HELPER = "stop-helper-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS];
+/** Event-based Workflows in the Routines area (`workflows-v1`). */
+export const WORKFLOWS = "workflows-v1";
+/** External messaging Channel Hooks (`channels-v1`). */
+export const CHANNELS = "channels-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
  */
 export const linkCapabilities = (methods = REMOTE_METHODS) =>
-  CAPABILITIES.filter((name) => (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")));
+  CAPABILITIES.filter((name) => (name !== "agent-template-bundles-v1" || (methods.has("addBot") && methods.has("agents.template"))) && (name !== "message-reactions-v1" || methods.has("reactToMessage")) && (!["voice-history-v1", "voice-turns-v1"].includes(name) || methods.has("recordVoiceLine")) && (name !== "project-folders-v1" || (methods.has("editProjectFolder") && methods.has("setChatFolder") && methods.has("chatProjectFolder"))) && (name !== "project-clone-v1" || methods.has("cloneProjectRepository")) && (name !== PROJECT_JOBS || JOB_CALLS.every((call) => methods.has(call))) && (name !== "project-mode-v1" || methods.has("updateProject")) && (name !== PROJECT_ARTIFACTS || PROJECT_ARTIFACT_CALLS.every((call) => methods.has(call))) && (name !== SPACES || SPACE_CALLS.every((call) => methods.has(call))) && (name !== MARKET_REFRESH || methods.has("plugins.refresh")) && (name !== "pi-packages-v1" || PI_PACKAGE_METHODS.every((call) => methods.has(call))) && (name !== "pi-packages-remove-v1" || methods.has("piPackages.remove")) && (name !== "skill-upload-v1" || methods.has("skills.upload")) && (name !== "skills-catalog-v1" || ["search", "preview", "install"].every(key => methods.has("skillsCatalog." + key))) && (name !== "skills-featured-v1" || methods.has("skillsCatalog.featured")) && (name !== MARKETPLACE_V2 || MARKET_V2_METHODS.every((call) => methods.has(call))) && (name !== SCRIPT_COMMANDS_CAPABILITY || ["skills.saveScript", "skills.readScript"].every((call) => methods.has(call))) && (name !== MCP_CATALOG_CAPABILITY || MCP_CATALOG_METHODS.every((call) => methods.has(call))) && (name !== MCP_APPS || MCP_APP_METHODS.every((call) => methods.has(call))) && (name !== CLAUDE_ARTIFACTS_CAPABILITY || CLAUDE_ARTIFACT_METHODS.every((call) => methods.has(call))) && (name !== CHAT_TITLE_REGENERATION || methods.has("regenerateChatTitle")) && (name !== MARK_CHATS_READ || methods.has("markChatsRead")) && (name !== STOP_HELPER || methods.has("stopHelper")) && (name !== WORKFLOWS || WORKFLOW_METHODS.every((call) => methods.has(call))) && (name !== CHANNELS || CHANNEL_METHODS.every((call) => methods.has(call))));
 /** The calls of spaces (docs/spaces.md). The capability is named to a device only when the link carries them all. */
 export const SPACE_CALLS = ["read", "create", "rename", "remove", "setProject", "setPanelProject", "newPanel", "ask", "movePanel", "patchState", "note", "removeNote"].map((name) => "spaces." + name);
 
@@ -304,6 +323,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const heldTeam = splitHost ? new HeldCut() : null;
   const loginLookups = splitHost ? new LoginLookups() : null;
   const spaceEvents = splitHost ? spaceEventQueue() : null;
+  const credentialGrants = new CredentialGrants({ dir: dataDir, onChange: () => notify() });
   const told = heldTeam && teamFromCut(heldTeam, (chatId) => workspace.state.chats.find((chat) => chat.id === chatId));
   workspace = new Workspace(dataDir, providers, notify, {
     updates,
@@ -330,11 +350,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
         }
       : () => link?.notifyTargetsContext?.(),
     formBrowser,
-    savedLogins: (chatId, origin) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin),
-    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs the desktop viewer or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
-    secureUse: (plan, values, { signal }) => performSecureUse(plan, values, {
-      signal, fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+    savedLogins: (chatId, origin, options) => loginLookups ? loginLookups.find(chatId, origin) : link.loginNames(chatId, origin, options),
+    credentials: () => link?.credentials ?? null,
+    credentialGrants,
+    settings: () => workspace?.state?.settings ?? {},
+    ...(host.headless && !formBrowser && { pageUnavailable: "Browser form filling needs a connected Botkins browser extension tab, the desktop viewer, or a Linux host with Chromium and an X11 display. See A screen without Docker in the terminal guide." }),
+    secureUse: (plan, values, { signal, fillExtension, fillNative, appFill, settings } = {}) => performSecureUse(plan, values, {
+      signal,
+      fillExtension,
+      fillNative,
+      fillPage: () => formBrowser ? formBrowser.fill(plan, values, signal) : host.window.fillSecurePage(plan, values, signal),
+      appFill,
+      settings: settings ?? workspace?.state?.settings ?? {},
     }),
+    computerUse: {
+      onActivity: (activity, frame) => link?.screen?.noteBotActivity?.(activity, frame),
+      screenAdapter: () => host.screen,
+    },
     ...(keys && {
       vaultKey: keys,
       // Keys an earlier version encrypted into the workspace file are read once, to move them into the vault.
@@ -352,7 +384,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // Tools a bot runs on a paired phone (desktop/phonetools.mjs). The link is made further down.
     phoneTools: () => (link ? { tools: () => link.deviceTools(), call: (name, args, options) => link.callDeviceTool(name, args, options) } : null),
     // Tools a bot runs on a paired Chromium browser extension (desktop/browsertools.mjs).
-    browserTools: () => (link ? { tools: () => link.browserTools(), call: (name, args, options) => link.callBrowserTool(name, args, options) } : null),
+    browserTools: () => (link ? {
+      tools: () => link.browserTools(),
+      call: (name, args, options) => link.callBrowserTool(name, args, options),
+      devices: () => link.browserDevices(),
+      secureFill: (deviceId, payload, options) => link.secureFillBrowser(deviceId, payload, options),
+    } : null),
   });
   // Conversations from builds that shared ~/.copilot keep their history.
   copilot.adoptSessions(workspace.sessionIds());
@@ -384,13 +421,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   });
   // Tokens kept from an earlier start go where the tools read them.
   signIns.restore();
+  const phoneSignIn = phoneSignIns((id) => (id.startsWith("plugin-") ? workspace.plugins : workspace.integrations));
   const openSignIn = (url) => {
     if (new URL(url).protocol !== "https:") throw new Error("That sign-in page can't be opened.");
     return host.shell.openExternal(url);
   };
   const routines = workspace.panels.routines;
   const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null });
+  const savedCredentials = new SavedCredentials({ get: () => link?.credentials ?? null, grants: credentialGrants });
   // A folder a person adds for its skills. A plugin folder goes the plugins' way instead, which
   // copies it and shows what it starts: a plugin has no other way in. It arrives switched on, as
   // an installed plugin does (the owner's rule in desktop/plugins.mjs, NOTES).
@@ -405,6 +443,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   };
   const catalog = skillsCatalog(() => workspace.integrations);
   const apps = mcpCatalog(() => workspace.integrations);
+  // Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs): catalog skills, packs and version 3 templates.
+  const market = new MarketV2({ ws: workspace, skills: catalog, plugins: workspace.plugins });
   const handlers = {
     pickSkillUpload: async () => {
       const paths = await host.dialogs.open({title: "Upload skill", properties: ["openFile"], filters: [{ name: "Skills", extensions: ["md", "zip"] }]});
@@ -415,6 +455,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     "skillsCatalog.preview": catalog.preview,
     "skillsCatalog.install": catalog.install,
     "skillsCatalog.featured": catalog.featured,
+    "market.catalog": () => market.list(),
+    "market.skillImage": (id) => market.image(id),
+    "market.skillPreview": (id) => market.skillPreview(id),
+    "market.skillInstall": (token, options) => market.skillInstall(token, options),
+    "market.packPreview": (id) => market.packPreview(id),
+    "market.packInstall": (token, options) => market.packInstall(token, options),
+    "market.templatePreview": (id) => market.templatePreview(id),
+    "market.templateInstall": (token, options) => market.templateInstall(token, options),
     // The direct apps catalog (desktop/mcp-catalog.mjs): a tool server added with a tap, a sign-in or a key.
     "mcpCatalog.list": apps.list,
     "mcpCatalog.add": apps.add,
@@ -438,7 +486,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     // Agent templates in the marketplaces ("agent-templates-v1", docs/agent-templates.md in the phone's code): reads only.
     "agents.browse": (query) => workspace.plugins.catalog.agents(query),
-    "agents.template": (id) => workspace.plugins.catalog.agentTemplate(id),
+    "agents.template": async (id, version) => templateForReader(await workspace.plugins.catalog.agentTemplate(id), version),
     // Marketplace › Apps: the person's Composio apps through this computer's Composio tool (desktop/composio.mjs).
     ...composioHandlers(workspace),
     // The view of an MCP App in a chat: what it shows, and the calls it makes to its own server (desktop/mcp-apps.mjs).
@@ -635,6 +683,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     passwordManagerItems: (manager, vaultId, query) => savedCredentials.items(manager, vaultId, query),
     passwordManagerItem: (manager, vaultId, itemId) => savedCredentials.item(manager, vaultId, itemId),
     linkPasswordManagerField: (input) => savedCredentials.link(input),
+    copyPasswordManagerField: (input) => savedCredentials.copy(input),
+    credentialGrants: (filter) => savedCredentials.listGrants(filter),
+    setCredentialGrant: (input) => savedCredentials.setGrant(input),
+    revokeCredentialGrant: (id) => savedCredentials.revokeGrant(id),
+    credentialAudit: (options) => savedCredentials.audit(options),
     importMcpServers: (json) => workspace.integrations.importServers(String(json ?? "").slice(0, 1_000_000)),
     importMcpServerFile: async () => {
       const paths = await host.dialogs.open({
@@ -681,6 +734,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     makePrimary: (id) => workspace.agents.makePrimary(id),
     reorderBots: (ids) => workspace.agents.reorderBots(ids),
     duplicateBot: (id, person) => workspace.agents.duplicateBot(id, person),
+    reloadBotTools: (id) => workspace.reloadBotTools(id),
     // Bot templates (desktop/templates.mjs)
     saveTemplate: (botId, name) => workspace.templates.saveFromBot(botId, name),
     renameTemplate: (id, name) => workspace.templates.rename(id, name),
@@ -712,6 +766,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     addSection: (name) => workspace.agents.addSection(name),
     renameSection: (id, name) => workspace.agents.renameSection(id, name),
     deleteSection: (id) => workspace.agents.deleteSection(id),
+    orderSections: (ids) => workspace.agents.orderSections(ids),
     setChatFlags: (id, patch) => workspace.agents.setChatFlags(id, patch),
     markChatsRead: (ids) => workspace.agents.markChatsRead(ids),
     renameChat: (id, title) => workspace.agents.renameChat(id, title),
@@ -781,9 +836,62 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     linkPreview: (url) => (workspace.state.settings.linkPreviews ? linkPreviews.preview(String(url)) : null),
     // Tasks board (desktop/tasks.mjs)
     saveTask: (data) => workspace.tasks.save(data),
-    moveTask: (id, status) => workspace.tasks.move(id, status),
+    moveTask: (id, status, options) => workspace.tasks.move(id, status, options),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
+    // Event-based Workflows (desktop/workflows.mjs)
+    workflowsList: () => ({ workflows: workspace.workflows.list(), runs: workspace.workflows.listRuns(null, 100) }),
+    workflowCreate: (data) => workspace.workflows.create(data),
+    workflowUpdate: (id, patch) => workspace.workflows.update(id, patch),
+    workflowDelete: (id) => workspace.workflows.remove(id),
+    workflowPause: (id) => workspace.workflows.pause(id),
+    workflowResume: (id) => workspace.workflows.resume(id),
+    workflowRun: (id, options) => workspace.workflows.runManual(id, options ?? {}),
+    workflowRetryRun: (runId, nodeId) => workspace.workflows.retryRun(runId, nodeId ?? null),
+    workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
+    workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
+    workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),
+    workflowGithubStatus: (options) => workspace.workflows.githubStatus(options ?? {}),
+    workflowGithubSignInStart: () => workspace.workflows.githubSignInStart(),
+    workflowGithubSignInCancel: () => workspace.workflows.githubSignInCancel(),
+    workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
+    workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
+    workflowExport: async (id) => {
+      const doc = workspace.workflows.exportJson(id, host.version);
+      const safeName = String(doc.workflow.name || "workflow").replace(/[\\/:*?"<>|]+/g, " ").trim() || "workflow";
+      const filePath = await host.dialogs.save({
+        title: "Export workflow",
+        defaultPath: safeName + ".botkins-workflow.json",
+        filters: [{ name: "Botkins Workflow", extensions: ["json"] }],
+      });
+      if (!filePath) return false;
+      await writeFile(filePath, JSON.stringify(doc, null, 2) + "\n", "utf8");
+      return true;
+    },
+    workflowImport: async () => {
+      const paths = await host.dialogs.open({
+        title: "Import workflow",
+        properties: ["openFile"],
+        filters: [{ name: "Botkins Workflow", extensions: ["json"] }],
+      });
+      if (!paths?.[0]) return null;
+      const text = readFileSync(paths[0], "utf8");
+      return workspace.workflows.importJson(text);
+    },
+    // External messaging Channel Hooks (desktop/channels/index.mjs) — strictly owner-only.
+    channelsList: () => workspace.channels.list(),
+    channelAdd: (input) => workspace.channels.add(input),
+    channelUpdate: (id, patch) => workspace.channels.update(id, patch),
+    channelRemove: (id) => workspace.channels.remove(id),
+    channelBind: (id, botId) => workspace.channels.bind(id, botId),
+    channelSetPolicy: (id, policy) => workspace.channels.setPolicy(id, policy),
+    channelPause: (id) => workspace.channels.pause(id),
+    channelResume: (id) => workspace.channels.resume(id),
+    channelPairList: (id) => workspace.channels.pairList(id ?? null),
+    channelPairApprove: (code, id) => workspace.channels.pairApprove(code, id ?? null),
+    channelPairDeny: (code, id) => workspace.channels.pairDeny(code, id ?? null),
+    channelTest: (id) => workspace.channels.test(id),
+    channelLogs: (id, options) => workspace.channels.logs(id ?? null, options ?? {}),
     // Projects and Project Changes (desktop/projects.mjs)
     // Folders for a window that can't show the system's chooser (desktop/folders.mjs). A folder
     // is taken only when the browser could have shown it.
@@ -830,6 +938,15 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       return paths[0];
     },
     startProjectChat: (...args) => workspace.projects.startChat(...args),
+    // Jobs from a project's page ("project-jobs-v1", desktop/jobs.mjs): a prompt, one chat and one worktree per bot.
+    projectJobSetup: (projectId, folder) => workspace.jobs.setupOf(projectId, folder),
+    approveJobSetup: (projectId, folder, hash) => workspace.jobs.approveSetup(projectId, folder, hash),
+    startProjectJob: (projectId, options) => workspace.jobs.start(projectId, options),
+    projectJobStatus: (chatId) => workspace.jobs.status(chatId),
+    bringInJob: (chatId, message) => workspace.jobs.bringIn(chatId, message),
+    catchUpJob: (chatId) => workspace.jobs.catchUp(chatId),
+    removeJobWorktree: (chatId) => workspace.jobs.removeWorktree(chatId),
+    startJobTurn: (chatId) => workspace.jobs.startTurn(chatId),
     // Artifacts a person attached to a project (capability "project-artifacts-v1").
     addProjectArtifact: (projectId, artifactId) => workspace.projects.addArtifact(projectId, artifactId),
     removeProjectArtifact: (projectId, artifactId) => workspace.projects.removeArtifact(projectId, artifactId),
@@ -941,6 +1058,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unqueue: (id, itemId) => workspace.unqueue(id, itemId),
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
+    "chat.cardAction": (chatId, target, action, person = "owner") => {
+      const { turn, ...answer } = workspace.chatCardAction(chatId, target, action, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
     forkChat: (id, index) => workspace.forkChat(id, index),
     retry: (runId, options) => {
       workspace.retry(runId, { allowScript: options?.allowScript === true })?.catch((err) => console.error("Retry:", err.message));
@@ -982,7 +1104,14 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     // The harnesses that are programs of their own (Pi and OMP), and whether each is installed, for Settings › Harness.
     harnesses: () => providers.harnessStatuses(),
-    // Signing in and installing from a phone ("provider-signin-v1"). The phone names the provider;
+    // Claude artifacts (desktop/claude-artifacts.mjs): availability, model, and per-bot standing grants.
+    "claudeArtifacts.status": (refresh) => workspace.claudeArtifacts.status({ refresh: refresh === true }),
+    "claudeArtifacts.setModel": async (model) => {
+      workspace.claudeArtifacts.setModel(model);
+      return workspace.claudeArtifacts.status();
+    },
+    "claudeArtifacts.setBotApproval": (botId, allowed) => workspace.claudeArtifacts.setGrant(String(botId), allowed === true),
+    "claudeArtifacts.revokeBotApproval": (botId) => workspace.claudeArtifacts.revokeGrant(String(botId)),
     // the sign-in or the install command is this computer's own (desktop/terminal/signin.mjs).
     providerSignInStart: (id, options) =>
       signIns.start(String(id), { service: typeof options?.service === "string" ? options.service : undefined, method: typeof options?.method === "string" ? options.method : undefined, abandonedMs: PHONE_PATIENCE_MS }),
@@ -1102,6 +1231,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       ...workspace.nodeHost.setPaused(paused === true),
       listening: link?.status?.().listening === true,
     }),
+    nodeSetWholeComputer: (enabled) => ({
+      ...workspace.nodeHost.setWholeComputer(enabled === true),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeSetExecMode: (mode) => ({
+      ...workspace.nodeHost.setExecMode(String(mode ?? "")),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeAddAllowlistRule: (rule) => ({
+      ...workspace.nodeHost.addAllowlistRule(rule ?? {}),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeRemoveAllowlistRule: (ruleId) => ({
+      ...workspace.nodeHost.removeAllowlistRule(ruleId ? String(ruleId) : undefined),
+      listening: link?.status?.().listening === true,
+    }),
+    nodeAuditLog: (limit) => workspace.nodeHost.getAuditLog(limit),
     nodeShareProject: (projectId, shared = true) => ({
       ...workspace.nodeHost.shareProject(String(projectId), shared !== false),
       listening: link?.status?.().listening === true,
@@ -1114,12 +1260,65 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       ...workspace.nodeHost.disconnect(),
       listening: link?.status?.().listening === true,
     }),
+    nodeConvertInspect: async () => ({
+      ...inspectLocalWorkspace(workspace),
+      targets: await listConversionTargets(workspace),
+      nodeHost: {
+        ...workspace.nodeHost.view(),
+        listening: link?.status?.().listening === true,
+      },
+      suggestedName: workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host",
+    }),
+    nodeConvertPlan: async (input = {}) => {
+      const targets = await listConversionTargets(workspace);
+      const fallback = workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host";
+      return buildConversionPlan(workspace, { nodeName: fallback, ...input }, targets);
+    },
+    nodeConvertRun: async (input = {}) => {
+      const fallback = workspace.nodeHost.name || link?.store?.data?.name || computerName() || "Node Host";
+      const result = await runConversion(
+        workspace,
+        { nodeName: fallback, ...input },
+        { peers: workspace.teamworkPeers, link, announce },
+      );
+      return {
+        ...result,
+        nodeHost: {
+          ...result.nodeHost,
+          listening: link?.status?.().listening === true,
+        },
+      };
+    },
+    nodeConvertStatus: () => ({
+      ...workspace.nodeHost.view(),
+      listening: link?.status?.().listening === true,
+      jobs: workspace.nodeHost.conversionJobs.map(summarizeJob),
+    }),
+    nodeConvertUndo: async (input = {}) => {
+      const result = await undoConversion(workspace, {
+        snapshotId: typeof input === "string" ? input : input?.snapshotId,
+        peers: workspace.teamworkPeers,
+      });
+      announce();
+      return {
+        ...result,
+        nodeHost: {
+          ...result.nodeHost,
+          listening: link?.status?.().listening === true,
+        },
+      };
+    },
+    nodeRemoteStatus: async (hostId) => remoteNodeStatus(workspace.teamworkPeers, String(hostId ?? "")),
+    nodeRemoteControl: async (hostId, action, params = {}) =>
+      remoteNodeControl(workspace.teamworkPeers, String(hostId ?? ""), String(action ?? ""), params ?? {}),
     // iMessage and Mail for bots (Settings › MCP servers › On this Mac, desktop/mactools.mjs). Only this
     // window may call these: none is in REMOTE_METHODS, so a phone can't switch them on or check them.
     // The permission check runs only when the page asks, never at start-up.
     macToolsStatus: () => workspace.mac.status(),
     setMacTool: (tool, level) => workspace.mac.set(tool, level),
     grantMacTool: (permission) => workspace.mac.grant(permission),
+    computerUseStatus: () => workspace.computerUse.status(),
+    requestComputerUsePermission: (permission) => workspace.computerUse.requestPermission(permission),
     // Voice (Settings › Voice, desktop/voicedesk.mjs). Only this window may call these: none is in
     // REMOTE_METHODS (a phone reaches voice through the link's own calls). No key ever comes back.
     voiceSettings: () => voiceDesk.settings(),
@@ -1234,6 +1433,13 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     // LinkHost only passes names in REMOTE_METHODS. What a paired device sends is checked and,
     // for a team member, marked as theirs on its way to the handlers (desktop/device-call.mjs).
     call: deviceCall({ workspace, handlers, folders }),
+    webhook: async (routeId, req) => {
+      const wfResult = workspace.workflows.handleWebhook(routeId, req);
+      if (wfResult?.status !== 404) return wfResult;
+      const chResult = await workspace.channels.handleWebhook(routeId, req);
+      if (chResult?.handled) return { status: chResult.status ?? 200, body: chResult.body ?? { ok: true } };
+      return wfResult;
+    },
     subscribe: (listener) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
@@ -1260,7 +1466,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       release: (memberId) => workspace.spaces.memberRemoved(memberId),
     },
     // A phone that signed in to an MCP server hands the computer its sign-in (reached as "link.adoptMcpSignIn").
-    extras: { adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant) },
+    // A tool's sign-in in the phone's own browser, for a computer with no browser to open (desktop/phone-signin.mjs).
+    extras: {
+      adoptMcpSignIn: (serverId, grant) => workspace.integrations.adoptSignIn(serverId, grant),
+      startMcpSignIn: (serverId) => phoneSignIn.start(serverId),
+      finishMcpSignIn: (serverId, address) => phoneSignIn.finish(serverId, String(address ?? "")),
+    },
     screen: screens,
     // The app's own speech helpers for voice.mjs (desktop/link/VOICE.md). No local engine yet.
     voice: { ...(codexVoice && { codex: codexVoice }) },
@@ -1271,6 +1482,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
   const linkPort = validPort(linkOptions.port, 0) ? linkOptions.port : validPort(Number(env("LINK_PORT")), 1) ? Number(env("LINK_PORT")) : undefined;
   link = new LinkHost({
     dir: join(dataDir, "link"),
+    credentialGrants,
     // A trial run finds the password managers' tools only in the folders BOTKINS_TOOL_PATH names
     // (a test's stand-ins), and none without it, so it never starts the person's own.
     ...(trial && { managerSearchPath: trialToolDirs(env("TOOL_PATH")) }),
@@ -1301,6 +1513,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     const name = link.status().devices.find((d) => d.id === device)?.name ?? "A phone";
     notifier.show({ title: name + " is viewing this screen", body: "Stop it in Settings › Phone." });
   });
+  workspace.nodeAdapters = {
+    screen: {
+      displays: () => link.screen.displays(),
+      capture: async (opts) => {
+        const source = link.screen.source();
+        if (!source || typeof source.capture !== "function") {
+          throw new Error("Screen capture is unavailable on this node host.");
+        }
+        return source.capture(opts);
+      },
+      permissions: async () => {
+        const source = link.screen.source();
+        return source?.permissions ? source.permissions() : {};
+      },
+    },
+    notify: ({ title, body }) => notifier.show({ title, body }),
+  };
   link.on("joinRequest", (request) => notifier.consider({ type: "joinRequest", request }));
   // A newer Botkins is out: the owner's phones are told, once for each version (the link keeps
   // count for each phone, and a phone that switched these off hears nothing).
@@ -1384,6 +1613,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     } catch (error) {
       console.error("Task dispatcher:", error.message);
     }
+    try {
+      workspace.workflows.tick();
+    } catch (error) {
+      console.error("Workflows:", error.message);
+    }
     return workspace.panels
       .tick()
       .catch((error) => console.error("Panel scheduler:", error.message));
@@ -1425,6 +1659,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       timer = setInterval(tick, 5000);
       host.power.onResume(tick);
       tick();
+      void workspace.channels.startAll().catch((error) => console.error("Channels:", error.message));
       // The default harness's runtime starts now, in the background, instead of with the first message.
       checking.push(setTimeout(() => void workspace.warmUp(), 1500));
       if (host.packaged && !trial && updates) {
@@ -1437,9 +1672,11 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     stop() {
       stopAnnouncing();
       workspace.closing = true;
+      void workspace.channels.stopAll().catch(() => {});
       workspace.reactionTurns?.close();
       workspace.hostDispatch.close();
       workspace.nodeHost.close();
+      workspace.computerUse?.close();
       updates?.stopAuto?.();
       // A routine's script stops with Botkins; its run is ended when Botkins opens again.
       routines.stopScripts();
@@ -1447,6 +1684,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.interactions.cancel(undefined, { detached: true, keep: true });
       workspace.connects.close();
       workspace.mcpApps.close();
+      workspace.workflows?.githubAuth?.stop();
       clearInterval(timer);
       clearInterval(announcing);
       for (const timer of checking) clearTimeout(timer);

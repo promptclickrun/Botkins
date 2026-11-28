@@ -22,6 +22,7 @@
 import { basename } from "node:path";
 import { safeName } from "./uploads.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { templateBundle } from "./template-bundle.mjs";
 import { cleanAvatar } from "./team.mjs";
 
 /**
@@ -41,6 +42,14 @@ export const PI_PACKAGE_METHODS = ["piPackages.browse", "piPackages.preview", "p
  * adding an entry as a tool server with its keys. A stdio entry needs `confirm`, its exact command line.
  */
 export const MCP_CATALOG_METHODS = ["mcpCatalog.list", "mcpCatalog.add"];
+/**
+ * Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs): the catalog's skills,
+ * packs and version 3 templates, each review, and its install. Installs are the owner's (team.mjs).
+ */
+export const MARKET_V2_METHODS = [
+  "market.catalog", "market.skillImage", "market.skillPreview", "market.skillInstall",
+  "market.packPreview", "market.packInstall", "market.templatePreview", "market.templateInstall",
+];
 /** Agent templates in a marketplace ("agent-templates-v1", docs/agent-templates.md): reads only. */
 export const AGENT_METHODS = ["agents.browse", "agents.template"];
 
@@ -59,11 +68,28 @@ export const COMPOSIO_METHODS = ["composio.catalog", "composio.connected", "comp
  * it makes to the server its card came from. Each names a chat and a card first.
  */
 export const MCP_APP_METHODS = ["mcpApps.view", "mcpApps.callTool", "mcpApps.readResource"];
-
+/** Claude artifacts ("claude-artifacts-v1", desktop/claude-artifacts.mjs): availability, model, and per-bot standing approvals. */
+/** A project's jobs ("project-jobs-v1"; desktop/jobs.mjs), the owner's alone (team.mjs). `jobArgs` cuts each to its shape. */
+export const JOB_METHODS = new Set(["projectJobSetup", "approveJobSetup", "startProjectJob", "projectJobStatus", "bringInJob", "catchUpJob", "removeJobWorktree", "startJobTurn"]);
+export const CLAUDE_ARTIFACT_METHODS = ["claudeArtifacts.status", "claudeArtifacts.setModel", "claudeArtifacts.setBotApproval", "claudeArtifacts.revokeBotApproval"];
 /** The app's space calls ("spaces-v1"), by their wire names. A rename is a change here and in spaceArgs. */
 export const SPACE_METHODS = [
   "spaces.read", "spaces.create", "spaces.rename", "spaces.remove", "spaces.setProject", "spaces.setPanelProject",
   "spaces.newPanel", "spaces.ask", "spaces.movePanel", "spaces.patchState", "spaces.note", "spaces.removeNote",
+];
+/** Event-based Workflows in Routines ("workflows-v1", desktop/workflows.mjs). */
+export const WORKFLOW_METHODS = [
+  "workflowsList", "workflowCreate", "workflowUpdate", "workflowDelete", "workflowPause", "workflowResume",
+  "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
+  "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
+  "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
+];
+/** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
+export const CHANNEL_METHODS = [
+  "channelsList", "channelAdd", "channelUpdate", "channelRemove", "channelBind",
+  "channelSetPolicy", "channelPause", "channelResume",
+  "channelPairList", "channelPairApprove", "channelPairDeny",
+  "channelTest", "channelLogs",
 ];
 /** How a new panel may start, and the limits of what people write into a space. */
 export const PANEL_STARTS = ["checklist", "tracker", "chart", "table", "notes", "app"];
@@ -78,10 +104,10 @@ export const REMOTE_METHODS = new Set([
   // Bots
   "addBot", "updateBot", "setBotProactive", "proactiveAct", "setBotFlags", "makePrimary", "reorderBots", "deleteBot", "duplicateBot",
   "importableAgents", "importAgents", "setBotAccess", "setBotIntegrations", "botMemory", "setBotMemory",
-  "addSection", "renameSection", "deleteSection",
+  "addSection", "renameSection", "deleteSection", "orderSections",
   "saveTemplate", "renameTemplate", "deleteTemplate", "exportTemplateText", "importTemplateText",
   // Chats
-  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "warmChat",
+  "mainChat", "changeMainFork", "setProactiveChatMode", "createChat", "createGroupChat", "setChatFlags", "markChatsRead", "renameChat", "regenerateChatTitle", "deleteChat", "forkChat", "reactToMessage", "chat.cardAction", "warmChat",
   "setChatProject", "startProjectChat", "recordVoiceLine",
   "send", "stop", "stopHelper", "unqueue", "sendNow", "retry", "compact", "sideQuestion", "respond", "clearApprovals",
   "mentionables", "catalog", "linkPreview",
@@ -94,6 +120,9 @@ export const REMOTE_METHODS = new Set([
   // Routines and tasks
   "createRoutine", "updateRoutine", "setRoutineEnabled", "deleteRoutine", "runRoutine", "duplicateRoutine",
   "previewCadence", "changeSchedule",
+  ...WORKFLOW_METHODS,
+  // Channel Hooks ("channels-v1"): strictly owner-only.
+  ...CHANNEL_METHODS,
   "saveTask", "moveTask", "startTask", "deleteTask",
   // Today
   "refreshPanel", "changePanel", "routine", "boardAct",
@@ -110,6 +139,8 @@ export const REMOTE_METHODS = new Set([
   "addTodo", "updateTodo", "deleteTodo", "moveTodo",
   // What a project keeps of the artifacts ("project-artifacts-v1"): a list of ids on the project.
   "addProjectArtifact", "removeProjectArtifact", "projectArtifacts",
+  // Jobs from a project's page ("project-jobs-v1"): a prompt per bot, each in a chat and a git worktree of its own.
+  ...JOB_METHODS,
   // Wiki
   "wikiTree", "wikiPage", "saveWikiPage", "createWikiPage", "createWikiPageFor", "createWikiFolder", "moveWiki",
   "deleteWiki", "searchWiki", "wikiHistory", "wikiVersion", "restoreWikiVersion", "wikiExportPlan", "exportWikiFile",
@@ -126,11 +157,15 @@ export const REMOTE_METHODS = new Set([
   // Agent templates ("agent-templates-v1") and the computer's Composio apps
   ...AGENT_METHODS,
   "skills.upload", "skills.saveScript", "skills.readScript", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.install", "skillsCatalog.featured",
+  // Marketplace format version 2 ("marketplace-v2-v1"): catalog skills, packs and version 3 templates
+  ...MARKET_V2_METHODS,
   ...MCP_CATALOG_METHODS,
   ...PI_PACKAGE_METHODS,
   ...COMPOSIO_METHODS,
   // The views of MCP Apps in chats ("mcp-apps-v1")
   ...MCP_APP_METHODS,
+  // Claude artifacts ("claude-artifacts-v1")
+  ...CLAUDE_ARTIFACT_METHODS,
 ]);
 
 const MAX_ATTACHMENTS = 10;
@@ -336,7 +371,7 @@ function marketArgs(method, args) {
     }
     case "agents.template":
       if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("That template can't be found.");
-      return [first];
+      return args[1] === 2 ? [first, 2] : [first];
     case "composio.catalog":
       // `{ fresh: true }`: the person asked for the list again, so the computer asks the server now.
       return plain(first) && first.fresh === true ? [{ fresh: true }] : [];
@@ -488,6 +523,14 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   }
   if (method === "stopHelper" && (args.length !== 2 || !clean(args[0]) || !clean(args[1]))) throw new Error("Choose the helper or command to stop.");
   if (method === "mainChat" && (args.length !== 1 || !clean(args[0]))) throw new Error("Choose a bot.");
+  if (method === "chat.cardAction") {
+    const [chatId, target, action] = args;
+    const validTarget = (typeof target === "number" && Number.isSafeInteger(target) && target >= 0) || (typeof target === "string" && clean(target) && target.length <= 128);
+    if (args.length !== 3 || !clean(chatId) || !validTarget || !["dispatch", "dismiss"].includes(action)) {
+      throw new Error("Choose a chat, action card, and valid action (dispatch or dismiss).");
+    }
+    return [chatId, typeof target === "string" ? target.trim() : target, action];
+  }
   if (method === "setProactiveChatMode" && (args.length !== 1 || !["main", "new"].includes(args[0]))) throw new Error("Choose Main chat or New chat every time.");
   if (method === "changeMainFork") {
     const [id, action, value, expected] = args;
@@ -495,6 +538,13 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       : action === "fork" ? Number.isSafeInteger(value) && value >= 0
       : action === "switch" && clean(value);
     if (!clean(id) || !valid || args.length > 4 || (expected != null && !clean(expected))) throw new Error("Choose a Main chat and a fork or reset.");
+  }
+  if (method === "workflowGithubStatus") {
+    const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+    return [{ includeRepos: opts.includeRepos === true }];
+  }
+  if (method === "workflowGithubSignInStart" || method === "workflowGithubSignInCancel") {
+    return [];
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");
@@ -510,6 +560,10 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const said = cleanMentions(mentions);
     return [args[0], args[1], { ...options, ...(own.length && { attachments: own }), ...(said.length && { mentions: said }) }];
   }
+  if (method === "addBot" && args[0]?.bundle !== undefined) {
+    args = [{ ...args[0], bundle: templateBundle(args[0].bundle) }];
+  }
+  if (method === "updateBot" && args[1]?.bundle !== undefined) throw new Error("A template bundle is installed when a bot is created.");
   // A bot's own voice ("bot-voice-v1"): only the shape the computer keeps; null clears it. Anything else is refused with a sentence.
   if ((method === "updateBot" || method === "addBot") && args[method === "addBot" ? 0 : 1]?.voice !== undefined) {
     const at = method === "addBot" ? 0 : 1;
@@ -519,7 +573,45 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     next[at] = { ...data, voice: botVoiceField(data.voice) };
     return next;
   }
-  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? spaceArgs(method, args) ?? args;
+  return fileArgs(method, args) ?? pluginArgs(method, args) ?? marketArgs(method, args) ?? marketV2Args(method, args) ?? catalogArgs(method, args) ?? mcpAppArgs(method, args) ?? claudeArtifactArgs(method, args) ?? providerArgs(method, args) ?? appUpdateArgs(method, args) ?? projectArtifactArgs(method, args) ?? jobArgs(method, args) ?? spaceArgs(method, args) ?? args;
+}
+
+/** The calls of "marketplace-v2-v1", cut to their shape: a listing id, or a review's token and the choices made in it. */
+function marketV2Args(method, args) {
+  if (!MARKET_V2_METHODS.includes(method)) return null;
+  if (method === "market.catalog") return [];
+  const [first, options] = args;
+  if (!pluginText(first, PLUGIN_LIMITS.id)) refuse("Choose a listing from the marketplace.");
+  if (!method.endsWith("Install")) return [first];
+  const given = plain(options) ? options : {};
+  const out = {};
+  const names = (value, what) => (Array.isArray(value) && value.length <= PLUGIN_LIMITS.bots && value.every((item) => pluginText(item, 200)) ? [...value] : refuse("Choose the " + what + "."));
+  if (given.bots !== undefined) out.bots = given.bots === "all" ? "all" : names(given.bots, "bots");
+  if (given.replace !== undefined) out.replace = names(given.replace, "skills to replace");
+  if (given.routines !== undefined) out.routines = names(given.routines, "routines to keep");
+  if (given.commit !== undefined) out.commit = typeof given.commit === "string" && /^[a-f0-9]{40}$/.test(given.commit) ? given.commit : refuse("Review it again.");
+  if (given.name !== undefined) out.name = pluginText(given.name, 48) ? given.name : refuse("Give the bot a name of up to 48 characters.");
+  return [first, out];
+}
+
+/** Claude artifact calls ("claude-artifacts-v1"), validated to their exact shapes. */
+function claudeArtifactArgs(method, args) {
+  if (!CLAUDE_ARTIFACT_METHODS.includes(method)) return null;
+  switch (method) {
+    case "claudeArtifacts.status":
+      return args[0] === true ? [true] : [];
+    case "claudeArtifacts.setModel":
+      if (typeof args[0] !== "string" || !["haiku", "sonnet", "opus"].includes(args[0])) refuse("Choose haiku, sonnet, or opus.");
+      return [args[0]];
+    case "claudeArtifacts.setBotApproval":
+      if (!clean(args[0]) || typeof args[1] !== "boolean") refuse("Choose a bot and on or off.");
+      return [args[0], args[1]];
+    case "claudeArtifacts.revokeBotApproval":
+      if (!clean(args[0])) refuse("Choose a bot.");
+      return [args[0]];
+    default:
+      return null;
+  }
 }
 
 /**
@@ -601,6 +693,46 @@ function projectArtifactArgs(method, args) {
   return [project, artifact];
 }
 
+/**
+ * A project's jobs ("project-jobs-v1"), cut to their shape before the computer's app sees them: ids and a folder
+ * as plain strings, the setup's hash, and of a job's options only the fields desktop/jobs.mjs reads. Null for any
+ * other call.
+ */
+export function jobArgs(method, args) {
+  if (!JOB_METHODS.has(method)) return null;
+  const id = (value, what) => {
+    if (typeof value !== "string" || !value || value.length > 200 || value.includes("\0")) throw new Error("Choose a " + what + ".");
+    return value;
+  };
+  const folder = (value) => (value === undefined || value === null ? undefined : clean(value) ? value : (() => { throw new Error("Choose a folder in this project."); })());
+  if (method === "projectJobSetup") return [id(args[0], "project"), folder(args[1])];
+  if (method === "approveJobSetup") {
+    if (typeof args[2] !== "string" || !/^[0-9a-f]{1,64}$/.test(args[2])) throw new Error("The setup commands changed. Look at them again.");
+    return [id(args[0], "project"), folder(args[1]), args[2]];
+  }
+  if (method === "startProjectJob") {
+    const options = args[1];
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error("Give the job a prompt.");
+    const bots = Array.isArray(options.botIds) ? options.botIds : [];
+    if (!bots.length || bots.length > 6 || !bots.every((bot) => typeof bot === "string" && bot && bot.length <= 200)) throw new Error("Choose 1 to 6 bots.");
+    if (typeof options.prompt !== "string" || !options.prompt.trim() || options.prompt.length > 32000) throw new Error("Give the job a prompt.");
+    if (options.mode !== undefined && !["default", "plan", "yolo"].includes(options.mode)) throw new Error("Choose a mode.");
+    return [id(args[0], "project"), {
+      botIds: [...bots],
+      prompt: options.prompt,
+      where: options.where === "checkout" ? "checkout" : "worktree",
+      ...(folder(options.folder) && { folder: options.folder }),
+      ...(options.mode !== undefined && { mode: options.mode }),
+      ...(options.carry === true && { carry: true }),
+    }];
+  }
+  if (method === "bringInJob") {
+    if (args[1] !== undefined && args[1] !== null && (typeof args[1] !== "string" || args[1].length > 2000)) throw new Error("A commit message is 2000 characters at most.");
+    return [id(args[0], "job"), ...(typeof args[1] === "string" && args[1] ? [args[1]] : [])];
+  }
+  return [id(args[0], "job")];
+}
+
 /** The longest of each thing a phone sends to sign a provider in or install one. */
 export const PROVIDER_LIMITS = { id: 100, session: 100, service: 200, text: 4000, token: 8000, address: 400 };
 const cut = (value, limit) => (typeof value === "string" ? value.slice(0, limit) : "");
@@ -637,9 +769,62 @@ function providerArgs(method, args) {
     case "providerConfigure":
       // The settings of a key provider ("keyed-providers-v1"), cut to their shape. The computer checks every value.
       return [id(), keyedConfig(args[1])];
+    case "channelsList":
+      return [];
+    case "channelAdd":
+      return [channelInput(args[0])];
+    case "channelUpdate":
+      return [id(), channelInput(args[1])];
+    case "channelRemove":
+    case "channelPause":
+    case "channelResume":
+    case "channelTest":
+      return [id()];
+    case "channelBind":
+      return [id(), typeof args[1] === "string" ? args[1].slice(0, 120) : ""];
+    case "channelSetPolicy":
+      return [id(), args[1] && typeof args[1] === "object" && !Array.isArray(args[1]) ? args[1] : {}];
+    case "channelPairList":
+      return [typeof args[0] === "string" && args[0] ? args[0].slice(0, 120) : null];
+    case "channelPairApprove":
+    case "channelPairDeny":
+      return [typeof args[0] === "string" ? args[0].slice(0, 32) : "", typeof args[1] === "string" && args[1] ? args[1].slice(0, 120) : null];
+    case "channelLogs":
+      return [
+        typeof args[0] === "string" && args[0] ? args[0].slice(0, 120) : null,
+        args[1] && typeof args[1] === "object" && !Array.isArray(args[1])
+          ? { limit: typeof args[1].limit === "number" ? Math.max(1, Math.min(200, Math.floor(args[1].limit))) : 100 }
+          : {},
+      ];
     default:
       return null;
   }
+}
+
+/** Shapes a channel add/update payload sent from a paired owner phone. */
+function channelInput(value) {
+  const obj = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const str = (v, max = 200) => (typeof v === "string" ? v.slice(0, max) : undefined);
+  const secrets =
+    obj.secrets && typeof obj.secrets === "object" && !Array.isArray(obj.secrets)
+      ? Object.fromEntries(
+          Object.entries(obj.secrets)
+            .slice(0, 10)
+            .filter(([k, v]) => typeof k === "string" && k.length <= 40 && typeof v === "string" && v.length <= 4096),
+        )
+      : undefined;
+  return Object.fromEntries(
+    Object.entries({
+      kind: str(obj.kind, 40),
+      label: str(obj.label, 80),
+      transport: str(obj.transport, 40),
+      botId: obj.botId === null ? null : str(obj.botId, 120),
+      nodeHostId: obj.nodeHostId === null ? null : str(obj.nodeHostId, 120),
+      enabled: typeof obj.enabled === "boolean" ? obj.enabled : undefined,
+      policy: obj.policy && typeof obj.policy === "object" && !Array.isArray(obj.policy) ? obj.policy : undefined,
+      secrets,
+    }).filter(([, v]) => v !== undefined),
+  );
 }
 
 /** A key provider's settings as a phone sends them: strings of a bounded length and a short list of models, nothing else. */

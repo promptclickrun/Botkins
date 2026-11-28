@@ -17,6 +17,9 @@ import { DEMO_FEATURED, demoCatalogAdd, demoCatalogList } from "./mock-catalog.m
 import { uploadSkill } from "./skill-import.mjs";
 import { parseSkill } from "./skill-format.mjs";
 import { botVoiceField } from "./voice.mjs";
+import { currentBotBundle, templateBundle, templateFileBundle, templateForReader } from "./template-bundle.mjs";
+import { hasAction, roleOfMember } from "./team.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 import { proactiveChats, proactivePatch, proactiveSees, proactiveStart } from "./proactive-rules.mjs";
 import { findMainChat, makeMainChat, migrateMainChats, changeMainContext, visibleChat } from "./main-chat.mjs";
 import { Failure } from "./tools.mjs";
@@ -222,6 +225,14 @@ const MADE_UP_CHANGES = [
   { path: "docs/old-pricing.md", kind: "deleted", staged: false, added: 0, removed: 21 },
   { path: "src/hero/Hero.tsx", from: "src/Hero.tsx", kind: "renamed", staged: true, added: 2, removed: 2 },
 ];
+// Jobs (project-jobs-v1): the checkout's commit, the setup list the demo repository has, and what a finished job changed.
+const DEMO_SHA = "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f";
+const DEMO_SETUP = ["npm ci", "cp $BOTKINS_CHECKOUT/.env .env"];
+const DEMO_SETUP_HASH = "5d1c0e2b7a9f3c48";
+const MADE_UP_JOB_FILES = [
+  { path: "src/pricing/Plans.tsx", added: 22, removed: 7 },
+  { path: "src/pricing/Plans.test.tsx", added: 31, removed: 0, new: true },
+];
 const MADE_UP_DIFFS = {
   "src/pricing/Plans.tsx": [
     "--- a/src/pricing/Plans.tsx",
@@ -407,6 +418,17 @@ export function seed() {
       lastScheduleId: 1,
       schedules: [{ id: 1, routine: true, enabled: false, name: "Friday digest", prompt: "Collect this week's industry news in five bullets.", cadence: { kind: "weekly", time: "16:00", days: [5] }, cron: "0 16 * * 5", timezone: "America/Chicago", recurring: true, nextAt: t + 2 * 24 * HOUR, createdAt: t - 20 * 24 * HOUR }],
     },
+    // Two jobs on the Website project (project-jobs-v1): one finished and ready to bring in, one that clashes with main.
+    {
+      id: "chat-job-plans", botId: "bot-patch", title: "Add tests for the pricing plans", time: t - 40 * MIN, projectId: "p1", mode: "default",
+      job: { prompt: "Add tests for the pricing plans", where: "worktree", state: "open", createdAt: t - 52 * MIN, branch: "botkins/add-tests-for-the-pricing", base: "main", baseSha: "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f", setup: "done" },
+      messages: [message("user", "Add tests for the pricing plans", 52), message("assistant", "Added Plans.test.tsx with a case for each plan, and fixed the yearly price rounding it caught. Both pass.", 40)],
+    },
+    {
+      id: "chat-job-lockfile", botId: "bot-mira", title: "Update the lockfile (clashes with main)", time: t - 25 * MIN, projectId: "p1", mode: "default",
+      job: { prompt: "Update the lockfile (clashes with main)", where: "worktree", state: "open", createdAt: t - 30 * MIN, branch: "botkins/update-the-lockfile", base: "main", baseSha: "6bff0b4c2a1e9d8f7b6a5c4d3e2f1a0b9c8d7e6f", setup: "done" },
+      messages: [message("user", "Update the lockfile (clashes with main)", 30), message("assistant", "Updated the lockfile and checked the build.", 25)],
+    },
   ];
   const run = (id, chatId, title, minutesAgo, extra = {}) => ({ id, chatId, title, time: t - minutesAgo * MIN, status: "Completed", detail: "", finished: t - minutesAgo * MIN + 9000, summary: "Worked for 9s · 2 steps", ...extra });
   const runs = [
@@ -482,6 +504,7 @@ export function seed() {
       showUpdates: true,
       linkPreviews: false,
       readAloud: false,
+      showRoutineChats: false,
       onboarded: true,
       approval: "ask",
       clarify: ["missing"],
@@ -1380,6 +1403,10 @@ const DEMO_AGENTS = [
     version: "1.0.0",
     author: "Botkins",
     keywords: ["email", "inbox", "mail"],
+    bundle: {
+      skills: [{ name: "triage-inbox", description: "Sort a batch of messages by the reply they need.", instructions: "List messages that need a reply today first. Include a draft for each and let the person decide what to send." }],
+      routines: [{ name: "Morning inbox review", instructions: "Review new mail for replies that are due today and bring the drafts here.", cadence: { kind: "weekdays", time: "09:00" } }],
+    },
     instructions: "You help the person keep their inbox under control.\n\n- Sort new mail into: needs a reply today, can wait, and can be archived.\n- For each that needs a reply, draft a short answer in the person's own tone.\n- Never send anything yourself. Show the drafts and wait.\n- When you are not sure what a message wants, say so in one line.",
   }),
   agentTemplate("botkins", "Botkins", true, "meeting-prep", {
@@ -1468,7 +1495,7 @@ const DEMO_AGENTS = [
     instructions: "Write release notes from the merged pull requests you are given.\n\n- Group them as New, Better and Fixed.\n- One line each, in plain words a customer understands.\n- Leave out internal changes (tests, CI, refactors).\n- End with the list of contributors.",
   }),
 ];
-const marketAgentOf = ({ instructions: _instructions, ...listing }) => listing;
+const marketAgentOf = ({ instructions: _instructions, bundle: _bundle, ...listing }) => listing;
 const agentMatches = (agent, words) => words.every((word) => [agent.name, agent.role, agent.summary, agent.category ?? "", agent.categoryName ?? "", ...(agent.keywords ?? [])].some((part) => part.toLowerCase().includes(word)));
 
 export class MockBackend {
@@ -1489,8 +1516,10 @@ export class MockBackend {
     // What this stand-in app supports itself, beyond the link's own list.
     // "files-v1": a file out and in as text, without a dialog. "folders-v1": the folder browser.
     // "artifacts-v1": what the bots made or were given, from an index the app keeps (here: made up).
-    this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
+    this.capabilities = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "routine-delivery-v1", "routine-owner-v1", ...(process.env.BOTKINS_DEV_NO_OUTPUT === "off" ? [] : ["routine-no-output-v1"]), "routine-scripts-v1", "routine-models-v1", "routine-silent-v1", "routine-notify-targets-v1", "proactive-agent-v2", "proactive-learning-v1", "proactive-team-v1", "models-v2", "fast-mode-v1", "side-pane-v1", "files-v1", "folders-v1", "project-artifacts-v1", "artifacts-v1", "secure-input-v1", "chat-title-regeneration-v1", ...(process.env.BOTKINS_DEV_USAGE === "off" ? [] : ["provider-usage-v1"])];
     this.capabilities.push("project-folders-v1", "project-mode-v1", "project-clone-v1", "mark-chats-read-v1", "stop-helper-v1");
+    // "project-jobs-v1": BOTKINS_DEV_JOBS=off is a computer from before jobs.
+    if (process.env.BOTKINS_DEV_JOBS !== "off") this.capabilities.push("project-jobs-v1");
     if (this.timeline) this.capabilities.push("turn-timeline-v1");
     // "bot-voice-v1": a bot may have a voice of its own. BOTKINS_DEV_BOT_VOICE=off is an older computer.
     this.botVoice = process.env.BOTKINS_DEV_BOT_VOICE !== "off";
@@ -1520,11 +1549,14 @@ export class MockBackend {
     this.updates = new DemoUpdates(this, process.env.BOTKINS_DEV_UPDATE);
     if (this.updates.capable) this.capabilities.push("app-update-v1");
     // "agent-templates-v1" (docs/agent-templates.md): made-up templates. Left out with BOTKINS_DEV_AGENTS=off.
-    if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1");
+    if (process.env.BOTKINS_DEV_AGENTS !== "off") this.capabilities.push("agent-templates-v1", "agent-template-bundles-v1");
     // "plugins-v1" (docs/plugins.md): made-up catalogs and installs. One plugin starts installed.
     this.capabilities.push("pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", "script-commands-v1", "mcp-catalog-v1");
     // Each person's own picture ("people-avatars-v1"): `setMyAvatar`, kept on the team's people.
-    this.capabilities.push("people-avatars-v1");
+    this.capabilities.push("people-avatars-v1", "channels-v1");
+    this.channelSecrets = new Map();
+    this.channelAudit = this.seedChannelAudit();
+    if (!Array.isArray(this.state.channels)) this.state.channels = this.seedChannels();
     this.catalogToken = "";
     this.demoSkill = {id:"demo/skills/design-review", source:"demo/skills", skillId:"design-review", name:"design-review", installs:240, available:true};
 
@@ -1577,6 +1609,164 @@ export class MockBackend {
         return { status: "connected", tools: ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL"] };
       },
     };
+  }
+  seedChannels() {
+    const t = now();
+    const today = new Date(t);
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const defaultLimits = {
+      senderPerMinute: 10,
+      connectionPerMinute: 60,
+      maxInboundLength: 4000,
+      maxAttachmentBytes: 5 * 1024 * 1024,
+      allowedAttachmentTypes: ["image/*", "text/plain", "application/pdf"],
+      dailyTurnCap: 200,
+    };
+    const bot0 = this.state.bots[0]?.id ?? "bot-mira";
+    const bot1 = this.state.bots[1]?.id ?? bot0;
+    const bot2 = this.state.bots[2]?.id ?? bot0;
+    return [
+      {
+        id: "ch_slack_acme",
+        kind: "slack",
+        label: "Acme Slack",
+        transport: "socket_mode",
+        enabled: true,
+        paused: false,
+        botId: bot1,
+        configuredSecrets: ["appToken", "botToken"],
+        policy: {
+          dm: "pairing",
+          allowlist: [
+            { senderId: "U01COLT", display: "Colt", addedAt: t - 25 * 24 * HOUR, source: "manual" },
+            { senderId: "U02JORD", display: "Jordan T.", addedAt: t - 9 * 24 * HOUR, source: "pairing" },
+          ],
+          groups: { enabled: true, mode: "mention", channels: ["#general", "#engineering"] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [
+          {
+            code: "7K3-M9P",
+            senderId: "U09ALEX",
+            display: "Alex K.",
+            conversationId: "D09ALEX",
+            createdAt: t - 2 * HOUR,
+            expiresAt: t + 22 * HOUR,
+          },
+        ],
+        dailyUsage: { date: todayKey, turns: 142 },
+        status: { state: "connected", detail: "", connectedAt: t - 48 * HOUR, lastEventAt: t - 2 * MIN },
+        createdAt: t - 30 * 24 * HOUR,
+        updatedAt: t - 2 * MIN,
+      },
+      {
+        id: "ch_tg_alfie",
+        kind: "telegram",
+        label: "Alfie on Telegram",
+        transport: "long_polling",
+        enabled: true,
+        paused: false,
+        botId: bot0,
+        configuredSecrets: ["botToken"],
+        policy: {
+          dm: "pairing",
+          allowlist: [
+            { senderId: "@colt", display: "Colt", addedAt: t - 25 * 24 * HOUR, source: "manual" },
+            { senderId: "@jordant", display: "Jordan T.", addedAt: t - 9 * 24 * HOUR, source: "pairing" },
+            { senderId: "@priyak", display: "Priya K.", addedAt: t - 6 * 24 * HOUR, source: "pairing" },
+            { senderId: "@saml", display: "Sam L.", addedAt: t - 3 * 24 * HOUR, source: "pairing" },
+          ],
+          groups: { enabled: true, mode: "mention", channels: ["-100123456"] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [
+          {
+            code: "4H7-KQ2",
+            senderId: "@mayar",
+            display: "Maya R.",
+            conversationId: "tg-dm-mayar",
+            createdAt: t - 3 * HOUR,
+            expiresAt: t + 21 * HOUR,
+          },
+        ],
+        dailyUsage: { date: todayKey, turns: 169 },
+        status: { state: "connected", detail: "", connectedAt: t - 72 * HOUR, lastEventAt: t - 4 * MIN },
+        createdAt: t - 20 * 24 * HOUR,
+        updatedAt: t - 4 * MIN,
+      },
+      {
+        id: "ch_dc_botkins",
+        kind: "discord",
+        label: "Botkins Discord",
+        transport: "gateway",
+        enabled: true,
+        paused: false,
+        botId: bot2,
+        configuredSecrets: ["botToken"],
+        policy: {
+          dm: "allowlist",
+          allowlist: [{ senderId: "colt#0001", display: "Colt", addedAt: t - 15 * 24 * HOUR, source: "manual" }],
+          groups: { enabled: false, mode: "mention", channels: [] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: todayKey, turns: 0 },
+        status: { state: "auth_error", detail: "Token rejected" },
+        createdAt: t - 15 * 24 * HOUR,
+        updatedAt: t - 1 * HOUR,
+      },
+      {
+        id: "ch_imsg_mac",
+        kind: "imessage",
+        label: "iMessage",
+        transport: "imsg_node",
+        nodeHostId: "Mac Studio",
+        enabled: true,
+        paused: true,
+        botId: bot1,
+        configuredSecrets: [],
+        policy: {
+          dm: "allowlist",
+          allowlist: [{ senderId: "+15551234567", display: "Colt", addedAt: t - 10 * 24 * HOUR, source: "manual" }],
+          groups: { enabled: false, mode: "mention", channels: [] },
+          toolProfile: "restricted",
+          ignoreBots: true,
+          notifyPhone: false,
+          limits: { ...defaultLimits },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: todayKey, turns: 0 },
+        status: { state: "paused", detail: "Paused by owner" },
+        createdAt: t - 10 * 24 * HOUR,
+        updatedAt: t - 4 * HOUR,
+      },
+    ];
+  }
+  seedChannelAudit() {
+    const t = now();
+    return [
+      { time: t - 4 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Jordan T.", conversationId: "DM", decision: "reply_sent", replyParts: 2 },
+      { time: t - 9 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Maya R.", conversationId: "DM", decision: "paired", reason: "pairing_code_issued" },
+      { time: t - 21 * MIN, connectionId: "ch_slack_acme", kind: "slack", senderId: "8812034", conversationId: "#general", decision: "denied", reason: "mention_required" },
+      { time: t - 30 * MIN, connectionId: "ch_dc_botkins", kind: "discord", senderId: "spam-bot", conversationId: "DM", decision: "rate_limited", reason: "sender_rate_limit" },
+      { time: t - 63 * MIN, connectionId: "ch_tg_alfie", kind: "telegram", senderId: "Priya K.", conversationId: "DM", decision: "reply_sent", replyParts: 1 },
+      { time: t - 90 * MIN, connectionId: "ch_slack_acme", kind: "slack", senderId: "Alex K.", conversationId: "DM", decision: "paired", reason: "pairing_code_issued" },
+      { time: t - 120 * MIN, connectionId: "ch_dc_botkins", kind: "discord", senderId: "gateway", conversationId: "gateway", decision: "error", reason: "turn_failed" },
+    ];
+  }
+  channelById(id) {
+    const conn = (this.state.channels ?? []).find((c) => c.id === id);
+    if (!conn) throw new Error(`Unknown channel "${id}".`);
+    return conn;
   }
   info() {
     return { app: "botkins", version: this.updates?.current ?? "0.8.0-demo", platform: process.platform };
@@ -1759,6 +1949,21 @@ export class MockBackend {
   }
   changed() {
     for (const fn of this.listeners) fn();
+  }
+  finishBot(bot, input) {
+    const bundle = templateBundle(input);
+    if (bundle && !this.capabilities.includes("agent-template-bundles-v1")) throw new Error("Update the app on your computer to install a template bundle.");
+    const who = this.caller?.id ?? "owner";
+    if (who === "owner") delete bot.createdBy;
+    else bot.createdBy = who;
+    if (bundle) bot.bundle = bundle;
+    this.state.bots.push(bot);
+    this.mainChat(bot.id, who);
+    for (const routine of [...(bundle?.routines ?? [])].reverse()) {
+      const chatId = this.handlers.createRoutine.call(this, { botId: bot.id, name: routine.name, prompt: routine.instructions, cadence: routine.cadence, notify: false });
+      Object.assign(this.chat(chatId).schedules[0], { enabled: false, fromTemplate: true });
+    }
+    return bot.id;
   }
   /** A made-up proactive alert in a person's own chat with a bot, with one offer ("proactive-team-v1"). The offer's prompt stays here. */
   mainChat(botId, person) {
@@ -2158,7 +2363,7 @@ export class MockBackend {
     for (const key of ["streams", "thinking", "intents", "steerable"]) delete this.state[key][id];
     this.turns.delete(id);
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     this.changed();
     const next = this.state.queued[id]?.shift();
     if (next) {
@@ -2349,7 +2554,7 @@ export class MockBackend {
     else Object.assign(run, { status: "Completed", finished, summary: "Worked for " + Math.max(1, Math.round((finished - run.time) / 1000)) + "s · " + (run.steps?.length ?? 0) + " step", usage: { input: 1800, output: 240 } });
     if (said) chat.messages.push({ role: "assistant", text: said, runId: run.id, time: finished });
     chat.time = finished;
-    chat.unread = true;
+    if (!isRoutineChat(chat)) chat.unread = true;
     // Auto-summarize, as the desktop does it: every few completed turns a chat the person didn't name gets a new title.
     const every = this.state.settings.autoSummarize;
     if (run.status === "Completed" && every && !chat.main && !chat.titleSet && (chat.titleTurns = (chat.titleTurns ?? 0) + 1) >= every) {
@@ -2406,6 +2611,7 @@ export class MockBackend {
       if ("showThinking" in rest && typeof rest.showThinking !== "boolean") throw new Error("Choose whether to show thinking");
       if ("foldThinking" in rest && typeof rest.foldThinking !== "boolean") throw new Error("Choose a thinking display preference");
       if ("showUpdates" in rest && typeof rest.showUpdates !== "boolean") throw new Error("Choose whether to show updates");
+      if ("showRoutineChats" in rest && typeof rest.showRoutineChats !== "boolean") throw new Error("Choose on or off");
       if (typeof rest.clarificationInstructions === "string" && rest.clarificationInstructions.length > 4000) throw new Error("Keep the instructions under 4,000 characters.");
       if (appearance?.bubble !== undefined && !(appearance.bubble === "theme" || /^#[0-9a-f]{6}$/i.test(appearance.bubble))) throw new Error("Invalid appearance choice");
       if (appearance?.avatarAnimations !== undefined && typeof appearance.avatarAnimations !== "boolean") throw new Error("Invalid appearance choice");
@@ -2435,18 +2641,14 @@ export class MockBackend {
     },
     // Bots
     addBot(data) {
-      const bot = { id: "bot-" + randomUUID().slice(0, 8), name: text(data.name, 48, "name"), role: String(data.role ?? "").slice(0, 90), instructions: String(data.instructions ?? ""), face: data.face ?? "idle", ...(data.summary && { summary: data.summary }), avatar: data.avatar ?? { body: "bighelp.biggie" } };
+      const bot = { id: "bot-" + randomUUID().slice(0, 8), name: text(data.name, 48, "name"), role: String(data.role ?? "").slice(0, 90), instructions: String(data.instructions ?? ""), face: data.face ?? "idle", ...(data.summary && { summary: data.summary }), ...(data.look && { look: structuredClone(data.look) }), avatar: data.avatar ?? { body: "bighelp.biggie" } };
       // Made from a starter: kept as the computer keeps it (desktop/workspace.mjs addBot).
       const starter = starterById(data.starter);
       if (starter) Object.assign(bot, { starter: starter.id }, starter.suggestProactive && { suggestProactive: true });
-      const person = this.caller?.id ?? "owner";
-      if (person === "owner") delete bot.createdBy;
-      else bot.createdBy = person;
-      this.state.bots.push(bot);
-      this.mainChat(bot.id, person);
-      return bot.id;
+      return this.finishBot(bot, data.bundle);
     },
     updateBot(id, patch) {
+      if (patch.bundle !== undefined) throw new Error("A template bundle is installed when a bot is created.");
       const bot = this.bot(id);
       // A bot's own voice ("bot-voice-v1"): checked as the desktop app checks it, and null clears it.
       const { voice, ...rest } = patch;
@@ -2478,14 +2680,10 @@ export class MockBackend {
       this.state.chats = this.state.chats.filter((c) => c.botId !== id);
     },
     duplicateBot(id) {
-      const { id: _id, pinned: _pinned, ...copy } = this.bot(id);
+      const source = this.bot(id);
+      const { id: _id, pinned: _pinned, bundle: _original, ...copy } = source;
       const bot = { ...structuredClone(copy), id: "bot-" + randomUUID().slice(0, 8), name: copy.name + " copy" };
-      const person = this.caller?.id ?? "owner";
-      if (person === "owner") delete bot.createdBy;
-      else bot.createdBy = person;
-      this.state.bots.push(bot);
-      this.mainChat(bot.id, person);
-      return bot.id;
+      return this.finishBot(bot, currentBotBundle(source, this.state.chats, this.caller?.id));
     },
     // Made-up agents in the person's GitHub Copilot setup. A bot made from one is marked `added`.
     importableAgents() {
@@ -2600,9 +2798,14 @@ export class MockBackend {
     deleteSection(id) {
       this.state.sections = this.state.sections.filter((s) => s.id !== id);
     },
+    orderSections(ids) {
+      const named = ids.map((id) => this.state.sections.find((s) => s.id === id)).filter(Boolean);
+      this.state.sections = [...named, ...this.state.sections.filter((s) => !named.includes(s))];
+    },
     saveTemplate(botId, name) {
       const bot = this.bot(botId);
-      const template = { id: randomUUID(), name: name || bot.name, role: bot.role, summary: bot.summary ?? "", instructions: bot.instructions, avatar: bot.avatar, source: "saved", createdAt: now() };
+      const bundle = currentBotBundle(bot, this.state.chats);
+      const template = { id: randomUUID(), name: name || bot.name, role: bot.role, summary: bot.summary ?? "", instructions: bot.instructions, avatar: bot.avatar, ...(bot.look && { look: structuredClone(bot.look) }), ...(bundle && { bundle }), source: "saved", createdAt: now() };
       this.state.templates.push(template);
       return template.id;
     },
@@ -2616,11 +2819,13 @@ export class MockBackend {
     exportTemplateText(target) {
       const source = target?.templateId ? this.state.templates.find((t) => t.id === target.templateId) : this.bot(target?.botId);
       if (!source) throw new Error("This template no longer exists.");
-      const { name, role, summary = "", instructions = "", avatar } = source;
-      return { name: fileName(name, "Bot template") + ".json", text: JSON.stringify({ botkinsTemplate: 1, name, role, summary, instructions, avatar }, null, 2) + "\n" };
+      const { name, role, summary = "", instructions = "", look } = source;
+      const bundle = target?.templateId ? templateBundle(source.bundle) : currentBotBundle(source, this.state.chats);
+      return { name: fileName(name, "Bot template") + ".json", text: JSON.stringify({ format: "botkins.bot-template", version: bundle ? 2 : 1, name, role, summary, instructions, ...(look && { look }), ...(bundle && { bundle }) }, null, 2) + "\n" };
     },
     // A template from the text of a file someone shared ("Import…" without an open dialog).
     importTemplateText(file) {
+      if (typeof file?.text !== "string" || Buffer.byteLength(file.text, "utf8") > 256 * 1024) throw new Error("That file is too large to be a bot template.");
       let data;
       try {
         data = JSON.parse(file?.text);
@@ -2628,7 +2833,12 @@ export class MockBackend {
         data = null;
       }
       if (!data || typeof data !== "object" || typeof data.name !== "string" || !data.name.trim()) throw new Error("That file isn't a bot template.");
-      const template = { id: randomUUID(), name: data.name.trim().slice(0, 48), role: String(data.role ?? ""), summary: String(data.summary ?? ""), instructions: String(data.instructions ?? ""), avatar: data.avatar, source: "imported", createdAt: now() };
+      // Older demo exports had only botkinsTemplate and loose bot fields.
+      const legacy = data.format === undefined && data.version === undefined && !Object.hasOwn(data, "bundle");
+      if (!legacy && !["botkins.bot-template", "commander.bot-template"].includes(data.format)) throw new Error("That file isn't a Botkins bot template.");
+      const bundle = legacy ? undefined : templateFileBundle(data);
+      if (bundle && !this.capabilities.includes("agent-template-bundles-v1")) throw new Error("Update the app on your computer to import a template bundle.");
+      const template = { id: randomUUID(), ...(bundle && { bundle }), ...(data.look && { look: structuredClone(data.look) }), name: data.name.trim().slice(0, 48), role: String(data.role ?? ""), summary: String(data.summary ?? ""), instructions: String(data.instructions ?? ""), avatar: data.avatar, source: "imported", createdAt: now() };
       this.state.templates.push(template);
       return template.id;
     },
@@ -2666,8 +2876,9 @@ export class MockBackend {
       return chat.id;
     },
     setChatFlags(id, flags) {
-      if (flags.archived && this.chat(id).main) throw new Error("Main chat stays in your chats.");
-      Object.assign(this.chat(id), flags);
+      const chat = this.chat(id);
+      if (flags.archived && chat.main) throw new Error("Main chat stays in your chats.");
+      Object.assign(chat, isRoutineChat(chat) && flags.unread ? { ...flags, unread: false } : flags);
     },
     markChatsRead(ids) {
       if (!Array.isArray(ids)) throw new Error("Choose valid chats to mark as read.");
@@ -2686,7 +2897,7 @@ export class MockBackend {
     },
     regenerateChatTitle(id) {
       const chat = this.chat(id);
-      if (chat.main || chat.temporary || chat.panelId || chat.schedules?.some((entry) => entry.routine)) throw new Error("This chat's title can't be regenerated.");
+      if (chat.main || chat.temporary || chat.panelId || isRoutineChat(chat)) throw new Error("This chat's title can't be regenerated.");
       const opening = chat.messages.find((message) => message.role === "user" && message.text?.trim());
       if (!opening) throw new Error("Send a message before regenerating the title.");
       return (chat.title = opening.text.trim().replace(/\s+/g, " ").slice(0, 80));
@@ -2707,6 +2918,55 @@ export class MockBackend {
         throw new Error("The message changed. Choose it again.");
       setReaction(message, emoji, this.caller.id === "owner" ? "owner" : "member:" + this.caller.id);
       return message.reactions;
+    },
+    "chat.cardAction"(chatId, target, action) {
+      const chat = this.chat(chatId);
+      const message =
+        typeof target === "number"
+          ? chat.messages[target]
+          : chat.messages.find((m) => m.actionCard?.id === target);
+      if (!message?.actionCard) throw new Error("Action card not found in this chat.");
+      const card = message.actionCard;
+      if (action === "dismiss") {
+        if (card.state === "dispatched") throw new Error("This card has already been dispatched.");
+        const next = { ...card, state: "dismissed", actedBy: "owner", actedAt: Date.now() };
+        message.actionCard = next;
+        this.emit?.();
+        return { ok: true, state: "dismissed", card: next };
+      }
+      if (card.state === "dismissed") throw new Error("This card has already been dismissed.");
+      if (card.state === "dispatched" && card.dispatchedChatId) {
+        return {
+          ok: true,
+          state: "dispatched",
+          chatId: card.dispatchedChatId,
+          botId: card.dispatchedBotId,
+          botName: card.dispatchedBotName,
+          alreadyDispatched: true,
+          card,
+        };
+      }
+      const prompt = card.dispatch?.prompt?.trim();
+      if (!prompt) throw new Error("This card does not have a dispatch action configured.");
+      const bot =
+        this.state.bots.find((b) => b.id === card.dispatch?.botId) ??
+        this.state.bots.find((b) => b.name.toLowerCase() === String(card.dispatch?.botName ?? "").toLowerCase()) ??
+        this.state.bots.find((b) => b.id === chat.botId) ??
+        this.state.bots[0];
+      const newChatId = this.createChat(bot.id, card.dispatch?.chatTitle || card.title);
+      const next = {
+        ...card,
+        state: "dispatched",
+        dispatchedChatId: newChatId,
+        dispatchedBotId: bot.id,
+        dispatchedBotName: bot.name,
+        actedBy: "owner",
+        actedAt: Date.now(),
+      };
+      message.actionCard = next;
+      this.send(newChatId, prompt);
+      this.emit?.();
+      return { ok: true, state: "dispatched", chatId: newChatId, botId: bot.id, botName: bot.name, alreadyDispatched: false, card: next };
     },
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
@@ -2860,11 +3120,16 @@ export class MockBackend {
         bots: this.state.bots.slice(0, 3).map((b) => ({ id: b.id, name: b.name, hint: b.role })),
       };
     },
-    catalog() {
+    catalog(botId) {
+      const who = this.caller?.id ?? "owner";
+      const canUse = who === "owner" || hasAction(roleOfMember(this.teamOf?.(), who)?.perms, "skills", "use");
+      const bot = this.state.bots.find((bot) => bot.id === botId);
+      const bundled = canUse ? bot?.bundle?.skills?.filter((skill) => !bot.skillsOff?.includes(skill.name)) ?? [] : [];
       return {
       choices: [
         { name: "weekly-review", kind: "Skill", command: "/weekly-review", source: "Botkins", description: "Run a weekly review: wins, misses and next steps." },
         { name: "meeting-notes", kind: "Skill", command: "/meeting-notes", source: "Botkins", description: "Turn a transcript into decisions and action items." },
+        ...bundled.map(({ name, description }) => ({ name, description, kind: "Skill", command: "/" + name, source: "Botkins" })),
         { name: "compact", kind: "Command", command: "/compact", source: "Botkins", description: "Summarize this chat so far to free up room." },
         { name: "btw", kind: "Command", aliases: ["ask"], command: "/btw", hint: "<question>", duringTurn: true, source: "Botkins", description: "Ask a side question about this chat without adding it to the conversation." },
         { name: "model", kind: "Command", command: "/model", source: "Botkins", description: "Choose the model for this chat.", hint: "[name]", options: [{ name: "auto", description: "Let the app choose" }, { name: "gpt-5.5", description: "GPT-5.5" }] },
@@ -3113,7 +3378,9 @@ export class MockBackend {
       // A script routine's prompt is its follow-up action's, needed only when that is on.
       const script = data.script ? text(data.script, 20000, "script") : undefined;
       const prompt = script && !data.followUp ? String(data.prompt ?? "").trim() : text(data.prompt, 4000, "prompt");
-      chat.schedules = [{ id: 1, routine: true, enabled: true, name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
+      const creator = this.caller?.id;
+      if (creator && creator !== "owner") chat.createdBy = creator;
+      chat.schedules = [{ id: 1, routine: true, enabled: true, ...(chat.createdBy && { createdBy: chat.createdBy }), name: data.name, prompt, cadence: data.cadence, timezone: data.timezone || "America/Chicago", recurring: data.cadence.kind !== "once", nextAt: now() + 20 * HOUR, createdAt: now(), ...(data.deliver && { deliver: delivery(data.deliver) }), ...(data.notify === false && { notify: false }), ...(data.notifyTargets && { notifyTargets: data.notifyTargets }), ...(script && { script, followUp: data.followUp === true }) }];
       if (data.model) chat.model = data.model;
       return chatId;
     },
@@ -3187,8 +3454,16 @@ export class MockBackend {
       this.state.tasks.unshift(task);
       return task.id;
     },
-    moveTask(id, status) {
-      Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status, updatedAt: now() });
+    moveTask(id, status, options = {}) {
+      const task = this.state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const from = task.status;
+      const ts = now();
+      Object.assign(task, { status, updatedAt: ts });
+      if (status === "ready" || status === "later" || status === "done" || status === "archived") delete task.reviewerBotId;
+      if (status === "ready" || status === "later") delete task.problem;
+      task.history ??= [];
+      task.history.push({ at: ts, by: "person", byName: "Person", from, to: status, ...(options?.note ? { note: String(options.note) } : {}) });
     },
     startTask(id) {
       Object.assign(this.state.tasks.find((t) => t.id === id) ?? {}, { status: "working", updatedAt: now() });
@@ -3619,6 +3894,109 @@ export class MockBackend {
       project.lastUsed = now();
       return chat.id;
     },
+    // "project-jobs-v1": jobs, made up (no git runs and nothing on disk is touched). A job is a chat with `job`;
+    // its worktree's changes come from MADE_UP_JOB_FILES once its turn ended, and a prompt that says "conflict" or
+    // "clash" clashes with main until the bot caught up. The setup list needs a yes, as the real one does.
+    projectJobSetup(id, folder) {
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      if (!project.folder) return { repo: false };
+      folder ??= project.folder;
+      if (!project.folders.includes(folder)) throw new Error("Choose a folder in this project.");
+      const changed = this.handlers.projectChanges.call(this, id, folder).files.filter((file) => file.kind !== "untracked").length;
+      return { repo: true, folder, root: folder, base: "main", sha: DEMO_SHA, short: DEMO_SHA.slice(0, 7), changed, setup: DEMO_SETUP, branch: "botkins/{topic}", file: true, hash: DEMO_SETUP_HASH, approved: project.jobSetup?.[folder] === DEMO_SETUP_HASH };
+    },
+    approveJobSetup(id, folder, hash) {
+      const info = this.handlers.projectJobSetup.call(this, id, folder);
+      if (!info.repo) throw new Error("This project's folder is not a git repository.");
+      if (hash !== info.hash) throw new Error("The setup commands changed. Look at them again.");
+      const project = this.state.projects.find((p) => p.id === id);
+      project.jobSetup = { ...project.jobSetup, [info.root]: hash };
+      return info.root;
+    },
+    startProjectJob(id, options = {}) {
+      const prompt = text(options?.prompt, 32000, "prompt");
+      const botIds = [...new Set(Array.isArray(options?.botIds) ? options.botIds : [])];
+      if (!botIds.length || botIds.length > 6) throw new Error("Choose 1 to 6 bots.");
+      const project = this.state.projects.find((p) => p.id === id);
+      if (!project) throw new Error("This project no longer exists.");
+      for (const botId of botIds) {
+        const bot = this.bot(botId);
+        if (this.state.settings?.access?.allBots === false && !bot.access?.all && !bot.access?.projects?.includes(id)) throw new Error(bot.name + " doesn't have access to the project “" + project.name + "”.");
+      }
+      const where = options.where === "checkout" ? "checkout" : "worktree";
+      if (where === "worktree") {
+        const info = this.handlers.projectJobSetup.call(this, id, options.folder);
+        if (!info.repo) throw new Error("This project's folder is not a git repository. Choose “Your checkout”.");
+        if (!info.approved) throw new Error("Look at this project's setup commands and allow them first.");
+      } else {
+        if (botIds.length > 1) throw new Error("Jobs in your checkout go one at a time. Choose one bot, or give each its own worktree.");
+        if (this.state.chats.some((c) => c.projectId === id && c.job?.where === "checkout" && c.job.state === "open" && this.turns.has(c.id))) throw new Error("A job is working in your checkout. Give this one its own worktree, or wait for it.");
+      }
+      const ids = [];
+      for (const botId of botIds) {
+        const chatId = this.handlers.startProjectChat.call(this, [botId], id, options.mode, options.folder);
+        const chat = this.chat(chatId);
+        chat.title = prompt.split("\n")[0].slice(0, 80);
+        const taken = new Set(this.state.chats.map((c) => c.job?.branch).filter(Boolean));
+        let branch = "botkins/" + (slug(prompt).split("-").slice(0, 5).join("-").slice(0, 32) || "job");
+        if (taken.has(branch)) branch += "-" + chatId.slice(5, 11);
+        chat.job = { prompt, where, state: "open", createdAt: now(), ...(where === "worktree" && { branch, base: "main", baseSha: DEMO_SHA, setup: "running" }) };
+        ids.push(chatId);
+        const go = () => {
+          if (chat.job.setup === "running") chat.job.setup = "done";
+          this.handlers.send.call(this, chatId, prompt);
+          this.changed();
+        };
+        if (where === "worktree") setTimeout(go, 1200 * this.speed);
+        else go();
+      }
+      return ids;
+    },
+    projectJobStatus(chatId) {
+      const chat = this.chat(chatId);
+      const job = chat.job;
+      if (!job) throw new Error("This chat is not a job.");
+      const working = this.turns.has(chatId);
+      if (job.where !== "worktree") return { where: job.where, state: job.state, working, canBringIn: false, reason: "Its changes are in your checkout already." };
+      const replied = chat.messages.some((m) => m.role === "assistant");
+      const files = replied ? MADE_UP_JOB_FILES.map((file) => ({ ...file })) : [];
+      const clashes = job.state === "open" && /conflict|clash/i.test(job.prompt) && !job.caughtUp ? ["mobile/package.json", "mobile/package-lock.json"] : [];
+      const open = job.state === "open";
+      const reason = job.state === "brought-in" ? "Brought in." : job.state === "removed" ? "Its worktree was removed." : working ? "The bot is still working." : !files.length ? "Nothing changed yet." : clashes.length ? "It clashes with main in " + clashes.length + " files." : "";
+      return { where: job.where, state: job.state, working, branch: job.branch, base: job.base, baseSha: DEMO_SHA.slice(0, 7), exists: open, ahead: files.length ? 1 : 0, behind: clashes.length ? 2 : 0, uncommitted: 0, files, added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0), conflicts: clashes, checkout: "main", checkoutChanged: 0, canBringIn: open && !reason, reason, ...(job.mergedSha && { mergedSha: job.mergedSha }) };
+    },
+    bringInJob(chatId) {
+      const status = this.handlers.projectJobStatus.call(this, chatId);
+      const job = this.chat(chatId).job;
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (job.where !== "worktree") throw new Error("This job worked in your checkout: its changes are there already.");
+      if (job.state !== "open") throw new Error(job.state === "brought-in" ? "This job was brought in already." : "This job's worktree was removed.");
+      if (status.conflicts.length) return { ok: false, conflicts: status.conflicts };
+      if (!status.files.length) throw new Error("Nothing changed yet.");
+      job.mergedSha = randomUUID().replace(/-/g, "").slice(0, 7);
+      job.state = "brought-in";
+      return { ok: true, commit: job.mergedSha };
+    },
+    catchUpJob(chatId) {
+      const chat = this.chat(chatId);
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (chat.job?.where !== "worktree" || chat.job.state !== "open") throw new Error("Only an open job in its own worktree can catch up.");
+      chat.job.caughtUp = true;
+      this.handlers.send.call(this, chatId, "The branch main moved on since this job started. In your worktree, merge main into " + chat.job.branch + ", resolve any conflicts, check that it still works, and commit the result.");
+    },
+    removeJobWorktree(chatId) {
+      const chat = this.chat(chatId);
+      if (this.turns.has(chatId)) throw new Error("Wait for the job to finish first.");
+      if (chat.job?.where !== "worktree" || chat.job.state !== "open") throw new Error("This job has no worktree to remove.");
+      chat.job.state = "removed";
+    },
+    startJobTurn(chatId) {
+      const chat = this.chat(chatId);
+      if (chat.job?.setup !== "failed" && chat.job?.setup !== "waiting") throw new Error("This job has started already.");
+      chat.job.setup = "skipped";
+      this.handlers.send.call(this, chatId, chat.job.prompt);
+    },
     renameProject(id, name) {
       Object.assign(this.state.projects.find((p) => p.id === id) ?? {}, { name });
     },
@@ -3917,10 +4295,10 @@ export class MockBackend {
       const categories = [...counts].map(([id, count]) => ({ id, name: AGENT_CATEGORIES[id] ?? "Other", count }));
       return { agents: left.filter((agent) => category === undefined || agent.category === category).map(marketAgentOf), categories };
     },
-    "agents.template"(id) {
+    "agents.template"(id, version) {
       const agent = DEMO_AGENTS.find((item) => item.id === id);
       if (!agent) throw new Error("That template isn't in its marketplace any more.");
-      return structuredClone(agent);
+      return templateForReader(structuredClone(agent), version);
     },
     sidePane(chatId, action, panelId) {
       const chat = this.chat(chatId);
@@ -3986,6 +4364,221 @@ export class MockBackend {
         rows.push([new Date(time).toISOString(), new Date(time).toISOString().slice(0, 10), this.state.bots.find((bot) => bot.id === chat.botId)?.name ?? "", chat.id, chat.title, "Done", "message", "Claude Fable 5.2", 80_000 + index * 900, 6000 + index * 70, 30_000, (0.4 + index * 0.03).toFixed(2), 42_000 + index * 800, "claude"]);
       });
       return { name: "botkins-usage-" + days + "d.csv", text: rows.map((row) => row.map(cell).join(",")).join("\n") + "\n" };
+    },
+    // External messaging Channel Hooks ("channels-v1", strictly owner-only).
+    channelsList() {
+      return structuredClone(this.state.channels ?? []);
+    },
+    channelAdd(input = {}) {
+      const kinds = ["slack", "telegram", "discord", "imessage"];
+      const kind = String(input.kind ?? "").toLowerCase();
+      if (!kinds.includes(kind)) throw new Error(`Unsupported channel kind "${kind}".`);
+      const requiredSecrets = { slack: ["appToken", "botToken"], telegram: ["botToken"], discord: ["botToken"], imessage: [] }[kind];
+      const secrets = input.secrets && typeof input.secrets === "object" ? input.secrets : {};
+      for (const key of requiredSecrets) {
+        if (typeof secrets[key] !== "string" || !secrets[key].trim()) {
+          throw new Error(`Missing required credential "${key}" for ${kind}.`);
+        }
+      }
+      const id = "ch_" + randomUUID().replace(/-/g, "").slice(0, 12);
+      const storedKeys = Object.entries(secrets)
+        .filter(([, v]) => typeof v === "string" && v.trim())
+        .map(([k]) => k);
+      if (storedKeys.length) {
+        this.channelSecrets.set(id, Object.fromEntries(storedKeys.map((k) => [k, secrets[k].trim()])));
+      }
+      const defaultTransport = { slack: "socket_mode", telegram: "long_polling", discord: "gateway", imessage: input.nodeHostId ? "imsg_node" : "imsg_local" }[kind];
+      const t = now();
+      const rawPolicy = input.policy && typeof input.policy === "object" ? input.policy : {};
+      const conn = {
+        id,
+        kind,
+        label: String(input.label ?? "").trim() || `${kind.charAt(0).toUpperCase() + kind.slice(1)} channel`,
+        transport: input.transport || defaultTransport,
+        enabled: input.enabled !== false,
+        paused: false,
+        botId: input.botId || this.state.bots[0]?.id || "",
+        ...(input.nodeHostId ? { nodeHostId: String(input.nodeHostId) } : {}),
+        configuredSecrets: storedKeys,
+        policy: {
+          dm: ["pairing", "allowlist", "open", "off"].includes(rawPolicy.dm) ? rawPolicy.dm : "pairing",
+          allowlist: Array.isArray(rawPolicy.allowlist) ? rawPolicy.allowlist : [],
+          groups: {
+            enabled: Boolean(rawPolicy.groups?.enabled),
+            mode: rawPolicy.groups?.mode === "all" ? "all" : "mention",
+            channels: Array.isArray(rawPolicy.groups?.channels) ? rawPolicy.groups.channels : [],
+          },
+          toolProfile: rawPolicy.toolProfile === "standard" ? "standard" : "restricted",
+          ignoreBots: rawPolicy.ignoreBots !== false,
+          notifyPhone: Boolean(rawPolicy.notifyPhone),
+          limits: {
+            senderPerMinute: rawPolicy.limits?.senderPerMinute ?? 10,
+            connectionPerMinute: rawPolicy.limits?.connectionPerMinute ?? 60,
+            maxInboundLength: rawPolicy.limits?.maxInboundLength ?? 4000,
+            maxAttachmentBytes: rawPolicy.limits?.maxAttachmentBytes ?? 5 * 1024 * 1024,
+            allowedAttachmentTypes: rawPolicy.limits?.allowedAttachmentTypes ?? ["image/*", "text/plain", "application/pdf"],
+            dailyTurnCap: rawPolicy.limits?.dailyTurnCap ?? 200,
+          },
+        },
+        pendingPairings: [],
+        dailyUsage: { date: new Date(t).toISOString().slice(0, 10), turns: 0 },
+        status: { state: "connected", detail: "", connectedAt: t },
+        createdAt: t,
+        updatedAt: t,
+      };
+      this.state.channels ??= [];
+      this.state.channels.push(conn);
+      return structuredClone(conn);
+    },
+    channelUpdate(id, patch = {}) {
+      const conn = this.channelById(id);
+      if (typeof patch.label === "string" && patch.label.trim()) conn.label = patch.label.trim().slice(0, 80);
+      if (typeof patch.botId === "string" && patch.botId) conn.botId = patch.botId;
+      if (patch.nodeHostId !== undefined && conn.kind === "imessage") {
+        if (patch.nodeHostId) {
+          conn.nodeHostId = String(patch.nodeHostId);
+          conn.transport = "imsg_node";
+        } else {
+          delete conn.nodeHostId;
+          conn.transport = "imsg_local";
+        }
+      }
+      if (patch.secrets && typeof patch.secrets === "object") {
+        const prev = this.channelSecrets.get(conn.id) ?? {};
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(patch.secrets)) {
+          if (typeof v === "string" && v.trim()) next[k] = v.trim();
+        }
+        this.channelSecrets.set(conn.id, next);
+        conn.configuredSecrets = Object.keys(next);
+        if (conn.status?.state === "auth_error") {
+          conn.status = { state: "connected", detail: "", connectedAt: now() };
+        }
+      }
+      if (patch.policy && typeof patch.policy === "object") {
+        this.handlers.channelSetPolicy.call(this, id, patch.policy);
+      }
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelRemove(id) {
+      const conn = this.channelById(id);
+      this.channelSecrets.delete(conn.id);
+      this.state.channels = (this.state.channels ?? []).filter((c) => c.id !== conn.id);
+      return { removed: true, id: conn.id };
+    },
+    channelBind(id, botId) {
+      const conn = this.channelById(id);
+      if (!this.state.bots.some((b) => b.id === botId)) throw new Error(`Unknown bot "${botId}".`);
+      conn.botId = botId;
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelSetPolicy(id, patch = {}) {
+      const conn = this.channelById(id);
+      const cur = conn.policy ?? {};
+      conn.policy = {
+        ...cur,
+        ...(patch.dm && ["pairing", "allowlist", "open", "off"].includes(patch.dm) ? { dm: patch.dm } : {}),
+        ...(Array.isArray(patch.allowlist) ? { allowlist: patch.allowlist } : {}),
+        ...(patch.groups ? { groups: { ...(cur.groups ?? { enabled: false, mode: "mention", channels: [] }), ...patch.groups } } : {}),
+        ...(patch.toolProfile && ["restricted", "standard"].includes(patch.toolProfile) ? { toolProfile: patch.toolProfile } : {}),
+        ...(typeof patch.ignoreBots === "boolean" ? { ignoreBots: patch.ignoreBots } : {}),
+        ...(typeof patch.notifyPhone === "boolean" ? { notifyPhone: patch.notifyPhone } : {}),
+        ...(patch.limits ? { limits: { ...(cur.limits ?? {}), ...patch.limits } } : {}),
+      };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelPause(id) {
+      const conn = this.channelById(id);
+      conn.paused = true;
+      conn.status = { state: "paused", detail: "Paused by owner" };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelResume(id) {
+      const conn = this.channelById(id);
+      conn.paused = false;
+      conn.enabled = true;
+      conn.status = { state: "connected", detail: "", connectedAt: now() };
+      conn.updatedAt = now();
+      return structuredClone(conn);
+    },
+    channelPairList(id) {
+      const list = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      return list.flatMap((conn) =>
+        (conn.pendingPairings ?? []).map((p) => ({
+          ...p,
+          connectionId: conn.id,
+          connectionLabel: conn.label,
+          kind: conn.kind,
+        })),
+      );
+    },
+    channelPairApprove(code, id) {
+      const clean = String(code ?? "").trim().toUpperCase();
+      const targets = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      for (const conn of targets) {
+        const idx = (conn.pendingPairings ?? []).findIndex((p) => p.code.toUpperCase() === clean);
+        if (idx < 0) continue;
+        const [pending] = conn.pendingPairings.splice(idx, 1);
+        conn.policy.allowlist ??= [];
+        if (!conn.policy.allowlist.some((a) => a.senderId === pending.senderId)) {
+          conn.policy.allowlist.push({
+            senderId: pending.senderId,
+            display: pending.display || pending.senderId,
+            addedAt: now(),
+            source: "pairing",
+          });
+        }
+        this.channelAudit.unshift({
+          time: now(),
+          connectionId: conn.id,
+          kind: conn.kind,
+          senderId: pending.display || pending.senderId,
+          conversationId: pending.conversationId,
+          decision: "pairing_approved",
+        });
+        return { approved: true, connectionId: conn.id, senderId: pending.senderId, display: pending.display || pending.senderId };
+      }
+      throw new Error(`No pending pairing request matches code "${clean}".`);
+    },
+    channelPairDeny(code, id) {
+      const clean = String(code ?? "").trim().toUpperCase();
+      const targets = id ? [this.channelById(id)] : (this.state.channels ?? []);
+      for (const conn of targets) {
+        const idx = (conn.pendingPairings ?? []).findIndex((p) => p.code.toUpperCase() === clean);
+        if (idx < 0) continue;
+        const [pending] = conn.pendingPairings.splice(idx, 1);
+        this.channelAudit.unshift({
+          time: now(),
+          connectionId: conn.id,
+          kind: conn.kind,
+          senderId: pending.display || pending.senderId,
+          conversationId: pending.conversationId,
+          decision: "pairing_denied",
+        });
+        return { denied: true, connectionId: conn.id, senderId: pending.senderId };
+      }
+      throw new Error(`No pending pairing request matches code "${clean}".`);
+    },
+    channelTest(id) {
+      const conn = this.channelById(id);
+      if (conn.status?.state === "auth_error") {
+        return { ok: false, state: "auth_error", detail: conn.status.detail || "Token rejected" };
+      }
+      return {
+        ok: true,
+        state: "connected",
+        detail: `Connected (${conn.label})`,
+        identity: conn.kind === "telegram" ? "@alfie_bot" : conn.kind === "slack" ? "@botkins" : undefined,
+      };
+    },
+    channelLogs(id, options = {}) {
+      const limit = Math.max(1, Math.min(200, Number(options?.limit) || 100));
+      const list = id ? this.channelAudit.filter((e) => e.connectionId === id) : this.channelAudit;
+      return structuredClone(list.slice(0, limit));
     },
     cacheInfo() {
       return { ...this.cache };

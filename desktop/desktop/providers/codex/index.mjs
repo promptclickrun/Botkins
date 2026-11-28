@@ -21,7 +21,7 @@ import { ModelProvider, ProviderSession, usageData } from "../provider.mjs";
 import { StdioRpc, cliEnv, findBinary, versionOf } from "../cli.mjs";
 import { buildInventory, resolvePrompt } from "../commands.mjs";
 import { watchQuiet } from "../liveness.mjs";
-import { SessionStore, mcpText, missingConversation, serversWithTokens, transcriptContext } from "../sessions.mjs";
+import { SessionStore, mcpText, missingConversation, resumeOrRecover, serversWithTokens } from "../sessions.mjs";
 import { skillChoices, skillSupport } from "../skills.mjs";
 import { displayValue } from "../../display.mjs";
 import { env } from "../../home.mjs";
@@ -241,7 +241,8 @@ class CodexSession extends ProviderSession {
     if (!spec.hostDispatch)
       this.bridge = await provider.bridge.open(spec.handlers ? [...spec.tools, ...this.skills.tools] : [], spec.temporary ? {} : { key: provider.id + ":" + spec.sessionId });
     const isolation = spec.hostDispatch ? await dispatchConfig(provider, rpc, spec.folder) : null;
-    const settings = approvalSettings(spec.approval);
+    // Belt-and-braces: sourcesOnly sessions never leave the read-only sandbox even if a caller passes approval: "all".
+    const settings = approvalSettings(spec.sourcesOnly ? "ask" : spec.approval);
     const params = {
       model: this.model.model,
       cwd: spec.folder,
@@ -262,41 +263,47 @@ class CodexSession extends ProviderSession {
     // same from turn to turn (desktop/session-prompts.mjs); when they differ, it began anew.
     this.signature = createHash("sha256").update(JSON.stringify([spec.folder, spec.instructions, spec.context ?? "", this.skills.instructions, params.config])).digest("hex");
     const known = spec.established && provider.sessions.get(spec.sessionId);
-    let thread;
-    if (known) {
-      await provider.unloadIfChanged(known.ref, this.signature);
-      for (let tries = 0; !thread; tries++) {
-        try {
-          ({ thread } = await rpc.request("thread/resume", { ...params, threadId: known.ref, excludeTurns: true }));
-        } catch (error) {
-          // A thread that was just unloaded takes a moment to close; Codex says to ask again.
-          if (/is closing/i.test(error.message) && tries < 40) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-            continue;
+    const { value: thread, recovered, lost } = await resumeOrRecover({
+      spec,
+      hasRef: !!known,
+      resume: async () => {
+        await provider.unloadIfChanged(known.ref, this.signature);
+        for (let tries = 0; ; tries++) {
+          try {
+            return (await rpc.request("thread/resume", { ...params, threadId: known.ref, excludeTurns: true })).thread;
+          } catch (error) {
+            // A thread that was just unloaded takes a moment to close; Codex says to ask again.
+            if (/is closing/i.test(error.message) && tries < 40) {
+              await new Promise((resolve) => setTimeout(resolve, 250));
+              continue;
+            }
+            throw error;
           }
-          // Codex no longer has the thread (or the first turn failed before it saved anything): start again.
-          if (!missingConversation(error)) throw error;
-          break;
         }
-      }
-    }
-    if (!thread) {
+      },
+      onMissing: () => {
+        if (!spec.temporary) provider.sessions.delete(spec.sessionId);
+      },
+      create: async () => {
+        const opened = await rpc.request("thread/start", {
+          ...params,
+          serviceName: "botkins",
+          ...(spec.temporary && { ephemeral: true }),
+        });
+        if (isolation) {
+          try { await checkDispatchThread(rpc, opened); }
+          catch (error) {
+            await provider.unsubscribe(opened.thread.id);
+            throw error;
+          }
+        }
+        return opened.thread;
+      },
+    });
+    if (recovered) {
       // A conversation Codex doesn't hold continues from Botkins' own transcript, told once with
       // the first message: the developer instructions are sent again on every resume and stay the same.
-      this.lost = spec.established && spec.hasReplies ? transcriptContext(spec) : "";
-      const opened = await rpc.request("thread/start", {
-        ...params,
-        serviceName: "botkins",
-        ...(spec.temporary && { ephemeral: true }),
-      });
-      thread = opened.thread;
-      if (isolation) {
-        try { await checkDispatchThread(rpc, opened); }
-        catch (error) {
-          await provider.unsubscribe(thread.id);
-          throw error;
-        }
-      }
+      this.lost = spec.established ? lost : "";
       if (!spec.temporary) provider.sessions.set(spec.sessionId, { ref: thread.id, turns: [] });
     }
     this.threadId = thread.id;
@@ -378,7 +385,7 @@ class CodexSession extends ProviderSession {
         : undefined;
       // Stop was pressed while the thread was still starting: the turn never begins.
       if (this.stopRequested) return { text: "" };
-      const settings = approvalSettings(this.mode === "plan" ? "ask" : this.spec.approval);
+      const settings = approvalSettings(this.mode === "plan" || this.spec.sourcesOnly ? "ask" : this.spec.approval);
       const turn = (this.turn = { text: [], current: null, failure: null, id: null, baseline: this.usage?.total ?? null });
       const finished = new Promise((resolve, reject) => Object.assign(turn, { resolve, reject }));
       // The turn can be failed from elsewhere (the CLI stopping) before anything waits on it.

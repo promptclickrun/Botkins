@@ -51,7 +51,7 @@ const PREFIX = "mcp__" + TOOL_SERVER + "__";
 
 // Claude Code's own extras, switched off for a run: the runtime owns tools, memory, instructions,
 // compaction and retries.
-const QUIET = {
+export const QUIET = {
   ENABLE_TOOL_SEARCH: "false",
   CLAUDE_CODE_MAX_RETRIES: "0",
   DISABLE_AUTO_COMPACT: "1",
@@ -74,7 +74,7 @@ const QUIET = {
  */
 export const CALLER = { CLAUDE_CODE_ENTRYPOINT: "botkins", CLAUDE_CODE_DISABLE_ARTIFACT: "1" };
 // Left over from a surrounding Claude Code or an earlier run, these would change the request.
-const DROPPED = ["CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDECODE", "CLAUDE_CODE_SSE_PORT"];
+export const DROPPED = ["CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDECODE", "CLAUDE_CODE_SSE_PORT"];
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /**
  * The thinking level of a run, as Claude Code's environment. It is not given with --effort: with

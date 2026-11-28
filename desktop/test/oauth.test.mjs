@@ -11,6 +11,7 @@ import { accountOf, challengeParam, REDIRECT_PORT, scheme } from "../desktop/oau
 import { serversWithTokens } from "../desktop/providers/sessions.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
 import { oauthMcpServer } from "./oauth-server.mjs";
+import { PHONE_OAUTH_REDIRECT, PHONE_REDIRECT, phoneSignIns } from "../desktop/phone-signin.mjs";
 
 async function setup(t, serverOptions, workspaceOptions = {}) {
   const remote = await oauthMcpServer(serverOptions);
@@ -658,6 +659,68 @@ test("an address that says access was denied ends the sign-in as cancelled, and 
   assert.equal(third.open(), true);
   third.ws.integrations.cancelSignIn(third.id);
   await assert.rejects(third.done, /Sign-in was cancelled/);
+});
+
+test("a phone's browser can do a tool's sign-in for a computer with none: it registers the https bounce, comes back to the app's address, and the computer trades it", async (t) => {
+  const { remote, ws, id, view, opened } = await setup(t);
+  const phone = phoneSignIns(() => ws.integrations);
+  const { url, redirect, oauthRedirect } = await phone.start(id);
+  assert.equal(redirect, PHONE_REDIRECT);
+  assert.equal(oauthRedirect, PHONE_OAUTH_REDIRECT);
+  assert.equal(opened.length, 0, "nothing opens on the computer");
+  assert.equal(new URL(url).searchParams.get("redirect_uri"), PHONE_OAUTH_REDIRECT, "the sign-in server sends the browser to the https relay bounce");
+  const registered = remote.state.log.find((r) => r.path === "/register");
+  assert.deepEqual(JSON.parse(registered.body).redirect_uris, [PHONE_OAUTH_REDIRECT]);
+  const oauthBack = (await fetch(url, { redirect: "manual" })).headers.get("location");
+  assert.ok(oauthBack.startsWith(PHONE_OAUTH_REDIRECT + "?"));
+  // The relay's /mcp-auth route bounces the https callback to botkins://mcp-auth with the query intact.
+  const back = PHONE_REDIRECT + new URL(oauthBack).search;
+  // Another app's address, the computer's own loopback, or the unbounced https URL are not accepted.
+  await assert.rejects(phone.finish(id, back.replace("botkins://", "evil://")), /not the address this sign-in sends the browser back to/);
+  await assert.rejects(phone.finish(id, back.replace(PHONE_REDIRECT, "http://127.0.0.1:47823/callback")), /not the address this sign-in sends the browser back to/);
+  await assert.rejects(phone.finish(id, oauthBack), /not the address this sign-in sends the browser back to/);
+  const auth = await phone.finish(id, back);
+  assert.equal(auth.signedIn, true);
+  assert.equal(view().auth.signedIn, true);
+  const exchange = new URLSearchParams(remote.state.log.find((r) => r.path === "/token").body);
+  assert.equal(exchange.get("redirect_uri"), PHONE_OAUTH_REDIRECT);
+  await assert.rejects(phone.finish(id, back), /No sign-in is waiting/);
+  // A sign-in the phone closed is cancelled on the computer.
+  await phone.start(id);
+  phone.cancel(id);
+  await tick();
+  assert.equal(ws.integrations.oauth.flows.has(id), false);
+});
+
+test("custom-scheme redirects are rejected by strict OAuth servers, and a client saved under the old botkins:// redirect re-registers under https", async (t) => {
+  const { remote, ws, id } = await setup(t);
+  await assert.rejects(
+    ws.integrations.signIn(id, { redirect: PHONE_REDIRECT, open: async () => {} }),
+    /Redirect URI must use https, or http on a loopback host/,
+  );
+  // Seed a client registration saved by an earlier version under botkins://mcp-auth.
+  const server = ws.integrations.server(id);
+  ws.integrations.oauth.write(server, {
+    issuer: remote.origin,
+    tokenEndpoint: remote.origin + "/token",
+    clientId: "old-custom-scheme-client",
+    registered: true,
+    redirectUri: PHONE_REDIRECT,
+  });
+  const phone = phoneSignIns(() => ws.integrations);
+  const first = await phone.start(id);
+  const registrations = () => remote.state.log.filter((r) => r.path === "/register");
+  assert.equal(registrations().length, 2, "old botkins:// registration was not reused; Botkins re-registered");
+  assert.deepEqual(JSON.parse(registrations()[1].body).redirect_uris, [PHONE_OAUTH_REDIRECT]);
+  const oauthBack = (await fetch(first.url, { redirect: "manual" })).headers.get("location");
+  assert.equal((await phone.finish(id, PHONE_REDIRECT + new URL(oauthBack).search)).signedIn, true);
+  assert.notEqual(ws.integrations.oauth.read(server).clientId, "old-custom-scheme-client");
+  assert.equal(ws.integrations.oauth.read(server).redirectUri, PHONE_OAUTH_REDIRECT);
+  // A second phone sign-in reuses the new https registration without registering again.
+  const second = await phone.start(id);
+  assert.equal(registrations().length, 2);
+  const secondBack = (await fetch(second.url, { redirect: "manual" })).headers.get("location");
+  assert.equal((await phone.finish(id, PHONE_REDIRECT + new URL(secondBack).search)).signedIn, true);
 });
 
 test("the sign-in server's name in a pasted address is checked as in the browser's own answer", async (t) => {

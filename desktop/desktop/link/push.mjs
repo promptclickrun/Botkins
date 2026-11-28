@@ -331,8 +331,9 @@ export class Push {
         const was = before.get(run.id);
         if (working && was === undefined) this.onStart(sends, targets, state, run, chats, bots);
         else if (!working && was !== false) {
+          const chat = chats.get(run.chatId);
           this.onFinish(sends, targets, state, run, chats, bots, mentionedRuns);
-          if (run.status !== "Stopped" && run.notify !== false) ended.add(run.chatId);
+          if (run.status !== "Stopped" && run.notify !== false && (!chat?.channel || this.kindOf(run, chat, state) !== null)) ended.add(run.chatId);
         }
         // Turns still under way: their Live Activities follow along.
         else if (working) this.onProgress(sends, targets, state, run);
@@ -382,7 +383,9 @@ export class Push {
   onRequest(sends, targets, request, chats, bots) {
     const chat = chats.get(request.chatId);
     const bot = bots.get(request.botId ?? chat?.botId);
-    const name = bot?.name ?? "A bot";
+    const name = request.nodeJob
+      ? (request.sourceBotName && request.sourceHostName ? `${request.sourceBotName} on ${request.sourceHostName}` : request.sourceBotName || "Node host")
+      : (bot?.name ?? "A bot");
     // A secure input ("secure-input-v1") is named as what it is: its answer is typed into a prompt of
     // its own, never into the chat.
     const title = request.kind === "permission" ? name + " needs your approval" : request.kind === "secure" ? name + " needs a secure input" : name + " has a question";
@@ -392,15 +395,28 @@ export class Push {
       if ((request.dispatch || request.review) && device.kind === "gadget") continue;
       const ownerOnly = request.kind === "permission" || request.kind === "secure";
       if (ownerOnly ? !!device.memberId : !this.maySeeChat(device, chat)) continue;
-      if (!this.wants(device, "requests") || this.present(device.id, request.chatId)) continue;
+      if (!this.wants(device, "requests") || (!request.nodeJob && this.present(device.id, request.chatId))) continue;
       const record = this.store.push(device.id);
       const text = record.prefs.previews ? firstLine(request.title) || "Open Botkins to answer." : "Open Botkins to answer.";
       // What the notification's buttons are (docs/live-cards.md, section 6). With previews off they
       // would show the bot's words, so the notification only opens the app.
-      const alert = this.alert(device.id, record, { t: title, m: text, c: request.chatId, k: "request", r: request.id, ...(record.prefs.previews && { q: askDetail(request) }) }, { urgent: true, expiration: 300 });
+      const alert = this.alert(
+        device.id,
+        record,
+        {
+          t: title.slice(0, 80),
+          m: text,
+          c: request.chatId,
+          k: "request",
+          r: request.id,
+          ...(request.nodeJob && { nj: true }),
+          ...(record.prefs.previews && { q: askDetail(request) }),
+        },
+        { urgent: true, expiration: 300 },
+      );
       // A phone with the card for all Botkins running hears of it from the card (Push.cards), which
       // falls back to this notification when the card doesn't show the request.
-      if (!this.hold(device.id, record, request.chatId, alert, "request")) sends.push(alert);
+      if (request.nodeJob || !this.hold(device.id, record, request.chatId, alert, "request")) sends.push(alert);
     }
   }
 
@@ -445,8 +461,16 @@ export class Push {
     }
   }
 
+  /** Whether a channel chat's replies may notify paired phones (off by default per channel policy). */
+  channelNotifies(chat, state = null) {
+    if (!chat?.channel) return true;
+    const channels = state?.channels ?? this.snapshot?.()?.channels;
+    const conn = Array.isArray(channels) ? channels.find((c) => c?.id && c.id === chat.channel?.connectionId) : null;
+    return conn?.policy?.notifyPhone === true;
+  }
+
   /** Whether a run that finished is worth a notification, and of which kind (the desktop's own rules). */
-  kindOf(run, chat) {
+  kindOf(run, chat, state = null) {
     if (!chat || chat.temporary || run.status === "Stopped" || run.notify === false) return null;
     // A bot's own check that failed is in its Proactive log, not a notification.
     if (run.proactive && (run.status !== "Completed" || !run.delivery)) return null;
@@ -465,12 +489,13 @@ export class Push {
       // A routine the person made quiet says nothing, here or on the computer.
       return entry?.notify === false ? null : "routines";
     }
+    if (chat.channel && !this.channelNotifies(chat, state)) return null;
     return "replies";
   }
 
   onFinish(sends, targets, state, run, chats, bots, mentionedRuns = null) {
     const chat = chats.get(run.chatId);
-    const kind = this.kindOf(run, chat);
+    const kind = this.kindOf(run, chat, state);
     const resolved =
       kind === "routines" && !run.panelId && !run.proactive
         ? resolveRoutineTargets({
@@ -544,10 +569,7 @@ export class Push {
       // A routine that sends its result to a chat is opened there, where the person reads it.
       // When an explicit routine target cannot access either chat, omit `c` rather than leaking it.
       const payload = { t: title.slice(0, 80), m: text, ...(openChatId && { c: openChatId }), k: kind === "routines" ? "routine" : "reply", ...offered };
-      const alert = this.alert(device.id, record, payload, {
-        expiration: 900,
-        ...(!openChatId && { group: "routine:" + (run.scheduleId ?? run.id) }),
-      });
+      const alert = this.alert(device.id, record, payload, { expiration: 900 });
       if (!canSeeChat || !this.hold(device.id, record, run.chatId, alert, "finish")) sends.push(alert);
     }
   }
@@ -631,23 +653,22 @@ export class Push {
     return Buffer.concat([nonce, seal(key, nonce, Buffer.from(JSON.stringify(content), "utf8"), aad)]).toString("base64");
   }
 
-  alert(deviceId, record, content, { urgent = false, expiration = 900, group } = {}) {
-    // A chat's alerts share a banner and a thread; `group` gives others one of their own.
-    const thread = group ?? content.c ?? "botkins";
+  alert(deviceId, record, content, { urgent = false, expiration = 900, collapse } = {}) {
+    // No thread-id and no default collapse id: iOS folds all Botkins alerts into one app-wide
+    // stack instead of splitting per chat or replacing unread banners. Callers pass `collapse`
+    // only when a newer notice should replace an unread earlier one (such as app updates).
     return {
       token: record.token,
       env: record.env,
       type: "alert",
       priority: 10,
       expiration,
-      // One banner per chat: a newer one replaces an older one that was not read.
-      collapse: b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)),
+      ...(collapse && { collapse: b64u(hkdf(Buffer.from(collapse, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/collapse/v1", 24)) }),
       payload: {
         aps: {
           alert: { title: "Botkins", body: content.k === "request" || content.k === "reminder" ? "A bot needs you" : content.k === "update" ? "An update is available" : content.k === "space" ? "A space changed" : "New message" },
           sound: "default",
           "mutable-content": 1,
-          "thread-id": b64u(hkdf(Buffer.from(thread, "utf8"), Buffer.from(deviceId, "utf8"), "botkins/push/thread/v1", 12)),
           "interruption-level": urgent ? "time-sensitive" : "active",
           category: content.k === "request" ? "botkins_request" : content.k === "team" ? "botkins_team" : "botkins_message",
         },
@@ -933,7 +954,7 @@ export class Push {
       const record = this.store.push(device.id);
       const sending = device.id + " " + named;
       if (!record || record.updateSeen === named || this.updating.has(sending)) continue;
-      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, group: "update" });
+      const item = this.alert(device.id, record, content, { expiration: 24 * 60 * 60, collapse: "update" });
       // Without a sealed body nothing is sent (see `send`), so it isn't counted.
       if (!item.payload.b) continue;
       this.updating.add(sending);

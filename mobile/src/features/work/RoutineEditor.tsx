@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Bell, Check, CornerDownRight, MessageCircle, Minus, Monitor, Play, Send, Smartphone, Trash2, TriangleAlert, User } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
+import { openChat as openChatRoute } from "@/features/chat/navigate";
 import type { ModelChoice } from "@/link/types";
 import { defaultProviderOf, describeChoice } from "@/features/models/shared";
 import { type RoutineEntry, useBots, useCan, useMember, useModels, usePart, useProviders, useRoutines, useSettings } from "@/state/hooks";
@@ -47,6 +48,7 @@ type Draft = CadenceDraft & {
   runs: "instructions" | "script";
   script: string;
   followUp: boolean;
+  allowReadyTasks: boolean;
   model: ModelChoice | null;
 };
 
@@ -64,6 +66,7 @@ function draftOf(routine: RoutineEntry | undefined, botId: string | null, capabi
     runs: "instructions",
     script: "",
     followUp: false,
+    allowReadyTasks: false,
     model: null,
   };
   if (!routine) return base;
@@ -82,6 +85,7 @@ function draftOf(routine: RoutineEntry | undefined, botId: string | null, capabi
     runs: entry.script ? "script" : "instructions",
     script: entry.script ?? "",
     followUp: entry.followUp === true,
+    allowReadyTasks: entry.allowReadyTasks === true,
     model: routine.chat.model ?? null,
   };
 }
@@ -205,6 +209,7 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
       timezone: zone(),
       ...(canDeliver && { deliver: deliveryToSave(draft.place, routine?.entry.deliver), ...notifyPayload }),
       ...(scripted ? { script: draft.script, followUp: draft.followUp } : routine?.entry.script ? { script: null } : {}),
+      ...(!member && { allowReadyTasks: draft.allowReadyTasks }),
       ...(modelsAllowed && modelChanged && { model: draft.model }),
     };
     const ok = routine ? await attempt(api.updateRoutine(routine.id, fields).then(() => true), "Saved") : await attempt(api.createRoutine({ botId: draft.botId, ...fields }), "Routine created");
@@ -229,7 +234,7 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
   const openChat = () => {
     if (!routine) return;
     router.back();
-    router.push({ pathname: "/chat/[id]", params: { id: routine.id } });
+    openChatRoute(routine.id);
   };
 
   return (
@@ -443,6 +448,16 @@ function Editor({ routine, botId }: { routine?: RoutineEntry; botId: string | nu
             </View>
           )}
         </View>
+      )}
+      {!member && (
+        <Group>
+          <Row
+            title="Allow creating Ready tasks"
+            subtitle="Let this routine create Ready tasks assigned to a bot so follow-up work starts automatically"
+            trailing={<Badge label={draft.allowReadyTasks ? "On" : "Off"} tone={draft.allowReadyTasks ? "accent" : "neutral"} />}
+            onPress={() => set({ allowReadyTasks: !draft.allowReadyTasks })}
+          />
+        </Group>
       )}
 
       {routine && (

@@ -54,7 +54,7 @@ In `recall.mjs`, read the prompt event as JSON from standard input. Read `proces
 
 ## Agent templates
 
-A marketplace can also offer agent templates: a bot's name, role, about line, instructions and look. Open **Settings → Marketplace → Agents** (or the Marketplace button left of New chat), choose a template and select **Install**. Create a bot opens filled in from it. Change anything, the look too, and create the bot. Nothing else is installed.
+A marketplace can also offer agent templates: a bot's name, role, about line, instructions and look. Open **Settings → Marketplace → Agents** (or the Marketplace button left of New chat), choose a template and select **Install**. Create a bot opens filled in from it. Review the instructions and any included skills and routines, edit the bot, and choose Create. Bundled skills belong to the new bot. Bundled routines start paused in their own chats for that bot and can be enabled in Routines.
 
 List templates under `agents` in the marketplace's `marketplace.json`, beside `plugins`. Each entry names a template file in the same repository: the file **Export template…** writes.
 
@@ -65,6 +65,8 @@ List templates under `agents` in the marketplace's `marketplace.json`, beside `p
 ```
 
 `name` is lowercase letters, digits and dashes; the id is `name@marketplace`. `category` is one of `writing`, `research`, `productivity`, `work`, `dev`, `learning`, `health`, `finance`, `home`, `media`, `life` or `other`. The host reads the files when someone browses templates, at most once an hour for each marketplace, checks them as an imported template is checked, and leaves out one it can't read. At most 200 templates are read from a marketplace, and a file is at most 256 KB. The phone's contract is `mobile/docs/agent-templates.md`. From a terminal: `botkins templates browse`, `botkins templates show <id>` and `botkins templates use <id>`.
+
+Version 1 templates carry the bot profile. Version 2 adds an inline `bundle` for bot-specific skills, scheduled prompt routines, or both. Each installation makes independent copies. The template detail and create flow show what comes with the bot. See the [template bundle format](../../mobile/docs/agent-templates.md#template-bundles).
 
 ## What a plugin starts, and what you are shown
 
@@ -127,7 +129,24 @@ config[].sentTo?: ({ tool: string; env: string } | { tool: string; header: strin
 
 ## Runtime support
 
-Copilot SDK sessions receive a per-bot plugin directory for supported content. Botkins configures the plugin’s MCP servers and runs supported hook events through SDK handlers. Direct Claude, Codex, OpenCode and ACP sessions use plugin skills. Hook handlers and plugin MCP servers require the Copilot harness. This release skips plugin language servers and hook entries that specify a matcher. Local MCP processes receive the environment keys configured for that plugin and the system variables required to start the process.
+Copilot SDK sessions receive a per-bot plugin directory for supported content. Botkins configures the plugin’s MCP servers and runs supported hook events through SDK handlers. Pi and OMP sessions get the plugin's MCP servers too, and Botkins runs the plugin's hooks itself, in the order and with the effects the Copilot runtime has:
+
+- `sessionStart` once for each harness process, before the first message. What it adds goes before that message.
+- `userPromptSubmitted` for each message, also for the message an `agentStop` block sends. It can change, add to or block the message.
+- `preToolUse` once for each call, in Botkins' approval step. It can change the arguments, ask the person or deny the call. It can't allow a call by itself.
+- `postToolUse` after a call that ran, and `postToolUseFailure` after one that failed. A refused or stopped call has neither. `postToolUse` can replace the result the model gets, and both can add guidance after it.
+- `agentStop` at the natural end of a turn. A `block` sends its reason as the next message, within Botkins' limits: three times in a row for one plugin, six for one turn. A stopped turn and a turn that ended in an error don't ask.
+- `errorOccurred` for each failed model request. As on Copilot, its answer doesn't change what happens.
+- `sessionEnd` when Botkins lets the harness process go, or the process ends.
+
+`subagentStart` and `subagentStop` are about two kinds of child:
+
+- **Botkins' own children** (`subagent_run`), on any harness that runs hooks (Copilot, Pi, OMP). Botkins runs the parent turn's `subagentStart` before the child's first message, and what it adds goes before the child's task. It runs `subagentStop` once when the child has answered, with the child's reply. Its `modifiedResponse` is what the parent gets. A child that fails or is stopped has no `subagentStop`. Each hook is told the child's id (the id `subagent_run` returns), `agentType` `botkins-subagent`, the label, and the parent turn. The child's own session runs the plugin's other hooks with that `agentId`, and no session or subagent hooks of its own. A turn without plugin access gives its children no hooks.
+- **The harness's own children.** Copilot's `task` children run these hooks in the Copilot runtime itself. OMP's `task` children are background jobs that OMP reports to Botkins when each one starts and ends. Botkins runs `subagentStart` and, for a child that completed, `subagentStop` with OMP's child id and the child's last reply, once each. A child that failed or was cancelled has no `subagentStop`. A child goes on after its parent's turn is stopped, and OMP reports it as completed. A child reports only to the hooks of the turn whose `task` call started it, never to a later turn's plugins in the same chat. If that turn's plugin is switched off, removed, taken from the bot or updated to another revision before the child ends, the child's `subagentStop` doesn't run. The same holds for Botkins' own children. OMP gives Botkins no point before a child's first turn or at its end where a hook could change it, so on OMP `subagentStart`'s `additionalContext` and `subagentStop`'s `modifiedResponse` don't apply: the hooks only observe. Pi has no subagents.
+
+A plugin's `subagentStop` can't keep a child going: Botkins keeps no `block` for this event, on any harness.
+
+On Pi and OMP a plugin's server has a short name of its own inside the harness, and Botkins shows it by the plugin's name in approvals and in the activity. A turn without plugin access, a plugin that is off, and a plugin that is not for this bot run no hook. Direct Claude, Codex, OpenCode and ACP sessions use plugin skills only. This release skips plugin language servers and hook entries that specify a matcher. Local MCP processes receive the environment keys configured for that plugin and the system variables required to start the process. A plugin that is switched off or removed loses its tools at the next turn, also in a chat whose harness is still running.
 
 The public plugin contract is `plugins-v1`. Its installed list includes per-bot scope, component descriptions and whether each field has been set. On a paired client, OAuth servers use `signInMcpServer(serverId)`. A preview’s revision identifies the source the person reviewed.
 

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { random } from "./crypto.mjs";
 import { SILENT } from "./silent-reply.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 
 export const SCOPE_ACTIONS = Object.freeze({
   agents: Object.freeze(["view", "chat", "create", "manage", "delete"]),
@@ -20,7 +21,7 @@ export const BUILTIN_ROLES = Object.freeze([
 ]);
 export const EVERYONE_GROUP = Object.freeze({ id: "g_everyone", name: "Everyone", roleId: "r_guest" });
 
-export const MEMBER_PREFERENCE_FIELDS = Object.freeze(["appearance", "foldTools", "showThinking", "linkPreviews", "readAloud"]);
+export const MEMBER_PREFERENCE_FIELDS = Object.freeze(["appearance", "foldTools", "showThinking", "linkPreviews", "readAloud", "showRoutineChats"]);
 
 const POLICY = {
   setPreferences: ["settings", "manage"],
@@ -53,6 +54,7 @@ const POLICY = {
   addSection: ["agents", "manage"],
   renameSection: ["agents", "manage"],
   deleteSection: ["agents", "manage"],
+  orderSections: ["agents", "manage"],
   saveTemplate: "owner",
   renameTemplate: "owner",
   deleteTemplate: "owner",
@@ -69,6 +71,7 @@ const POLICY = {
   regenerateChatTitle: ["agents", "chat"],
   deleteChat: ["agents", "chat"],
   reactToMessage: ["agents", "chat"],
+  "chat.cardAction": "owner",
   forkChat: ["agents", "chat"],
   warmChat: ["agents", "chat"],
   setChatProject: "owner",
@@ -116,6 +119,22 @@ const POLICY = {
   duplicateRoutine: ["today", "create"],
   previewCadence: ["today", "use"],
   changeSchedule: ["today", "manage"],
+  workflowsList: ["today", "view"],
+  workflowCreate: ["today", "create"],
+  workflowUpdate: ["today", "manage"],
+  workflowDelete: ["today", "delete"],
+  workflowPause: ["today", "manage"],
+  workflowResume: ["today", "manage"],
+  workflowRun: ["today", "use"],
+  workflowRetryRun: ["today", "use"],
+  workflowRespondApproval: ["today", "use"],
+  workflowCancelRun: ["today", "manage"],
+  workflowRotateWebhookSecret: "owner",
+  workflowExportText: ["today", "view"],
+  workflowImportText: "owner",
+  workflowGithubStatus: ["today", "view"],
+  workflowGithubSignInStart: "owner",
+  workflowGithubSignInCancel: "owner",
   saveTask: "owner",
   moveTask: "owner",
   startTask: "owner",
@@ -163,6 +182,16 @@ const POLICY = {
   "skillsCatalog.preview": ["skills", "read"],
   "skillsCatalog.install": ["skills", "create"],
   "skillsCatalog.featured": ["skills", "read"],
+  // Marketplace format version 2: anyone who may read skills sees the listings and their reviews. An
+  // install can give skills and plugins to bots and make a bot with routines, so it is the owner's.
+  "market.catalog": ["skills", "read"],
+  "market.skillImage": ["skills", "read"],
+  "market.skillPreview": ["skills", "read"],
+  "market.packPreview": ["skills", "read"],
+  "market.templatePreview": ["agents", "create"],
+  "market.skillInstall": "owner",
+  "market.packInstall": "owner",
+  "market.templateInstall": "owner",
   // The direct apps catalog: anyone who sees tools may read it. Adding one can start a program on
   // the computer and stores keys in its vault, so it is the owner's, as a sign-in is.
   "mcpCatalog.list": ["mcp", "view"],
@@ -192,6 +221,15 @@ const POLICY = {
   projectChanges: "owner",
   projectDiff: "owner",
   projectCommit: "owner",
+  // Jobs make worktrees, run the repository's setup and merge into the checkout: the owner's alone.
+  projectJobSetup: "owner",
+  approveJobSetup: "owner",
+  startProjectJob: "owner",
+  projectJobStatus: "owner",
+  bringInJob: "owner",
+  catchUpJob: "owner",
+  removeJobWorktree: "owner",
+  startJobTurn: "owner",
   addTodo: "owner",
   addProjectArtifact: "owner",
   removeProjectArtifact: "owner",
@@ -320,6 +358,11 @@ const POLICY = {
   "link.credentials.items": "owner",
   "link.credentials.item": "owner",
   "link.credentials.link": "owner",
+  "link.credentials.copy": "owner",
+  "link.credentials.grants": "owner",
+  "link.credentials.setGrant": "owner",
+  "link.credentials.revokeGrant": "owner",
+  "link.credentials.audit": "owner",
   "link.credentials.protonPassInstallPlan": "owner",
   "link.credentials.protonPassInstall": "owner",
   "link.credentials.protonPassSignInStart": "owner",
@@ -359,6 +402,24 @@ const POLICY = {
   nodeHostPause: "owner",
   nodeHostDisconnect: "owner",
   nodeHostRevokeGrant: "owner",
+  "claudeArtifacts.status": "owner",
+  "claudeArtifacts.setModel": "owner",
+  "claudeArtifacts.setBotApproval": "owner",
+  "claudeArtifacts.revokeBotApproval": "owner",
+  // Channel Hooks ("channels-v1"): strictly owner-only.
+  channelsList: "owner",
+  channelAdd: "owner",
+  channelUpdate: "owner",
+  channelRemove: "owner",
+  channelBind: "owner",
+  channelSetPolicy: "owner",
+  channelPause: "owner",
+  channelResume: "owner",
+  channelPairList: "owner",
+  channelPairApprove: "owner",
+  channelPairDeny: "owner",
+  channelTest: "owner",
+  channelLogs: "owner",
 };
 
 export const TEAM_METHODS = Object.freeze(Object.fromEntries(Object.entries(POLICY).map(([name, value]) => [name, value === "owner" ? "owner" : Object.freeze(value)])));
@@ -449,6 +510,13 @@ export function defaultTeam() {
 
 export const hasAction = (perms, scope, action) => Array.isArray(perms?.[scope]) && perms[scope].includes(action);
 
+/** The same create permissions apply on the link and on the workspace that installs the bundle. */
+export function bundleCreateRefusal(perms, bundle) {
+  if (bundle?.skills?.length && !hasAction(perms, "skills", "create")) return "Your team role cannot create bundled skills.";
+  if (bundle?.routines?.length && !hasAction(perms, "today", "create")) return "Your team role cannot create bundled routines.";
+  return "";
+}
+
 const SELF_METHODS = new Set([
   "link.push.register",
   "link.push.prefs",
@@ -499,7 +567,7 @@ export const MAX_CHAT_PEOPLE = 20;
  */
 export function viewOf(team, memberId) {
   const view = team?.views?.[memberId];
-  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }), ...(view?.chatSections && { chatSections: view.chatSections }) };
+  return { bots: view?.bots ?? {}, order: Array.isArray(view?.order) ? view.order : [], chats: view?.chats ?? {}, ...(view?.spaces && { spaces: view.spaces }), ...(view?.chatSections && { chatSections: view.chatSections }), ...(typeof view?.showRoutineChats === "boolean" && { showRoutineChats: view.showRoutineChats }) };
 }
 
 // ── Sections on the Chats screen ("chat-sections-v1") ───────────────────────────────────────
@@ -827,7 +895,7 @@ export function privateProactiveChat(chat) {
 
 export function withoutProactiveAlerts(chat, routine = isProactiveRoutine(chat)) {
   if (!Array.isArray(chat?.messages)) return chat;
-  const { posted: _posted, forkContext: _context, compacted: _summary, ...rest } = chat;
+  const { posted: _posted, forkContext: _context, compacted: _summary, sessions: _sessions, ...rest } = chat;
   const redact = (message) => isProactiveAlert(message) || (routine && message.role === "assistant");
   // Keep message positions for pagination and chat actions, using the clients' invisible reply marker.
   return { ...rest, messages: chat.messages.map((message) => redact(message) ? { role: "assistant", text: SILENT } : message) };
@@ -954,6 +1022,11 @@ function isMarkReadOnly(patch) {
   const keys = Object.keys(patch);
   return keys.length === 1 && keys[0] === "unread" && patch.unread === false;
 }
+function isShowRoutineChatsOnly(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  const keys = Object.keys(patch);
+  return keys.length === 1 && keys[0] === "showRoutineChats" && typeof patch.showRoutineChats === "boolean";
+}
 function botIdOf(method, args) {
   if (BOT_METHODS.has(method)) {
     if (method === "exportTemplateText") return args[0]?.botId;
@@ -1037,6 +1110,10 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
   else if (method === "routine" && args[1]?.action === "remove") action = "delete";
   else if (method === "saveSkill" && args[0]?.original) action = "manage";
   else if (method === "setChatFlags" && isMarkReadOnly(args[1])) action = "view";
+  else if (method === "setPreferences" && isShowRoutineChatsOnly(args[0])) {
+    scope = "agents";
+    action = "view";
+  }
   if (!hasAction(role.perms, scope, action)) return "Your team role can't do that.";
   // A script command runs on the owner's computer, so only the owner removes, switches off, replaces or edits one ("script-commands-v1"),
   // whatever a role may do with other skills. `scriptCommand` names the ones Botkins keeps. (The app checks again, by name, for any call
@@ -1063,6 +1140,10 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
       if (!lookup("bot", id, lookups) || !visible(role, id)) return "That bot isn't available to your team role.";
     }
   }
+  // Creating or copying a bundled bot also creates its private skills and routines.
+  const bundle = method === "addBot" ? args[0]?.bundle : method === "duplicateBot" ? lookup("botBundle", args[0], lookups) : undefined;
+  const bundleRefusal = bundleCreateRefusal(role.perms, bundle);
+  if (bundleRefusal) return bundleRefusal;
   const request = method === "respond" ? lookup("request", args[0], lookups) : null;
   // An approval can hold what a member is not sent (a plugin's whole description: each command and written value), so only the
   // owner answers one. The app's own test holds this line and the cut in filterParts (desktop/test/plugin-card-member.test.mjs).
@@ -1262,7 +1343,7 @@ export function filterParts(parts, principal, team, extra = {}) {
   const ownChats = new Set(shared.map((chat) => chat.id));
   const out = { ...parts };
   // `sections` are the owner's arrangement of Home; a member arranges their own view (below).
-  for (const name of ["credentials", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];
+  for (const name of ["credentials", "channels", "phones", "asks", "voice", "host", "projects", "projectPanels", "tasks", "templates", "sections"]) delete out[name];
   // A bot as a member sees it: without what the owner wrote for it or where it came from, and with
   // the member's own hidden and pinned marks and order. The owner's marks are the owner's.
   const mayManage = can("agents", "manage");
@@ -1271,10 +1352,12 @@ export function filterParts(parts, principal, team, extra = {}) {
   if (sharedVoice) out.voice = sharedVoice;
   const seen = (bot) => {
     // What the owner wrote for the bot (both of its prompts) is for a role that manages bots; where it came from is the owner's alone.
-    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, instructions, clarificationInstructions, ...rest } = bot;
+    const { hidden: _hidden, pinned: _pinned, sectionId: _section, origin: _origin, bundle, skillsOff, instructions, clarificationInstructions, ...rest } = bot;
     const own = view.bots[bot.id] ?? {};
+    const privateNames = new Set(bundle?.skills?.map(skill => skill.name));
     return {
       ...rest,
+      ...(skillsOff && { skillsOff: skillsOff.filter(name => !privateNames.has(name)) }),
       ...(mayManage && instructions !== undefined && { instructions }),
       ...(mayManage && clarificationInstructions !== undefined && { clarificationInstructions }),
       ...(own.hidden && { hidden: true }),
@@ -1293,7 +1376,7 @@ export function filterParts(parts, principal, team, extra = {}) {
     const { pinned: _pinned, archived: _archived, folder: _folder, unread, ...rest } = chat;
     const own = view.chats[chat.id];
     const mine = chat.createdBy === me;
-    const fresh = own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0);
+    const fresh = !isRoutineChat(chat) && (own?.unread === true || (own?.seen !== undefined ? chat.time > own.seen : mine ? !!unread : chat.count > 0));
     const people = chatPeople(team, chat);
     return { ...rest, ...(own?.pinned && { pinned: true }), ...(own?.archived && { archived: true }), ...(fresh && { unread: true }), ...(people.invited.length && { invited: people.invited }) };
   });
@@ -1346,6 +1429,9 @@ export function filterParts(parts, principal, team, extra = {}) {
   out.mcp = can("mcp") ? scrub(parts.mcp ?? []) : [];
   out.plugins = can("plugins") ? scrub(parts.plugins ?? []) : [];
   out.settings = can("settings") ? Object.fromEntries(Object.entries(parts.settings ?? {}).filter(([name]) => MEMBER_PREFERENCE_FIELDS.includes(name))) : {};
+  if ((can("agents") || can("settings")) && (typeof view.showRoutineChats === "boolean" || Object.hasOwn(parts.settings ?? {}, "showRoutineChats"))) {
+    out.settings.showRoutineChats = view.showRoutineChats === true;
+  }
   if (mayManage && parts.settings?.fastMode) out.settings.fastMode = parts.settings.fastMode;
   out.revs = {};
   // The owner's name as a person comes with the owner's own team part; else the computer's name stands in.

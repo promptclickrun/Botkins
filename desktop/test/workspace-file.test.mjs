@@ -66,3 +66,13 @@ test("stored messages retain their words and only send references the host under
   assert.deepEqual(opened.pendingMessages.c[0], { text: message.text, mentions: [project] });
   assert.deepEqual(readdirSync(dir), ["workspace.json"]);
 });
+
+test("channels persist across workspace reloads without being archived", (t) => {
+  const channel = { id: "ch_persist0001", kind: "imessage", label: "imsg", transport: "imsg_local", enabled: true };
+  const { dir, file } = fixture(t, {
+    bots: [], chats: [], runs: [], channels: [channel],
+  });
+  const opened = readWorkspace(file);
+  assert.deepEqual(opened.channels, [channel]);
+  assert.deepEqual(readdirSync(dir), ["workspace.json"]);
+});

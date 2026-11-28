@@ -1,9 +1,9 @@
 {
-  "client.ts": "f977fffe26f3ebf692b2a78b35db1322996c0a9efd58bfbd02e5ebc6e1f574aa",
+  "client.ts": "b9de1ae272fc270ede3878c63f59143f9ffc8e1cf3305da2ad93a8f073b3b9a4",
   "crypto.ts": "d96d2b415272c0b2c6aa2875354b08548bf6dd244d99f1934173a7955102dd23",
   "pairing.ts": "b084f8aeb4cbf944189c8100cec978d8125a5a7e992d1e1a64035ba9e4631d61",
   "pr-reference.ts": "d9fbd05e1064eb39b6ea14a9c874bf01213f7d1d5784f2da476fbd45c3cb08fa",
   "profile.ts": "5368d64e9ff9ce508bd05617e4e6beeed4c0fe74c60169225d19646673c3d0a3",
   "relay.ts": "556b9de79f619dc91aa4d8dd3d15146427dc0b6ba4636053b6c903853b05fcd4",
-  "types.ts": "9ffe0f7c1db9f8b2bfd65862a9521abf8b01aaafa9923d3b05539d104c850e70"
+  "types.ts": "5ca960d82bc84f89a3f74ddabb49447df31c8ff2ef70ef42f47752c6df1cf55c"
 }

@@ -181,7 +181,7 @@ try {
   await expect(page.locator(".side-pane .chat-side")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Side pane tabs" })).toHaveCount(1);
   await expect(tab("Artifacts")).toBeVisible();
-  assert.equal(await paneWidth(), 272);
+  assert.equal(await paneWidth(), 320);
   await bothThemes("01-details");
 
   // ---- The person closes it: the app hears "closed".
@@ -263,7 +263,7 @@ try {
   await expect(viewer).toHaveCount(1);
   await tab("Details").click();
   await expect.poll(calls).toEqual([[main, "select", table.id], [main, "select"]]);
-  await expect.poll(paneWidth, long).toBe(272);
+  await expect.poll(paneWidth, long).toBe(320);
   await tab("Plant list").click();
   await expect.poll(paneWidth, long).toBeGreaterThan(400);
   // How wide the pane is beside a panel, in a smaller and a larger window.

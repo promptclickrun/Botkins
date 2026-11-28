@@ -129,5 +129,9 @@ test("Botkins 0.1 data is retained on migration and cache clearing", (t) => {
   assert.deepEqual(ws.state.skills, { folders: [], plugins: [], disabled: [] });
   assert.deepEqual(ws.state.panels, []);
   ws.clearCatalogs();
-  assert.deepEqual(open().state.chats.filter(c => !c.main), old.chats);
+  const saved = open().state.chats.filter(c => !c.main);
+  assert.equal(saved.length, 1);
+  const { sessions, ...rest } = saved[0];
+  assert.deepEqual(rest, old.chats[0]);
+  assert.deepEqual(sessions, { copilot: { through: 1 } });
 });

@@ -134,7 +134,7 @@ export function HomePins() {
   for (let at = 0; at < pins.length; at += 2) rows.push(pins.slice(at, at + 2));
   return (
     <View style={{ gap: gap.md }}>
-      <Label style={{ marginBottom: 0 }}>Pinned</Label>
+      <Label style={{ marginBottom: 0 }}>On Home</Label>
       {!pinned.length && !pins.length && (
         <Tap onPress={openSpaces} feel="select" accessibilityLabel="Nothing pinned. Open Spaces" style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: gap.xs }}>
           <T variant="subhead" color="muted">

@@ -3,7 +3,7 @@
 // Manages:
 // 1. Botkins Profile sign-in (profile.botkins.app passkey/code flow) and direct Link pairing fallback.
 // 2. Multi-host connections (connect to one or more of your Botkins hosts, over LAN/Tailscale or relay).
-// 3. Dispatching incoming `browser_*` asks to BrowserController (chrome.debugger) and returning results.
+// 3. Dispatching incoming `browser_*` asks to BrowserController (DOM-first via chrome.scripting, with ephemeral chrome.debugger fallback) and returning results.
 // 4. Lightweight MV3 alarm watchdog (1 min) to restore connections if Chrome ever restarts the worker.
 import {
   BrowserHostClient,
@@ -44,7 +44,7 @@ function makeBrowserState(settings) {
     mode: settings.mode === "group" ? "group" : "all",
     browser: detectBrowserName(),
     profile: String(settings.profileLabel || "").trim(),
-    version: chrome.runtime?.getManifest?.().version || "0.1.0",
+    version: chrome.runtime?.getManifest?.().version || "0.2.0",
   };
 }
 
@@ -126,11 +126,25 @@ async function ensureHostConnected(serverId, pairing) {
 
 async function executeAsk(serverId, client, controller, ask) {
   try {
-    const result = await controller.run(ask.tool, ask.args || {});
+    const result =
+      ask.tool === "secure.fill"
+        ? await controller.runSecureFill(ask.args || {})
+        : await controller.run(ask.tool, ask.args || {});
     await client.answerAsk(ask.id, { ok: true, result });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err || "Browser tool failed.");
-    await client.answerAsk(ask.id, { ok: false, error: message }).catch(() => {});
+    const payload = { ok: false, error: message };
+    if (err && typeof err === "object" && typeof err.secureCode === "string") {
+      payload.code = err.secureCode;
+    }
+    await client.answerAsk(ask.id, payload).catch(() => {});
+  } finally {
+    if (ask.tool === "secure.fill" && Array.isArray(ask.args?.fields)) {
+      for (const f of ask.args.fields) {
+        if (f && typeof f === "object") f.value = "";
+      }
+      ask.args.fields.length = 0;
+    }
   }
 }
 

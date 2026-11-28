@@ -7,6 +7,21 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 const sha = (text) => createHash("sha256").update(text).digest("base64url");
+const allowedRedirect = (value) => {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.hash || parsed.username || parsed.password) return false;
+  if (parsed.protocol === "https:") return true;
+  if (parsed.protocol === "http:") {
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "[::1]" || host === "::1" || /^127\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)\.(25[0-5]|2[0-4]\d|1?\d?\d)$/.test(host);
+  }
+  return false;
+};
 const body = (request) =>
   new Promise((resolve) => {
     let text = "";
@@ -51,7 +66,10 @@ export async function oauthMcpServer(options = {}) {
       response.end(JSON.stringify(data));
     };
     const text = request.method === "POST" ? await body(request) : "";
-    state.log.push({ method: request.method, path: url.pathname, authorization: request.headers.authorization, body: text });
+    // Direct-harness fixtures can count requests without recording credentials or OAuth inputs.
+    state.log.push(options.recordSecrets === false
+      ? { method: request.method, path: url.pathname, ...(url.pathname === "/mcp" && { body: text }) }
+      : { method: request.method, path: url.pathname, authorization: request.headers.authorization, body: text });
     if (url.pathname === "/.well-known/oauth-protected-resource/mcp" || url.pathname === "/.well-known/oauth-protected-resource")
       return json(200, (state.tweak.resource ?? ((doc) => doc))({ resource: origin + "/mcp", authorization_servers: [origin], scopes_supported: [state.scope] }));
     if (url.pathname === "/.well-known/oauth-authorization-server")
@@ -69,6 +87,8 @@ export async function oauthMcpServer(options = {}) {
     if (url.pathname === "/register" && request.method === "POST") {
       if (!state.registration) return json(404, { error: "not_found" });
       const data = JSON.parse(text);
+      if (!Array.isArray(data.redirect_uris) || !data.redirect_uris.length || !data.redirect_uris.every((u) => typeof u === "string" && allowedRedirect(u)))
+        return json(400, { error: "invalid_client_metadata", error_description: "Redirect URI must use https, or http on a loopback host" });
       const id = "client-" + randomBytes(6).toString("hex");
       state.clients.set(id, { redirects: data.redirect_uris, name: data.client_name });
       return json(201, { client_id: id, redirect_uris: data.redirect_uris, token_endpoint_auth_method: "none" });
@@ -77,7 +97,7 @@ export async function oauthMcpServer(options = {}) {
       const q = url.searchParams;
       const client = state.clients.get(q.get("client_id")) ?? (state.staticClient?.id === q.get("client_id") ? { redirects: null } : null);
       const redirect = q.get("redirect_uri");
-      if (!client || (client.redirects && !client.redirects.includes(redirect)) || q.get("response_type") !== "code" || q.get("code_challenge_method") !== "S256" || !q.get("code_challenge"))
+      if (!client || !redirect || !allowedRedirect(redirect) || (client.redirects && !client.redirects.includes(redirect)) || q.get("response_type") !== "code" || q.get("code_challenge_method") !== "S256" || !q.get("code_challenge"))
         return json(400, { error: "invalid_request" });
       const back = new URL(redirect);
       back.searchParams.set("state", q.get("state"));
@@ -141,6 +161,37 @@ export async function oauthMcpServer(options = {}) {
         return response.end();
       }
       const message = JSON.parse(text);
+      if (message.method === "tools/call" && state.requiredScope && !grant.scope.split(" ").includes(state.requiredScope))
+        return json(403, { error: "insufficient_scope", ignored: token }, { "www-authenticate": 'Bearer error="insufficient_scope"' });
+      if (message.method === "tools/call" && state.rejectNextCall) {
+        // The call took effect, but the response says to sign in. It must never be replayed.
+        state.rejectedEffects = (state.rejectedEffects ?? 0) + 1;
+        state.rejectNextCall = false;
+        return json(401, { error: "invalid_token", ignored: token }, { "www-authenticate": 'Bearer error="invalid_token"' });
+      }
+      if (message.method === "tools/call" && state.interruptNextCall) {
+        state.interruptNextCall = false;
+        state.interruptedEffects = (state.interruptedEffects ?? 0) + 1;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write('event: message\ndata: {"jsonrpc":"2.0"', () => response.destroy());
+        return;
+      }
+      if (message.method === "tools/call" && state.streamNextCall) {
+        state.streamNextCall = false;
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const reply = { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: state.word }] } };
+        response.write(": keepalive\r\n\r\nevent: message\r\ndata: " + JSON.stringify(reply) + "\r\n\r\n");
+        return; // The relay can return when the result arrives; it need not wait for stream EOF.
+      }
+      if (message.method === "tools/call" && state.holdNextCall) {
+        const held = state.holdNextCall;
+        state.holdNextCall = null;
+        response.once("close", held.disconnected);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write(": waiting\n\n");
+        held.received();
+        return;
+      }
       if (message.id === undefined) {
         response.writeHead(202);
         return response.end();
@@ -171,7 +222,7 @@ export async function oauthMcpServer(options = {}) {
       const first = await fetch(url, { redirect: "manual" });
       const next = first.headers.get("location");
       if (!next) throw new Error("The sign-in page didn't redirect: " + first.status);
-      state.lastCallback = next;
+      if (options.recordSecrets !== false) state.lastCallback = next;
       await fetch(next);
     },
     close: () => new Promise((resolve) => (server.closeAllConnections?.(), server.close(resolve))),

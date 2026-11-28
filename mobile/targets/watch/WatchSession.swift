@@ -17,18 +17,38 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
   private var inputSequence: UInt32 = 0
   private var outputSequence: UInt32 = 0
   private var activeSessionId: String?
+  private var activeRates: (input: Int, output: Int)?
   private var lastLevelAt = Date.distantPast
   private var disconnect: Task<Void, Never>?
+  private var mediaServicesLost = false
+  private var mediaServicesResetCount: UInt64 = 0
+  private var mediaResetWait: (id: UUID, task: Task<Void, Never>)?
+  private nonisolated(unsafe) var mediaObservers: [NSObjectProtocol] = []
 
   var voice: WatchVoice { localVoice ?? snapshot.voice }
 
   override init() {
     super.init()
+    let center = NotificationCenter.default
+    mediaObservers = [
+      center.addObserver(forName: AVAudioSession.mediaServicesWereLostNotification, object: nil, queue: nil) { [weak self] _ in
+        Task { @MainActor in self?.handleMediaServicesLost() }
+      },
+      center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
+        Task { @MainActor in self?.handleMediaServicesReset() }
+      },
+    ]
     if WCSession.isSupported() {
       WCSession.default.delegate = self
       WCSession.default.activate()
     } else {
       issue = "Watch communication is unavailable."
+    }
+  }
+
+  deinit {
+    for observer in mediaObservers {
+      NotificationCenter.default.removeObserver(observer)
     }
   }
 
@@ -43,12 +63,26 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
 
   func startVoice() {
     issue = nil
-    Task {
+    Task { [weak self] in
       guard await AVAudioApplication.requestRecordPermission() else {
-        issue = "Allow microphone access to talk on your Watch."
+        self?.issue = "Allow microphone access to talk on your Watch."
         return
       }
-      send(["command": "startVoice"])
+      guard let self else { return }
+      self.localVoice = WatchVoice(
+        status: "connecting",
+        sessionId: nil,
+        chatId: self.snapshot.chat?.id,
+        muted: false,
+        push: self.snapshot.voice.push,
+        problem: nil,
+        level: 0
+      )
+      self.send(["command": "startVoice"], onFailure: { [weak self] in
+        if self?.activeSessionId == nil, self?.localVoice?.status == "connecting" {
+          self?.localVoice = nil
+        }
+      })
     }
   }
 
@@ -75,16 +109,22 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     stopAudio(nil)
   }
 
-  private func send(_ message: [String: Any]) {
+  private func send(_ message: [String: Any], onFailure: (() -> Void)? = nil) {
     guard reachable else {
       issue = "Phone unavailable"
+      onFailure?()
       return
     }
     var envelope = message
     envelope["revision"] = snapshot.revision
     if let activeSessionId { envelope["sessionId"] = activeSessionId }
-    WCSession.default.sendMessage(envelope, replyHandler: nil) { [weak self] _ in
-      Task { @MainActor in self?.issue = "Phone unavailable" }
+    // Passing a replyHandler makes WatchConnectivity wake a suspended iPhone companion app
+    // reliably and hold the delivery until the iPhone's WCSessionDelegate processes the message.
+    WCSession.default.sendMessage(envelope, replyHandler: { _ in }) { [weak self] _ in
+      Task { @MainActor in
+        self?.issue = "Phone unavailable"
+        onFailure?()
+      }
     }
   }
 
@@ -101,8 +141,11 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     if !next.voice.active, activeSessionId != nil {
       stopAudio(next.voice.problem)
     }
-    if activeSessionId == next.voice.sessionId {
+    if activeSessionId != nil, activeSessionId == next.voice.sessionId {
       localVoice = next.voice
+    } else if next.voice.status == "idle" && localVoice?.status == "connecting" && next.voice.problem == nil {
+      // Keep optimistic connecting state while the phone finishes waking and syncing before
+      // startWatchVoice() publishes its own connecting/active state.
     } else if !next.voice.active || activeSessionId != next.voice.sessionId {
       localVoice = nil
     }
@@ -138,12 +181,19 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
           let outputRate = message["outputRate"] as? Int, outputRate > 0 else {
       return ["problem": "The Watch received an invalid microphone request."]
     }
-    if engine != nil { stopAudio(nil) }
+    if engine != nil || activeSessionId != nil { stopAudio(nil) }
     activeSessionId = id
+    activeRates = (inputRate, outputRate)
     inputSequence = 0
     outputSequence = 0
-    var recovering = false
-    while true {
+    if mediaServicesLost {
+      await waitForMediaServicesReset(timeout: .milliseconds(2500))
+      guard activeSessionId == id, !Task.isCancelled else {
+        return ["sessionId": id, "problem": "The Watch call ended."]
+      }
+    }
+    let retryDelays: [Duration] = [.milliseconds(1200), .milliseconds(1800), .milliseconds(2500)]
+    for retryIndex in 0...retryDelays.count {
       let attempt = UUID()
       let engine = makeEngine(sessionId: id, attempt: attempt)
       self.engine = engine
@@ -154,7 +204,7 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
         try await WatchVoiceEngine.activate()
         guard self.engine === engine else { throw CancellationError() }
         stage = "starting the microphone"
-        try engine.start(inputRate: inputRate, outputRate: outputRate, voiceProcessing: !recovering)
+        try engine.start(inputRate: inputRate, outputRate: outputRate)
         interruptibleAttempt = attempt
         localVoice = WatchVoice(
           status: snapshot.voice.sessionId == id ? snapshot.voice.status : "connecting",
@@ -169,19 +219,97 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
       } catch {
         guard self.engine === engine else { return ["sessionId": id, "problem": "The Watch call ended."] }
         let cause = error as NSError
-        if cause.watchAudioServiceDied && !recovering {
-          // Give the audio service time to return, then rebuild without the optional voice processor.
-          recovering = true
-          engine.stop()
-          try? await Task.sleep(for: .milliseconds(300))
-          guard self.engine === engine else { return ["sessionId": id, "problem": "The Watch call ended."] }
-          if !Task.isCancelled { continue }
+        if cause.watchAudioServiceReset && retryIndex < retryDelays.count {
+          // Dispose the orphaned graph without poking a dead audio daemon, then wait for
+          // mediaServicesWereResetNotification (or bounded backoff) before retrying.
+          engine.stop(deactivateSession: false)
+          await waitForMediaServicesReset(timeout: retryDelays[retryIndex])
+          guard self.engine === engine, !Task.isCancelled else {
+            return ["sessionId": id, "problem": "The Watch call ended."]
+          }
+          continue
         }
-        let reason = cause.watchAudioServiceDied
-          ? "Watch audio stopped while \(stage) (-308). Try voice again."
+        let reason = cause.watchAudioServiceReset
+          ? "Watch audio service restarted while \(stage) (\(cause.code)). Try voice again."
           : "Watch microphone failed while \(stage). \(cause.localizedDescription)"
-        stopAudio(reason)
+        stopAudio(reason, deactivateSession: !cause.watchAudioServiceReset)
         return ["sessionId": id, "problem": reason]
+      }
+    }
+    return ["sessionId": id, "problem": "The Watch call ended."]
+  }
+
+  private func cancelMediaResetWait() {
+    mediaResetWait?.task.cancel()
+    mediaResetWait = nil
+  }
+
+  private func waitForMediaServicesReset(timeout: Duration) async {
+    cancelMediaResetWait()
+    let resetBefore = mediaServicesResetCount
+    let waitId = UUID()
+    let sleepTask = Task<Void, Never> {
+      _ = try? await Task.sleep(for: timeout)
+    }
+    mediaResetWait = (waitId, sleepTask)
+    await withTaskCancellationHandler {
+      await sleepTask.value
+    } onCancel: {
+      sleepTask.cancel()
+    }
+    if mediaResetWait?.id == waitId { mediaResetWait = nil }
+    if mediaServicesResetCount != resetBefore && !Task.isCancelled {
+      try? await Task.sleep(for: .milliseconds(150))
+    }
+  }
+
+  private func handleMediaServicesLost() {
+    mediaServicesLost = true
+    guard activeSessionId != nil, interruptibleAttempt != nil, let engine else { return }
+    resuming?.cancel()
+    resuming = nil
+    audioPaused = true
+    interruptibleAttempt = nil
+    engine.stop(deactivateSession: false)
+    self.engine = nil
+  }
+
+  private func handleMediaServicesReset() {
+    mediaServicesLost = false
+    mediaServicesResetCount &+= 1
+    cancelMediaResetWait()
+    guard let sessionId = activeSessionId, let rates = activeRates else { return }
+    // Rebuild mid-call if media services reset during an active or lost-media call,
+    // without interfering while startAudio() owns its own startup retry loop.
+    if interruptibleAttempt != nil {
+      resuming?.cancel()
+      resuming = nil
+      audioPaused = true
+      interruptibleAttempt = nil
+      engine?.stop(deactivateSession: false)
+      engine = nil
+    }
+    guard audioPaused, engine == nil else { return }
+    resuming?.cancel()
+    resuming = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(150))
+      guard let self, !Task.isCancelled, self.activeSessionId == sessionId, self.engine == nil else { return }
+      let attempt = UUID()
+      let engine = self.makeEngine(sessionId: sessionId, attempt: attempt)
+      self.engine = engine
+      do {
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default)
+        try await WatchVoiceEngine.activate()
+        guard !Task.isCancelled, self.engine === engine else { return }
+        try engine.start(inputRate: rates.input, outputRate: rates.output)
+        self.interruptibleAttempt = attempt
+        self.audioPaused = false
+      } catch {
+        guard !Task.isCancelled, self.engine === engine else { return }
+        let cause = error as NSError
+        let reason = "Watch audio could not resume after media reset. " + error.localizedDescription
+        self.send(["kind": "audioInterrupted", "sessionId": sessionId, "failed": true, "problem": reason])
+        self.stopAudio(reason, deactivateSession: !cause.watchAudioServiceReset)
       }
     }
   }
@@ -203,12 +331,13 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
     )
   }
 
-  private func stopAudio(_ reason: String?) {
+  private func stopAudio(_ reason: String?, deactivateSession: Bool = true) {
     interruptibleAttempt = nil
     resuming?.cancel()
     resuming = nil
     audioPaused = false
-    engine?.stop()
+    cancelMediaResetWait()
+    engine?.stop(deactivateSession: deactivateSession)
     engine = nil
     let ended = reason ?? snapshot.voice.problem
     localVoice = WatchVoice(
@@ -221,6 +350,7 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
       level: 0
     )
     activeSessionId = nil
+    activeRates = nil
     inputSequence = 0
     outputSequence = 0
   }
@@ -284,9 +414,10 @@ final class WatchSession: NSObject, ObservableObject, WCSessionDelegate {
         audioPaused = false
       } catch {
         guard !Task.isCancelled, self.engine === engine else { return }
+        let cause = error as NSError
         let reason = "Watch audio could not resume. " + error.localizedDescription
         send(["kind": "audioInterrupted", "sessionId": sessionId, "failed": true, "problem": reason])
-        stopAudio(reason)
+        stopAudio(reason, deactivateSession: !cause.watchAudioServiceReset)
       }
     }
   }

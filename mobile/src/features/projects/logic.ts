@@ -78,3 +78,9 @@ export function addableChats(
 
 /** "3 artifacts", "1 artifact", or the empty line. */
 export const artifactCount = (count: number) => (count === 0 ? "Nothing attached yet." : count === 1 ? "1 artifact" : count + " artifacts");
+
+/** A folder as a chip says it: its last two parts ("Code/botkins-ios"), or the whole path when it is short. */
+export function folderLabel(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.length <= 2 ? path : parts.slice(-2).join("/");
+}

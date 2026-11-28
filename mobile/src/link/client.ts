@@ -424,6 +424,12 @@ const routeOf = (session: Session | null): LinkRoute | null => (session ? (isRel
 type SyncNews = { epoch: string; v: Record<string, number> | null; parts: Record<string, unknown> };
 class Retry extends Error {}
 
+// A dropped reply doesn't tell us whether the computer already acted. Only these reads can be
+// sent again after a transport failure. A new method needs an explicit entry to be replayed.
+const REPLAYABLE_READS = new Set([
+  "link.sync", "link.messages", "link.step", "link.devices.list", "link.team.get",
+]);
+
 // Same preview as the host. The portable client is bundled independently of the host modules.
 function reasoningPreview(items: ReasoningView["items"], botId?: string) {
   const tail = [];
@@ -756,7 +762,7 @@ export class LinkClient {
       const direct = this.trusted(this.pairing.hosts.filter((host) => !isRelayHost(host)));
       if (!direct.length) return false;
       await findHost(this.options.fetch, direct, { serverId: this.pairing.serverId, serverKey: this.pairing.serverKey }, PROBE_HELLO_MS);
-      if (this.session !== seen || this.opening) return false;
+      if (this.resting || this.session !== seen || this.opening) return false;
       this.useSession(null);
       this.poll?.abort();
       this.wakeUp?.();
@@ -766,7 +772,7 @@ export class LinkClient {
     } finally {
       if (this.probing === seen) {
         this.probing = null;
-        if (this.session === seen) this.scheduleProbe();
+        if (this.session === seen && !this.resting) this.scheduleProbe();
       }
     }
   }
@@ -868,8 +874,7 @@ export class LinkClient {
     }
   }
 
-  private async request<T>(method: string, args: unknown[], timeout: number, signal?: AbortSignal, active?: Session, onNews?: (news: SyncNews) => void): Promise<T> {
-    const session = active ?? await this.openSession();
+  private async request<T>(method: string, args: unknown[], timeout: number, signal: AbortSignal | undefined, session: Session, onNews?: (news: SyncNews) => void): Promise<T> {
     if (signal?.aborted) throw new Error("The request was cancelled");
     const seq = ++session.seq;
     const sealed = seal(session.toHost, seqNonce(seq), utf8(JSON.stringify({ m: method, a: args })), "rpc:" + session.id);
@@ -925,14 +930,31 @@ export class LinkClient {
 
   async callWithSignal<T>(method: string, signal: AbortSignal | undefined, ...args: unknown[]): Promise<T> {
     const lifetime = this.lifetime;
+    const replayable = REPLAYABLE_READS.has(method);
+    let retriedTransport = false;
     for (let attempt = 0; ; attempt++) {
+      let session: Session | undefined;
       try {
         if (signal?.aborted) throw new Error("The request was cancelled");
+        session = await this.openSession();
         // Pi waits for npm to finish installing dependencies on the computer.
-        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal);
+        return await this.request<T>(method, args, method === "cloneProjectRepository" ? 300_000 : method === "piPackages.install" ? 150_000 : 60_000, signal, session);
       } catch (error) {
-        if (!signal?.aborted && this.lifetime === lifetime && error instanceof Retry && attempt < 2) continue;
         if (error instanceof LinkError) throw error;
+        if (!signal?.aborted) {
+          const canRetry = this.lifetime === lifetime && attempt < 2;
+          if (error instanceof Retry) {
+            // For these non-streaming calls, Retry means 401. The host refused the session before dispatch.
+            if (canRetry) continue;
+          } else if (session) {
+            if (this.session === session) this.useSession(null);
+            if (!replayable) throw new LinkError("offline", "The computer's reply was lost. Your action may have gone through.");
+            if (!retriedTransport && canRetry) {
+              retriedTransport = true;
+              continue;
+            }
+          }
+        }
         throw new LinkError("offline", "Your computer can't be reached right now.");
       }
     }
@@ -1197,7 +1219,7 @@ export class LinkClient {
           }
           this.options.onSync?.();
         };
-        const args = { epoch: this.epoch, have: this.have, watch: watching, ...(restricted && text !== "whole" && { textWatch: this.replyChats }), ...(this.keptPage && { keepPage: this.keptPage }), ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
+        const args = { epoch: this.epoch, have: this.have, watch: watching, templateVersion: 2, ...(restricted && text !== "whole" && { textWatch: this.replyChats }), ...(this.keptPage && { keepPage: this.keptPage }), ...appends, ...(requestReasoning && { reasoningWatch, ...(this.options.separateThinking && { separateThinking: true }) }), ...(text !== "live" && { text: text === "chunks" ? "chunks" : false }), ...(this.options.lightSteps && { steps: "light" }), ...(requestStepDeltas && { runSteps: "delta" }), ...(requestSummaryDeltas && { runSummaries: "delta" }), ...(!push && { wait: quick ? 0 : 25_000 }) };
         if (push) this.pushSession = session;
         const pollLedger = trackResource("poll", "LinkClient:sync", push ? "link.follow" : "link.sync", this.pairing.serverId);
         let news: SyncNews;
@@ -1220,8 +1242,8 @@ export class LinkClient {
         accept(news);
       } catch (error) {
         if (this.lifetime !== lifetime) break;
-        // Cut short on purpose (the watched chats changed), or a session to renew: go again.
-        if (poll.signal.aborted) continue;
+        // Cut short on purpose (the watched chats changed, or the app went to rest), or a session to renew: go again.
+        if (poll.signal.aborted || this.resting) continue;
         this.wakeCheck = null;
         if (error instanceof Retry) continue;
         this.useSession(null);

@@ -5,10 +5,12 @@ import { Directory, File, Paths } from "expo-file-system";
 import { Image } from "expo-image";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { MenuView } from "@react-native-menu/menu";
-import { CircleAlert, Download, FolderPlus, ImageDown, MessageCircle, Package, Share } from "lucide-react-native";
+import { CircleAlert, Download, ExternalLink, FolderPlus, ImageDown, MessageCircle, Package, Share } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
+import { openLink } from "@/ui/LinkHold";
+import { openChat as openChatRoute } from "@/features/chat/navigate";
 import type { Artifact } from "@/link/types";
 import { shareLocalFile } from "@/state/files";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
@@ -55,7 +57,7 @@ async function saveArtifact(artifact: Artifact) {
 function openChat(artifact: Artifact) {
   if (!artifact.chatId) return;
   // `at` lands on the message that made it, when the computer knows which.
-  router.push({ pathname: "/chat/[id]", params: { id: artifact.chatId, ...(artifact.messageIndex !== undefined && { at: String(artifact.messageIndex) }) } });
+  openChatRoute(artifact.chatId, artifact.messageIndex !== undefined ? { at: String(artifact.messageIndex) } : undefined);
 }
 
 /** "Add to a project…" in the bar ("project-artifacts-v1"): a menu of the projects; one that has it is checked. */
@@ -135,6 +137,7 @@ export default function ArtifactView() {
       options={{
         headerRight: () => (
           <View style={{ flexDirection: "row", alignItems: "center" }}>
+            {!!artifact.url && <IconButton icon={ExternalLink} label="Open on claude.ai" size={44} onPress={() => openLink(artifact.url!)} />}
             {!!artifact.chatId && <IconButton icon={MessageCircle} label="Open chat" size={44} onPress={() => openChat(artifact)} />}
             <AddToProject artifact={artifact} />
             {canSaveToPhotos(kind) && <IconButton icon={ImageDown} label="Save to Photos" size={44} onPress={() => void saveArtifact(artifact)} />}

@@ -10,8 +10,7 @@ export function readableName(name: string) {
 export const isBuiltIn = (skill: SkillInfo) => skill.origin === "built-in";
 /** A slash command that runs a script on the computer with no model ("script-commands-v1"). No bot is given it as a skill. */
 export const isScript = (skill: SkillInfo) => skill.command === "script";
-/** The skills that a bot can have or leave out: a script command is typed by the person, never read by a bot. */
-export const botSkills = (skills: SkillInfo[]) => skills.filter((skill) => !isScript(skill));
+export { botSkillRows as botSkills } from "../../../link-host/bot-skills.mjs";
 export const canEdit = (skill: SkillInfo) => !isBuiltIn(skill) && skill.editable !== false;
 
 type Folder = { id: string; path: string };

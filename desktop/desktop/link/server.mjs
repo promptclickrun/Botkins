@@ -22,6 +22,7 @@ import { botkinRenderer } from "./botkin-svg.mjs";
 import { GADGET_CAPABILITY, GADGET_DEFAULTS, GADGET_SETTINGS_CAPABILITY, Gadgets } from "./gadget.mjs";
 import { cleanPresenceKey, GRANT_CAPABILITY, GRANT_RELAY_CAPABILITY, ScreenGrants } from "./grant.mjs";
 import { REMOTE_METHODS, remoteArgs } from "./methods.mjs";
+import { currentBotBundle } from "./template-bundle.mjs";
 import { isNear, reachable } from "./net.mjs";
 import { baseParts, CHAT_PAGE, CHUNK_HOLD_MAX_MS, CHUNK_LIVE_MS, CHUNK_MS, chatPart, chunkDelta, compactWorkingRun, lightPart, quietLive, reasoningDelta, runPart, runsByChat, stepDetail, textDelta } from "./parts.mjs";
 import { runRowsFor } from "./run-step-delta.mjs";
@@ -39,6 +40,7 @@ import { ChatTyping } from "./typing.mjs";
 import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_MODES } from "./store.mjs";
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, visible, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { avatarOf, cleanAvatar, ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
+import { isRoutineChat } from "./routine-chat.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -48,7 +50,7 @@ const PREFIX = "/botkins/v1/";
 // A sealed call may carry a file part (4 MB, as base64 and sealed); the pairing steps are tiny.
 const MAX_RPC_BODY = 6 * 1024 * 1024;
 const MAX_BODY = 64 * 1024;
-const MAX_TEAMWORK_BODY = 160 * 1024;
+const MAX_TEAMWORK_BODY = 512 * 1024;
 const PAIR_TTL = 5 * 60_000;
 // Wrong pairing codes: a source gets 8 tries for one open code, and the code is withdrawn only after 200
 // wrong tries from everyone together (it has 60 bits, so that stays safe). Per-source tables stay small.
@@ -260,9 +262,9 @@ export class LinkHost extends EventEmitter {
    *   that address is this server's own and the only way phones reach it: a headless host then keeps a phone's
    *   presence key from a pairing through it and takes the screen grant calls through it (grant.mjs).
    */
-  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, profileFetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, log = () => {} }) {
+  constructor({ dir, backend, port, protect, reveal, extraHosts = [], searchPath, managerSearchPath, screenInput, relay, fetch, profileFetch, botkins, demoSpaceLinks = false, spaceLinkTiming, chunkTiming, credentialGrants = null, log = () => {} }) {
     super();
-    Object.assign(this, { backend, log, portOverride: port, extraHosts, fetch: fetch ?? globalThis.fetch, profileFetch: profileFetch ?? fetch ?? globalThis.fetch });
+    Object.assign(this, { backend, log, portOverride: port, extraHosts, credentialGrants, fetch: fetch ?? globalThis.fetch, profileFetch: profileFetch ?? fetch ?? globalThis.fetch });
     this.botkins = botkins === undefined ? botkinRenderer() : botkins;
     // How often a phone that asked for text in chunks gets thinking and sentences (`every`) and the reply's own text (`live`), and how long text may wait for a sentence's end (tests set shorter ones).
     this.chunkTiming = { every: CHUNK_MS, live: CHUNK_LIVE_MS, holdMax: CHUNK_HOLD_MAX_MS, ...chunkTiming };
@@ -383,7 +385,10 @@ export class LinkHost extends EventEmitter {
       "link.pullRequestDiff": (_session, a) => this.prs.panel(a[0], true),
       "link.pullRequests": (_session, a) => this.prs.lookup(a[0], a[1]),
       "link.credentials.save": (_session, a) => this.credentials.save(a[0]),
-      "link.credentials.remove": async (_session, a) => this.credentials.remove(a[0]),
+      "link.credentials.remove": async (_session, a) => {
+        await this.credentials.remove(a[0]);
+        this.credentialGrants?.revokeForCredential?.(a[0]);
+      },
       "link.credentials.check": (_session, a) => this.credentials.check(a[0]),
       "link.credentials.managers": (_session, a) => this.credentials.managers(a[0] === true),
       "link.credentials.unlock": (_session, a) => this.credentials.unlock(a[0], a[1]),
@@ -392,6 +397,17 @@ export class LinkHost extends EventEmitter {
       "link.credentials.items": (_session, a) => this.credentials.items(a[0], a[1], a[2]),
       "link.credentials.item": (_session, a) => this.credentials.item(a[0], a[1], a[2]),
       "link.credentials.link": (_session, a) => this.credentials.link(a[0]),
+      "link.credentials.copy": (_session, a) => this.credentials.copyFromManager(a[0]),
+      "link.credentials.grants": (_session, a) => (this.credentialGrants ? this.credentialGrants.list(a[0] ?? {}) : []),
+      "link.credentials.setGrant": (_session, a) => {
+        if (!this.credentialGrants) throw new Failure("Credential grants are not available on this host.");
+        return this.credentialGrants.set({ ...(a[0] ?? {}), isOwnerPrivateChat: true });
+      },
+      "link.credentials.revokeGrant": (_session, a) => {
+        if (!this.credentialGrants) throw new Failure("Credential grants are not available on this host.");
+        return this.credentialGrants.revoke(a[0]);
+      },
+      "link.credentials.audit": (_session, a) => (this.credentialGrants ? this.credentialGrants.audit(a[0] ?? {}) : []),
       "link.credentials.protonPassInstallPlan": () => this.protonPass("protonPassInstallPlan"),
       "link.credentials.protonPassInstall": (_session, a) => this.protonPass("protonPassInstall", a[0]),
       "link.credentials.protonPassSignInStart": (_session, a) => this.protonPass("protonPassSignInStart", a[0]),
@@ -606,6 +622,14 @@ export class LinkHost extends EventEmitter {
   /** Runs one on the phone. Resolves with its result (JSON); rejects with an Error whose message a bot can read. */
   callDeviceTool(name, args, options) {
     return this.device.call(name, args, options);
+  }
+  /** Paired Chromium extensions and their live status. */
+  browserDevices() {
+    return this.browser.listDevices();
+  }
+  /** Sends an internal `secure.fill` request to a paired Chromium extension. */
+  secureFillBrowser(deviceId, payload, options) {
+    return this.browser.secureFill(deviceId, payload, options);
   }
   /** Browser tools currently exposed by paired Chromium extensions (`browser-v1`). */
   browserTools() {
@@ -1783,19 +1807,20 @@ export class LinkHost extends EventEmitter {
   chatOf(chatId) {
     return (this.backend.snapshot().chats ?? []).find((chat) => chat.id === chatId);
   }
-  /** Only an existing private owner chat may discover entry labels for one exact HTTPS origin. */
-  loginNames(chatId, origin) {
+  /** Only an existing private owner chat may discover credential metadata matching a site or query. */
+  async loginNames(chatId, origin, options = {}) {
     const chat = this.chatOf(chatId);
     if (!chat) return [];
     const { createdBy, invited } = chatPeople(this.store.data.team, chat);
-    if (createdBy !== OWNER || invited.length || typeof origin !== "string" || !origin.startsWith("https://")) return [];
-    return this.credentials.list().filter(entry => {
-      if (!entry.website) return false;
-      try {
-        const site = new URL(entry.website.includes("://") ? entry.website : "https://" + entry.website);
-        return site.origin === origin;
-      } catch { return false; }
-    }).map(({ name, kind }) => ({ name, kind }));
+    if (createdBy !== OWNER || invited.length) return [];
+    const url = options.url ?? (typeof origin === "string" && origin.startsWith("https://") ? origin : undefined);
+    const query = typeof options.query === "string" ? options.query : undefined;
+    if (!url && !query) return [];
+    return this.credentials.findForSite({
+      url,
+      query,
+      includeManagers: options.includeManagers !== false,
+    });
   }
   /** Who started a chat and who was invited. An unknown chat is the owner's, with nobody invited. */
   chatPeople(chatId) {
@@ -1888,18 +1913,20 @@ export class LinkHost extends EventEmitter {
   memberView(principal, method, args, state) {
     const team = this.store.data.team;
     let view = viewOf(team, principal.memberId);
-    if (method === "setChatFlags" && args[1]?.archived && state.chats?.some(c => c.id === args[0] && c.main)) throw new Failure("Main chat stays in your chats.");
     if (method === "setBotFlags") view = withBotFlags(view, String(args[0]), args[1]);
     else if (method === "reorderBots") view = { ...view, order: (Array.isArray(args[0]) ? args[0] : []).filter((id) => typeof id === "string").slice(0, 500) };
-    else if (method === "setChatFlags") view = withChatFlags(view, String(args[0]), args[1], (state.chats ?? []).find((chat) => chat.id === args[0])?.time);
-    else if (method === "markChatsRead") {
+    else if (method === "setChatFlags") {
+      const target = (state.chats ?? []).find((chat) => chat.id === args[0]);
+      const patch = target && isRoutineChat(target) && args[1]?.unread === true ? { ...args[1], unread: false } : args[1];
+      view = withChatFlags(view, String(args[0]), patch, target?.time);
+    } else if (method === "markChatsRead") {
       const [ids] = remoteArgs("markChatsRead", args);
       const role = roleOfMember(team, principal.memberId);
       const byId = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
       let changed = false;
       for (const id of ids) {
         const chat = byId.get(id);
-        if (!chat || !inChat(team, chat, principal.memberId) || !visible(role, chat.botId)) continue;
+        if (!chat || isRoutineChat(chat) || !inChat(team, chat, principal.memberId) || !visible(role, chat.botId)) continue;
         const time = Number.isFinite(chat.time) ? chat.time : 0;
         const prev = view.chats[chat.id];
         if (!prev?.unread && prev?.seen === time) continue;
@@ -1907,6 +1934,8 @@ export class LinkHost extends EventEmitter {
         changed = true;
       }
       if (!changed) return null;
+    } else if (method === "setPreferences") {
+      view = { ...view, showRoutineChats: args[0].showRoutineChats };
     }
     this.setTeam({ ...team, views: { ...(team.views ?? {}), [principal.memberId]: view } });
     return null;
@@ -1984,6 +2013,15 @@ export class LinkHost extends EventEmitter {
       };
       if (route === "hello" && req.method === "GET") return answer(await this.serve({ route, from }));
       if (req.method !== "POST") throw new Refused(405, "method");
+      if (route.startsWith("webhooks/")) {
+        const routeId = route.slice("webhooks/".length);
+        if (!routeId || routeId.includes("/") || typeof this.backend.webhook !== "function") throw new Refused(404, "not_found");
+        const maxWebhook = 64 * 1024;
+        if (Number(req.headers["content-length"]) > maxWebhook) throw new Refused(413, "too_large");
+        const rawBody = await readBody(req, maxWebhook);
+        const result = await this.backend.webhook(routeId, { method: req.method, headers: req.headers, rawBody });
+        return answer({ status: result?.status ?? 200, body: Buffer.from(JSON.stringify(result?.body ?? {}), "utf8"), json: true });
+      }
       if (route !== "rpc" && route !== "pair" && route !== "join" && route !== "session" && route !== "profile") throw new Refused(404, "not_found");
       // A call needs a known session and a body that fits before any of the body is read.
       const sessionId = String(req.headers["x-botkins-session"] ?? "");
@@ -2270,6 +2308,7 @@ export class LinkHost extends EventEmitter {
     const deviceKindOf = this.store.device(session.deviceId)?.kind;
     const refusal = authorize(principal, this.store.data.team, isFollow || cancel ? "link.sync" : method, args, {
       bot: (id) => (state.bots ?? []).find((bot) => bot.id === id),
+      botBundle: (id) => currentBotBundle((state.bots ?? []).find(bot => bot.id === id), state.chats ?? [], personOf(principal)),
       chat: (id) => (state.chats ?? []).find((chat) => chat.id === id),
       gadget: deviceKindOf === "gadget",
       browser: deviceKindOf === "browser",
@@ -2318,7 +2357,16 @@ export class LinkHost extends EventEmitter {
     }
     if (principal.kind === "member") {
       // A member's own view: kept here, not in the workspace, so it is nobody else's.
-      if (method === "setChatFlags" || method === "markChatsRead" || method === "reorderBots") return this.memberView(principal, method, args, state);
+      // Archiving their own Main chat retires it for everyone it belongs to (only them): the app does that.
+      const retiring = method === "setChatFlags" && args[1]?.archived === true && state.chats?.some(c => c.id === args[0] && c.main && c.createdBy === principal.memberId);
+      if (!retiring && (method === "setChatFlags" || method === "markChatsRead" || method === "reorderBots")) return this.memberView(principal, method, args, state);
+      if (method === "setPreferences" && args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) && Object.hasOwn(args[0], "showRoutineChats")) {
+        if (typeof args[0].showRoutineChats !== "boolean") throw new Failure("Choose on or off");
+        this.memberView(principal, method, [{ showRoutineChats: args[0].showRoutineChats }], state);
+        const { showRoutineChats: _own, ...rest } = args[0];
+        if (!Object.keys(rest).length) return null;
+        forApp = [rest];
+      }
       if (method === "setBotFlags") {
         this.memberView(principal, method, args, state);
         const shared = sharedBotFlags(args[1]);
@@ -2416,7 +2464,13 @@ export class LinkHost extends EventEmitter {
     }
     if (!REMOTE_METHODS.has(method)) throw new Error("That can't be done from a phone.");
     // A credential reference is filled in at a few fixed places of three calls, and refused everywhere else.
-    const { args: callArgs, secrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
+    const { args: callArgs, secrets: resolvedSecrets } = await this.credentials.resolve(method, remoteArgs(method, forApp, { deviceId: session.deviceId, uploads: this.uploads }));
+    // Inline channel secrets (channelAdd/channelUpdate) are scrubbed from responses and errors too.
+    const inlineSecrets =
+      method === "channelAdd" || method === "channelUpdate"
+        ? Object.values((method === "channelAdd" ? callArgs[0] : callArgs[1])?.secrets ?? {}).filter((v) => typeof v === "string" && v.length >= 4)
+        : [];
+    const secrets = inlineSecrets.length ? [...new Set([...resolvedSecrets, ...inlineSecrets])] : resolvedSecrets;
     if (!secrets.length) {
       const answer = await this.backend.call(method, callArgs, { principal });
       // A space a person makes starts pinned for them (the pins are theirs, kept here).
@@ -2749,6 +2803,15 @@ export class LinkHost extends EventEmitter {
     const slot = light ? "compactLight" : "compact";
     return (part[slot] ??= JSON.stringify(compactWorkingRun(JSON.parse(part.json), light)));
   }
+  /** Older clients make bots from the template fields they know. Only send them plain templates. */
+  plainTemplates(part) {
+    if (!part.plainTemplates) {
+      const all = JSON.parse(part.json);
+      const plain = all.filter((template) => !template.bundle);
+      part.plainTemplates = plain.length === all.length ? { json: part.json, v: part.v } : { json: JSON.stringify(plain), v: ++this.version };
+    }
+    return part.plainTemplates;
+  }
   /** Missing parts as JSON, null when caught up, or milliseconds until the next eligible flush. */
   news(known, watching, cursors, session, throttle, interval = 0, advance, runBases) {
     const partWatching = [...new Set([...watching, ...(session.reasoningWatch ?? [])])];
@@ -2779,8 +2842,9 @@ export class LinkHost extends EventEmitter {
     const deliveredReasoning = [];
     const deliveredText = [];
     for (const name of values.names ?? this.names(partWatching)) {
-      const part = values.get(quiet && name === "live" ? "quietLive" : name);
+      let part = values.get(quiet && name === "live" ? "quietLive" : name);
       if (!part) continue;
+      if (name === "templates" && session.templateVersion !== 2) part = this.plainTemplates(part);
       versions[name] = part.v;
       if (known[name] === part.v) continue;
       const legacyTextOnly = name === "live" && !quiet && known.live > (values.get("quietLive")?.v ?? Infinity);
@@ -2957,6 +3021,7 @@ export class LinkHost extends EventEmitter {
       this.dirty = true;
     }
     // One form for a session: a client names it on every sync, and the versions it holds are for that form.
+    session.templateVersion = request.templateVersion;
     session.light = steps === "light";
     if (!forMinimal && session.light && request.runSteps === "delta") {
       session.runStepBases ??= new Map();

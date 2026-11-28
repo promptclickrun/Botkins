@@ -391,8 +391,9 @@ export class McpOAuth {
               } catch {}
             if (!url) throw new Error("That is not a web address. Copy the whole address from the browser's address bar.");
             // Only the address this sign-in told the server to send the browser back to: the same place, to the letter.
+            // (The scheme and host are compared too: an app's own address, "botkins://…", has no origin.)
             const back = new URL(redirect);
-            if (url.origin !== back.origin || url.pathname !== back.pathname) throw new Error("That is not the address this sign-in sends the browser back to. That address starts with " + redirect + ".");
+            if (url.protocol !== back.protocol || url.host !== back.host || url.origin !== back.origin || url.pathname !== back.pathname) throw new Error("That is not the address this sign-in sends the browser back to. That address starts with " + redirect + ".");
             const verdict = judge(url.searchParams);
             if (verdict.fail) return void settle.fail(verdict.fail);
             if (!verdict.done) throw new Error(verdict.said);
@@ -456,7 +457,7 @@ export class McpOAuth {
    * A cancel (`cancel()`) ends the sign-in in any state: before the page, while it waits, after
    * the address was taken and while the token request is out. Nothing is written after it.
    */
-  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true } = {}) {
+  async signIn(server, { client, scope, hint, open = this.open, patience, finished, followed = () => true, redirect: oauthRedirect, answerRedirect } = {}) {
     if (this.flows.has(server.id)) throw new Error("A sign-in for " + server.name + " is already open in your browser.");
     const flow = {
       id: server.id,
@@ -490,10 +491,16 @@ export class McpOAuth {
       const port = approved ? Number(approved.callback.port || 80) : this.port;
       const missingClient = () => new Error("Ask your administrator or the server operator to configure an approved OAuth client for " + server.name + ". You can also enter a client ID in this server's advanced sign-in settings.");
       if (!approved && !client && !meta.registration_endpoint && !saved.registered) throw missingClient();
+      // A phone's browser uses its own redirect URI (bounced back to the phone app), so only a client Botkins registers itself can be used.
+      if (oauthRedirect && (approved || client))
+        throw new Error(server.name + " signs in with a fixed return address on this computer. Sign in from the Botkins app on a computer, or with `botkins tools sign-in`.");
+      if (oauthRedirect && !meta.registration_endpoint && !(saved.registered && saved.redirectUri === oauthRedirect)) throw missingClient();
       // The answer comes back to one port. When another sign-in of this app holds it, a tool that can use another port does.
       // A tool that cannot (its return address is fixed) ends a holder that nobody follows, and is refused while somebody does.
       const canMove = !approved && !client && !!meta.registration_endpoint;
-      const holder = () => (port ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
+      // (A phone's sign-in needs no port here: its answer comes back through `answer`. A free one is taken, so it holds none.)
+      if (oauthRedirect) listener = await this.listen(0, undefined, patience);
+      const holder = () => (port && !oauthRedirect ? [...this.flows.values()].find((other) => other !== flow && other.port === port) : null);
       const held = (other) => new Error("Another sign-in (to " + other.name + ") is open on this computer and holds the port. Finish it or cancel it, then try again.");
       if (holder() && !canMove) {
         const other = holder();
@@ -503,7 +510,7 @@ export class McpOAuth {
         for (let waited = 0; holder() && waited < PORT_FREE_MS; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
         if (holder()) throw held(holder());
       }
-      if (!holder()) {
+      if (!listener && !holder()) {
         flow.port = port || null;
         try {
           listener = await this.listen(port, approved?.callback, patience);
@@ -527,10 +534,10 @@ export class McpOAuth {
         }
         listener ??= await this.listen(0, undefined, patience);
       }
-      flow.port = listener.port;
+      flow.port = oauthRedirect ? null : listener.port;
       flow.cancel = listener.cancel;
       if (flow.cancelled) throw new Error("Sign-in was cancelled.");
-      const redirect = approved?.redirectUri ?? redirectUri(listener.port);
+      const redirect = oauthRedirect ?? approved?.redirectUri ?? redirectUri(listener.port);
       let app = client ?? approved;
       // A secret the person entered was for one sign-in server. It is never sent to another one the
       // server names later; entering it again accepts the new one.
@@ -580,7 +587,8 @@ export class McpOAuth {
       }))
         authorize.searchParams.set(key, value);
       const answered = listener.wait(state);
-      flow.take = (address) => listener.take(address, redirect);
+      const expectedAnswer = answerRedirect ?? redirect;
+      flow.take = (address) => listener.take(address, expectedAnswer);
       await open(authorize.href, { redirect });
       const { code, iss } = await answered;
       // A cancel after the address was taken ends the sign-in too: the token request is not sent.
@@ -725,13 +733,16 @@ export class McpOAuth {
     if (running) return running;
     const work = (async () => {
       const saved = this.read(server);
-      if (!saved?.refreshToken) return null;
+      if (!saved?.refreshToken || saved.needsSignIn) return null;
+      // A sign-out, fresh consent, or scope refusal while the token request is out wins over it.
+      const unchanged = () => JSON.stringify(this.read(server)) === JSON.stringify(saved);
       try {
         const reply = await this.tokenRequest(
           { token_endpoint: endpoint(saved.tokenEndpoint, "token address", saved.limit ?? 0), token_endpoint_auth_methods_supported: saved.authMethods },
           { clientId: saved.clientId, clientSecret: saved.registered ? saved.clientSecret : client?.clientSecret },
           { grant_type: "refresh_token", refresh_token: saved.refreshToken, ...(saved.resource && { resource: saved.resource }) },
         );
+        if (!unchanged()) return null;
         const { needsSignIn: _lapsed, ...rest } = saved;
         const next = { ...rest, ...this.tokens(reply, saved) };
         if (!Number.isFinite(Number(reply.expires_in))) delete next.expiresAt;
@@ -740,7 +751,7 @@ export class McpOAuth {
         return next;
       } catch (error) {
         // The sign-in itself has ended (revoked or expired). Anything else may work next time.
-        if (error.code === "invalid_grant" || error.code === "invalid_client") {
+        if ((error.code === "invalid_grant" || error.code === "invalid_client") && unchanged()) {
           const { accessToken: _a, refreshToken: _r, expiresAt: _e, ...rest } = saved;
           this.write(server, { ...rest, needsSignIn: true });
           this.changed();
@@ -757,11 +768,16 @@ export class McpOAuth {
    * { accessToken, tokenType, expiresIn? } or null when the person has to sign in.
    * @param request.reason "initial" | "refresh" | "reauth" | "upscope"
    */
-  async token(server, { reason = "initial", client } = {}) {
+  async token(server, { reason = "initial", client, rejectedAccessToken } = {}) {
     let saved = this.read(server);
-    if (!saved) return null;
+    if (!saved || saved.needsSignIn) return null;
     // A sign-in made for another address is never sent to this one.
     if (saved.url && saved.url !== server.url) return null;
+    // An old challenge must not invalidate a newer sign-in or rotate a newer token.
+    if (rejectedAccessToken && saved.accessToken !== rejectedAccessToken) {
+      if (reason === "upscope") return null;
+      reason = "initial";
+    }
     const usable = (s) => !!s?.accessToken && !s.needsSignIn;
     const live = (s) => usable(s) && (!s.expiresAt || s.expiresAt > Date.now());
     const good = (s) => usable(s) && (!s.expiresAt || s.expiresAt - Date.now() > EARLY);

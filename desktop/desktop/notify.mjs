@@ -85,6 +85,20 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
       chatId: event.mention.chatId,
     };
   }
+  if (event.type === "workflow.approval") {
+    if (!prefs.requests) return null;
+    return {
+      title: `Workflow approval · ${event.workflow?.name ?? "Workflow"}`,
+      body: firstLine(event.message) || "Open Routines › Workflows to approve or reject.",
+    };
+  }
+  if (event.type === "workflow.notify") {
+    if (prefs.routines === false) return null;
+    return {
+      title: event.title || event.workflow?.name || "Workflow",
+      body: firstLine(event.body) || "Workflow notification.",
+    };
+  }
   if (event.type !== "turn") return null;
   const { chat, run } = event;
   if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
@@ -166,6 +180,12 @@ export class Notifier {
     });
     workspace.events.on("request", (request) =>
       this.consider({ type: "request", request, bot: this.bot(request.botId) }),
+    );
+    workspace.events.on("workflow.approval", (payload) =>
+      this.consider({ type: "workflow.approval", ...payload }),
+    );
+    workspace.events.on("workflow.notify", (payload) =>
+      this.consider({ type: "workflow.notify", ...payload }),
     );
   }
   bot(id) {

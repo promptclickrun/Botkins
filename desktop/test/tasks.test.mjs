@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
-import { Tasks } from "../desktop/tasks.mjs";
+import { Tasks, taskNeedsPerson } from "../desktop/tasks.mjs";
 
 function setup(t, reply = (prompt) => "Done: " + prompt.split("\n")[2]) {
   const dir = mkdtempSync(join(tmpdir(), "botkins-tasks-"));
@@ -161,4 +161,461 @@ test("tasks a bot adds during unattended work wait in Later and say who added th
   assert.equal(asked.status, "ready", "a task added while the person is in the chat can start");
   assert.match(tasks.prompt(tasks.get(asked.id)), /Pip added it, not the person/);
   assert.match(tasks.prompt(tasks.get(tasks.save({ title: "Mine" }))), /from the person's task board/);
+});
+
+test("one tick starts as many ready tasks as the limits allow: per bot 1 by default, the computer's limit after", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  const third = ws.state.bots[2].id;
+  const ids = [pip, pip, scout, scout, third].map((botId, i) => tasks.save({ title: "Job " + i, botId, status: "ready" }));
+  tasks.tick();
+  const working = () => tasks.all.filter((x) => x.status === "working");
+  assert.equal(working().length, 2, "two at once on the computer, as before");
+  assert.deepEqual(new Set(working().map((x) => x.botId)), new Set([pip, scout]), "one task per bot by default");
+  await settle(ws);
+  ws.setPreferences({ tasksMax: 3 });
+  tasks.tick();
+  assert.equal(working().length, 3, "three start in one tick");
+  assert.equal(new Set(working().map((x) => x.botId)).size, 3);
+  await settle(ws);
+  assert.ok(ids.every((id) => ["review", "ready"].includes(tasks.get(id).status)));
+});
+
+test("tasks at once per bot 2 runs two of one bot's tasks side by side, in separate chats", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const { ws, tasks, pip } = setup(t);
+  ws.setPreferences({ tasksPerBot: 2, tasksMax: 4 });
+  const ids = [0, 1, 2].map((i) => tasks.save({ title: "Pip " + i, botId: pip, status: "ready" }));
+  // The first task's old chat is busy with the person: the dispatcher must not reuse it.
+  const busy = ws.createChat(pip, "Talking");
+  tasks.get(ids[0]).chatId = busy;
+  ws.active.set(busy, { stopped: false, done: gate });
+  tasks.tick();
+  const working = tasks.all.filter((x) => x.status === "working");
+  assert.equal(working.length, 2, "two for Pip, not three");
+  assert.ok(!working.some((x) => x.id === ids[0]), "a ready task whose chat is busy waits");
+  assert.notEqual(working[0].chatId, working[1].chatId, "each task has its own chat");
+  for (const x of working) assert.notEqual(x.chatId, busy);
+  ws.active.delete(busy);
+  release();
+  await settle(ws);
+  tasks.tick();
+  assert.equal(tasks.get(ids[0]).status, "working");
+  assert.notEqual(tasks.get(ids[0]).chatId, working[0].chatId);
+  await settle(ws);
+});
+
+test("moving back transitions, disallowed transitions, and history recording", async (t) => {
+  const { ws, tasks, pip } = setup(t);
+  const id = tasks.save({ title: "Fix login bug", botId: pip, status: "ready" });
+  tasks.start(id);
+  // Disallowed: moving a working task or moving into working.
+  assert.throws(() => tasks.move(id, "ready"), /Stop the task's chat/);
+  assert.throws(() => tasks.move(id, "done"), /Stop the task's chat/);
+  await settle(ws);
+  assert.equal(tasks.get(id).status, "review");
+  assert.throws(() => tasks.move(id, "working"), /start working on their own/);
+  assert.throws(() => tasks.move(id, "nope"), /Unknown lane/);
+
+  // review -> ready ("Request changes") with note
+  tasks.move(id, "ready", { by: "person", note: "Handle empty password case" });
+  assert.equal(tasks.get(id).status, "ready");
+  assert.equal(tasks.get(id).pendingNote?.text, "Handle empty password case");
+  let last = tasks.get(id).history.at(-1);
+  assert.deepEqual([last.from, last.to, last.by, last.note], ["review", "ready", "person", "Handle empty password case"]);
+
+  // review -> later
+  tasks.move(id, "review");
+  tasks.move(id, "later", { by: "person", note: "Defer to next week" });
+  assert.equal(tasks.get(id).status, "later");
+  last = tasks.get(id).history.at(-1);
+  assert.deepEqual([last.from, last.to, last.note], ["review", "later", "Defer to next week"]);
+
+  // done -> ready ("Reopen")
+  tasks.move(id, "done");
+  assert.equal(tasks.get(id).status, "done");
+  tasks.move(id, "ready", { by: "person", note: "Regression found" });
+  assert.equal(tasks.get(id).status, "ready");
+  assert.equal(tasks.get(id).pendingNote?.text, "Regression found");
+  last = tasks.get(id).history.at(-1);
+  assert.deepEqual([last.from, last.to, last.note], ["done", "ready", "Regression found"]);
+
+  // blocked -> ready (retry)
+  tasks.move(id, "blocked");
+  tasks.get(id).problem = "Rate limited";
+  tasks.move(id, "ready", { by: "person", note: "Try again" });
+  assert.equal(tasks.get(id).status, "ready");
+  assert.equal(tasks.get(id).problem, undefined);
+
+  // archived -> disallowed jumps (cannot jump archived -> done/review/blocked), only ready/later
+  tasks.move(id, "archived");
+  assert.throws(() => tasks.move(id, "done"), /Cannot move a task from archived to done/);
+  assert.throws(() => tasks.move(id, "review"), /Cannot move a task from archived to review/);
+  tasks.move(id, "ready");
+  assert.equal(tasks.get(id).status, "ready");
+});
+
+test("request changes resumes the same chat with the feedback note and previous result", async (t) => {
+  const prompts = [];
+  const { ws, tasks, pip } = setup(t, (prompt) => {
+    prompts.push(prompt);
+    return prompts.length === 1 ? "First pass complete: added validation." : "Second pass complete: added edge-case test.";
+  });
+  const id = tasks.save({ title: "Add form validation", botId: pip, status: "ready" });
+  tasks.start(id);
+  await settle(ws);
+  const firstChatId = tasks.get(id).chatId;
+  assert.equal(tasks.get(id).status, "review");
+  assert.match(tasks.get(id).result, /First pass complete/);
+
+  tasks.move(id, "ready", { by: "person", note: "Please add an edge-case test for empty email." });
+  tasks.tick();
+  await settle(ws);
+
+  assert.equal(tasks.get(id).chatId, firstChatId, "resumes in the same chat session");
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /sent this task back for changes/);
+  assert.match(prompts[1], /Please add an edge-case test for empty email\./);
+  assert.match(prompts[1], /First pass complete: added validation\./);
+  assert.equal(tasks.get(id).status, "review");
+  assert.match(tasks.get(id).result, /Second pass complete/);
+});
+
+test("orchestrated bot-created task routes review to creator bot, notifies creator, enforces creator-only review, and allows person override", async (t) => {
+  const prompts = [];
+  const { ws, tasks, pip, scout } = setup(t, (prompt) => {
+    prompts.push(prompt);
+    return "Implemented feature and ran unit tests.";
+  });
+  const third = ws.state.bots[2].id;
+  const creatorChatId = ws.createChat(pip, "Alfie orchestration");
+  const active = { stopped: false };
+  ws.active.set(creatorChatId, active);
+  const pipTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(creatorChatId), { id: "r-pip" }, active).map((x) => [x.name, x]));
+
+  const created = JSON.parse(await pipTools.task_create.handler({ title: "Build review flow", details: "Ship it", bot: ws.bot(scout).name, status: "ready" }));
+  assert.equal(created.review, "creator", "bot-created tasks default to creator review");
+  assert.equal(tasks.get(created.id).createdChatId, creatorChatId);
+  ws.active.delete(creatorChatId);
+
+  const notified = [];
+  ws.events.on("task.creatorNotified", (ev) => notified.push(ev));
+
+  tasks.tick();
+  await settle(ws);
+  await settle(ws);
+  const after = tasks.get(created.id);
+  assert.equal(after.status, "review");
+  assert.equal(after.reviewerBotId, pip, "routed to creator bot for review");
+  assert.equal(taskNeedsPerson(after), false, "not counted as waiting on the person");
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].chatId, creatorChatId);
+  assert.equal(notified[0].autoAccepted, false);
+  assert.ok(prompts.some((p) => p.includes("[Task ready for your review]") && p.includes(created.id)), "creator chat received the review prompt");
+
+  // A non-creator bot (the assignee Scout, or an unrelated third bot) is refused from accepting or sending back.
+  const scoutChatId = ws.createChat(scout);
+  const scoutActive = { stopped: false };
+  ws.active.set(scoutChatId, scoutActive);
+  const scoutTools = Object.fromEntries(tasks.tools(ws.bot(scout), ws.chat(scoutChatId), { id: "r-scout" }, scoutActive).map((x) => [x.name, x]));
+  await assert.rejects(() => scoutTools.task_update.handler({ id: created.id, status: "done" }), /Only the bot that created this task/);
+  await assert.rejects(() => scoutTools.task_update.handler({ id: created.id, status: "ready", note: "nope" }), /Only the bot that created this task/);
+  ws.active.delete(scoutChatId);
+
+  const thirdChatId = ws.createChat(third);
+  const thirdActive = { stopped: false };
+  ws.active.set(thirdChatId, thirdActive);
+  const thirdTools = Object.fromEntries(tasks.tools(ws.bot(third), ws.chat(thirdChatId), { id: "r-third" }, thirdActive).map((x) => [x.name, x]));
+  await assert.rejects(() => thirdTools.task_update.handler({ id: created.id, status: "done" }), /your own tasks/);
+  ws.active.delete(thirdChatId);
+
+  // Creator bot sends it back with a note.
+  ws.active.set(creatorChatId, active);
+  const sentBack = JSON.parse(await pipTools.task_update.handler({ id: created.id, status: "ready", note: "Fix typo in error message" }));
+  assert.equal(sentBack.status, "ready");
+  assert.equal(tasks.get(created.id).reviewerBotId, undefined);
+  assert.equal(tasks.get(created.id).pendingNote?.text, "Fix typo in error message");
+  ws.active.delete(creatorChatId);
+
+  // Run second pass -> back to creator review -> creator marks done.
+  tasks.tick();
+  await settle(ws);
+  await settle(ws);
+  assert.equal(tasks.get(created.id).status, "review");
+  assert.equal(tasks.get(created.id).reviewerBotId, pip);
+
+  ws.active.set(creatorChatId, active);
+  const accepted = JSON.parse(await pipTools.task_update.handler({ id: created.id, status: "done", note: "Looks good" }));
+  assert.equal(accepted.status, "done");
+  assert.equal(tasks.get(created.id).reviewerBotId, undefined);
+  ws.active.delete(creatorChatId);
+
+  // Person override: reopen and approve a bot-reviewed task directly.
+  tasks.move(created.id, "ready", { by: "person", note: "One more tweak" });
+  tasks.tick();
+  await settle(ws);
+  await settle(ws);
+  assert.equal(tasks.get(created.id).reviewerBotId, pip);
+  tasks.move(created.id, "done", { by: "person" });
+  assert.equal(tasks.get(created.id).status, "done");
+  assert.equal(tasks.get(created.id).reviewerBotId, undefined);
+});
+
+test("auto-accept bot-created task goes straight to done and notifies creator", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t, () => "Generated weekly report.");
+  const creatorChatId = ws.createChat(pip, "Orchestrator");
+  const active = { stopped: false };
+  ws.active.set(creatorChatId, active);
+  const pipTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(creatorChatId), { id: "r-auto" }, active).map((x) => [x.name, x]));
+  const created = JSON.parse(await pipTools.task_create.handler({ title: "Generate report", bot: ws.bot(scout).name, status: "ready", review: "auto" }));
+  assert.equal(created.review, "auto");
+  ws.active.delete(creatorChatId);
+
+  const notified = [];
+  ws.events.on("task.creatorNotified", (ev) => notified.push(ev));
+
+  tasks.tick();
+  await settle(ws);
+
+  const after = tasks.get(created.id);
+  assert.equal(after.status, "done");
+  assert.equal(after.reviewerBotId, undefined);
+  assert.equal(taskNeedsPerson(after), false);
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].autoAccepted, true);
+  assert.equal(notified[0].chatId, creatorChatId);
+  const msg = ws.chat(creatorChatId).messages.at(-1);
+  assert.equal(msg.taskResult?.autoAccepted, true);
+  assert.match(msg.text, /auto-accepted/);
+});
+
+test("migration setting leaves existing bot-created Review tasks untouched by default, and hands them to creator when opted in", (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  // Simulate a legacy bot-created task already sitting in review without reviewerBotId or review field.
+  const legacy = {
+    id: "legacy-bot-task",
+    title: "Legacy bot task",
+    body: "",
+    botId: scout,
+    priority: "normal",
+    status: "review",
+    createdBy: pip,
+    createdAt: Date.now() - 1000,
+    updatedAt: Date.now() - 1000,
+  };
+  const personTask = {
+    id: "legacy-person-task",
+    title: "Legacy person task",
+    body: "",
+    botId: scout,
+    priority: "normal",
+    status: "review",
+    createdBy: "person",
+    createdAt: Date.now() - 1000,
+    updatedAt: Date.now() - 1000,
+  };
+  tasks.all.push(legacy, personTask);
+
+  assert.equal(ws.state.settings.tasksCreatorReviewExisting, false);
+  assert.equal(legacy.reviewerBotId, undefined);
+  assert.equal(taskNeedsPerson(legacy), true, "untouched by default");
+
+  ws.setPreferences({ tasksCreatorReviewExisting: true });
+  assert.equal(legacy.reviewerBotId, pip, "legacy bot-created review task handed to creator");
+  assert.equal(taskNeedsPerson(legacy), false);
+  assert.equal(personTask.reviewerBotId, undefined, "person-created review task stays with person");
+  assert.equal(taskNeedsPerson(personTask), true);
+});
+
+test("routine-created tasks default to Later, and owner-approved routine opt-in allows Ready when assigned to a bot", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  // Default routine (allowReadyTasks not set): tasks forced to Later.
+  const defaultRoutineChatId = ws.panels.routines.create({
+    botId: pip,
+    name: "Default watcher",
+    prompt: "Check PRs",
+    cadence: { kind: "daily", time: "09:00" },
+  });
+  const active1 = { stopped: false };
+  ws.active.set(defaultRoutineChatId, active1);
+  const defaultTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(defaultRoutineChatId), { id: "r-def", scheduleId: 1 }, active1).map((x) => [x.name, x]));
+  const forcedLater = JSON.parse(await defaultTools.task_create.handler({ title: "Follow-up blocked", bot: ws.bot(scout).name, status: "ready" }));
+  assert.equal(forcedLater.status, "later", "default routine forces Later");
+  ws.active.delete(defaultRoutineChatId);
+
+  // Owner-approved routine with allowReadyTasks: true -> ready works when assigned to a bot, still Later if unassigned.
+  const optInRoutineChatId = ws.panels.routines.create({
+    botId: pip,
+    name: "PR watcher",
+    prompt: "Watch PRs and dispatch fixes",
+    cadence: { kind: "daily", time: "09:00" },
+    allowReadyTasks: true,
+  });
+  const active2 = { stopped: false };
+  ws.active.set(optInRoutineChatId, active2);
+  const optInTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(optInRoutineChatId), { id: "r-opt", scheduleId: 1 }, active2).map((x) => [x.name, x]));
+  const readyAssigned = JSON.parse(await optInTools.task_create.handler({ title: "Fix PR #264 blocker", bot: ws.bot(scout).name, status: "ready" }));
+  assert.equal(readyAssigned.status, "ready", "opted-in routine creates Ready task for a bot");
+  const unassignedStillLater = JSON.parse(await optInTools.task_create.handler({ title: "Needs owner pickup", status: "ready" }));
+  assert.equal(unassignedStillLater.status, "later", "unassigned task stays in Later");
+  ws.active.delete(optInRoutineChatId);
+
+  // Non-owner (team member) cannot enable allowReadyTasks on a routine.
+  assert.throws(
+    () => ws.panels.routines.create({ botId: pip, name: "Member routine", prompt: "Hi", cadence: { kind: "daily", time: "09:00" }, allowReadyTasks: true }, Date.now(), "member-1"),
+    /Only the computer's owner/,
+  );
+});
+
+test("creator review queues while creator chat is busy, wakes automatically once idle, runs once, and skips resolved or overridden tasks", async (t) => {
+  let releaseBusyCreator;
+  const busyCreatorTurn = new Promise((resolve) => {
+    releaseBusyCreator = resolve;
+  });
+  const creatorPrompts = [];
+  let activeCreatorReviewPrompt = null;
+
+  const dir = mkdtempSync(join(tmpdir(), "botkins-tasks-busy-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const makeSession = () => {
+    const handlers = new Set();
+    const session = {
+      on: (handler) => (handlers.add(handler), () => handlers.delete(handler)),
+      emit: (event) => handlers.forEach((handler) => handler(event)),
+      disconnect: async () => {},
+      abort: async () => {},
+      send: async ({ prompt }) => {
+        const messageId = "msg:" + Math.random().toString(36).slice(2, 8);
+        if (prompt.includes("Hold creator busy")) {
+          await busyCreatorTurn;
+          session.emit({ type: "user.message", id: messageId, data: { messageId } });
+          session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Creator finished busy turn." } });
+          session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          return messageId;
+        }
+        if (prompt.includes("[Task ready for your review]")) {
+          creatorPrompts.push(prompt);
+          activeCreatorReviewPrompt = prompt;
+          session.emit({ type: "user.message", id: messageId, data: { messageId } });
+          session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Reviewed and verified." } });
+          session.emit({ type: "session.idle", data: { mode: "interactive" } });
+          return messageId;
+        }
+        session.emit({ type: "user.message", id: messageId, data: { messageId } });
+        session.emit({ type: "assistant.message", data: { originatingMessageId: messageId, content: "Worker finished: " + prompt.slice(0, 40) } });
+        session.emit({ type: "session.idle", data: { mode: "interactive" } });
+        return messageId;
+      },
+    };
+    return session;
+  };
+
+  const ws = new Workspace(
+    dir,
+    async () => ({ createSession: async () => makeSession(), resumeSession: async () => makeSession() }),
+    () => {},
+  );
+  const tasks = ws.tasks;
+  const pip = ws.state.bots[0].id;
+  const scout = ws.state.bots[1].id;
+
+  const creatorChatId = ws.createChat(pip, "Orchestrator");
+  const notified = [];
+  ws.events.on("task.creatorNotified", (ev) => notified.push(ev));
+
+  // Start an in-flight turn in the creator chat so it is busy.
+  const busyPromise = ws.send(creatorChatId, "Hold creator busy");
+  assert.equal(ws.active.has(creatorChatId), true, "creator chat is busy");
+
+  // Creator bot creates two ready tasks assigned to worker Scout while busy.
+  const active = ws.active.get(creatorChatId);
+  const pipTools = Object.fromEntries(tasks.tools(ws.bot(pip), ws.chat(creatorChatId), { id: "r-busy" }, active).map((x) => [x.name, x]));
+  const taskA = JSON.parse(await pipTools.task_create.handler({ title: "Deliver after busy", bot: ws.bot(scout).name, status: "ready" }));
+  const taskB = JSON.parse(await pipTools.task_create.handler({ title: "Person overrides before idle", bot: ws.bot(scout).name, status: "ready" }));
+
+  // Allow two concurrent tasks for Scout so both finish while creator is still busy.
+  ws.setPreferences({ tasksPerBot: 2 });
+  tasks.tick();
+  await Promise.all([ws.locks.get(tasks.get(taskA.id).chatId), ws.locks.get(tasks.get(taskB.id).chatId)]);
+
+  assert.equal(tasks.get(taskA.id).status, "review");
+  assert.equal(tasks.get(taskA.id).reviewerBotId, pip);
+  assert.equal(tasks.get(taskB.id).status, "review");
+  assert.equal(tasks.get(taskB.id).reviewerBotId, pip);
+  assert.equal(taskNeedsPerson(tasks.get(taskA.id)), false, "creator-review task is excluded from Needs you");
+  assert.equal(creatorPrompts.length, 0, "review does not interrupt busy creator");
+  assert.deepEqual(
+    notified.map((e) => [e.task.id, e.mode]),
+    [
+      [taskA.id, "queued"],
+      [taskB.id, "queued"],
+    ],
+    "both completions are queued durably while creator is busy",
+  );
+  assert.equal(ws.snapshot().queued[creatorChatId], undefined, "internal review items stay hidden from user queued bar");
+
+  // Person overrides taskB to done before the creator chat becomes idle; taskB must be skipped.
+  tasks.move(taskB.id, "done", { by: "person" });
+  assert.equal(tasks.get(taskB.id).status, "done");
+
+  // Let the creator chat finish its busy turn; queued review for taskA must wake automatically without user input.
+  releaseBusyCreator();
+  await busyPromise;
+  // Drain is scheduled on setImmediate after executeTurn's finally block.
+  for (let i = 0; i < 6 && creatorPrompts.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+    await settle(ws);
+  }
+  await settle(ws);
+  await new Promise((r) => setImmediate(r));
+  await settle(ws);
+
+  assert.equal(creatorPrompts.length, 1, "only taskA woke a review turn, exactly once");
+  assert.match(activeCreatorReviewPrompt, new RegExp(taskA.id));
+  assert.doesNotMatch(activeCreatorReviewPrompt, new RegExp(taskB.id));
+  assert.equal(
+    ws.state.runs.filter((r) => r.chatId === creatorChatId && r.taskReviewId === taskA.id).length,
+    1,
+    "taskA review run started once",
+  );
+  assert.equal(
+    ws.state.runs.filter((r) => r.chatId === creatorChatId && r.taskReviewId === taskB.id).length,
+    0,
+    "overridden taskB never started a review run",
+  );
+  assert.equal(ws.queues.has(creatorChatId), false, "queue is empty after drain");
+  assert.deepEqual(
+    notified.filter((e) => e.mode === "turn").map((e) => e.task.id),
+    [taskA.id],
+    "creatorNotified turn event fired once for taskA only",
+  );
+
+  // Re-ticking / re-draining does not re-trigger the already-delivered review.
+  tasks.tick();
+  ws.drain(creatorChatId);
+  await settle(ws);
+  assert.equal(creatorPrompts.length, 1, "review does not repeat on subsequent ticks or drains");
+});
+
+test("stale queued creator review left in durable queue is skipped on drain when task was resolved or reassigned", async (t) => {
+  const { ws, tasks, pip, scout } = setup(t);
+  const creatorChatId = ws.createChat(pip, "Orchestrator");
+  const id = tasks.save({ title: "Already done", botId: scout, status: "ready", createdBy: pip, createdChatId: creatorChatId });
+  tasks.get(id).status = "review";
+  tasks.get(id).reviewerBotId = pip;
+
+  // Simulate a durable queued review surviving restart, followed by external/manual state override before drain.
+  ws.queues.set(creatorChatId, [
+    { id: "q-review-1", steer: false, notify: false, title: "Review · Already done", taskReviewId: id, text: "[Task ready for your review]", attachments: [] },
+  ]);
+  // Simulate override directly on task state (e.g. reassigned reviewer or moved to done) so drain's guard is exercised.
+  tasks.get(id).status = "done";
+  delete tasks.get(id).reviewerBotId;
+
+  ws.drain(creatorChatId);
+  await settle(ws);
+
+  assert.equal(ws.queues.has(creatorChatId), false, "stale review item removed from queue");
+  assert.equal(ws.state.runs.filter((r) => r.taskReviewId === id).length, 0, "no review turn started for resolved task");
 });

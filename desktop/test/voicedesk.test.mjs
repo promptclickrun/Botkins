@@ -384,7 +384,7 @@ test("Codex live: an ephemeral thread with Botkins' tool only, realtime over Web
   assert.equal(codex.signedIn(), false);
   assert.equal(await codex.refresh(), true);
   assert.equal(codex.signedIn(), true);
-  const { sdp, id } = await codex.live({ sdp: "v=0 offer", voice: "juniper", instructions: "Be Pip.", tools: [ASK_BOT] });
+  const { sdp, id } = await codex.live({ sdp: "v=0 offer", voice: "juniper", instructions: liveInstructions({ name: "Pip", role: "Writes", instructions: "Be Pip." }), tools: [ASK_BOT] });
   assert.equal(sdp, "v=0 codex answer");
   assert.match(id, /^codex-/);
   const init = peer.seen.find((c) => c[0] === "initialize")[1];
@@ -393,16 +393,28 @@ test("Codex live: an ephemeral thread with Botkins' tool only, realtime over Web
   assert.equal(thread.ephemeral, true);
   assert.equal(thread.sandbox, "read-only");
   assert.equal(thread.approvalPolicy, "never");
-  assert.equal(thread.baseInstructions, "Be Pip.");
+  assert.match(thread.baseInstructions, /Be Pip\./);
   assert.deepEqual(thread.config.mcp_servers, { notes: { enabled: false }, mail: { enabled: false } });
   assert.equal(thread.config.features.shell_tool, false);
   assert.deepEqual(thread.dynamicTools[0].tools.map((t) => t.name), ["ask_bot"]);
   assert.deepEqual(thread.dynamicTools[0].tools[0].inputSchema, ASK_BOT.parameters);
   assert.match(thread.dynamicTools[0].tools[0].description, /Always speak first/, "Codex's voice is told to speak first too");
   const start = peer.seen.find((c) => c[0] === "thread/realtime/start")[1];
-  assert.deepEqual(start, { threadId: "thread-9", outputModality: "audio", transport: { type: "webrtc", sdp: "v=0 offer" }, version: "v3", includeStartupContext: false, voice: "juniper" });
-  const first = peer.seen.find((c) => c[0] === "thread/realtime/appendText")[1];
-  assert.match(first.text, /voice of my bot "Pip"/);
+  assert.equal(start.threadId, "thread-9");
+  assert.equal(start.outputModality, "audio");
+  assert.deepEqual(start.transport, { type: "webrtc", sdp: "v=0 offer" });
+  assert.equal(start.version, "v3");
+  assert.equal(start.includeStartupContext, false);
+  assert.equal(start.delegationAckFiller, true);
+  assert.equal(start.voice, "juniper");
+  assert.match(start.realtimeStartInstructions, /Pip/);
+  assert.match(start.realtimeStartInstructions, /botkins\.ask_bot/);
+  assert.equal(start.initialItems.length, 1);
+  assert.equal(start.initialItems[0].role, "developer");
+  assert.match(start.initialItems[0].text, /voice of my bot "Pip"/);
+  assert.match(start.initialItems[0].text, /Be Pip\./);
+  assert.ok(!/\bask_bot\b|Never call a tool silently/i.test(start.initialItems[0].text), "v3 voice initialItems omits direct-tool ask_bot instructions");
+  assert.equal(peer.seen.some((c) => c[0] === "thread/realtime/appendText"), false, "startup uses developer initialItems instead of trailing user appendText");
   // A tool call from the voice.
   const result = await peer.ask("item/tool/call", { threadId: "thread-9", turnId: "t", callId: "c", namespace: "botkins", tool: "ask_bot", arguments: { request: "weather?" } });
   assert.deepEqual(result, { contentItems: [{ type: "inputText", text: "It is sunny." }], success: true });
@@ -485,9 +497,12 @@ test("Codex live: the helper is told the chat and the bot's name, says so before
   const codex = new CodexVoice({ provider: {}, spawn: async () => peer, onTool: async () => "ok", onSession: (id, about) => noted.push([id, about, peer.seen.some(([method]) => method === "thread/realtime/start")]), botName: () => "Someone else" });
   const { id } = await codex.live({ sdp: "v=0 offer", instructions: "Be brief.", tools: [ASK_BOT], chatId: "chat-1", botId: "bot-1", botName: "Pip" });
   assert.deepEqual(noted, [[id, { chatId: "chat-1", botId: "bot-1" }, false]], "before the session is started, so a tool call always finds its chat");
-  const first = peer.seen.find(([method]) => method === "thread/realtime/appendText")[1];
-  assert.match(first.text, /Pip/, "the name the link passed, not the fallback");
-  assert.ok(!/Someone else/.test(first.text));
+  const start = peer.seen.find(([method]) => method === "thread/realtime/start")[1];
+  assert.equal(start.initialItems[0].role, "developer");
+  assert.match(start.initialItems[0].text, /Pip/, "the name the link passed, not the fallback");
+  assert.ok(!/Someone else/.test(start.initialItems[0].text));
+  assert.match(start.realtimeStartInstructions, /Pip/);
+  assert.equal(peer.seen.some(([method]) => method === "thread/realtime/appendText"), false);
   codex.end(id);
   await peer.exited;
   // Without a chat (an older link) nothing is noted, and the fallback name is used.
@@ -496,7 +511,9 @@ test("Codex live: the helper is told the chat and the bot's name, says so before
   const plain = new CodexVoice({ provider: {}, spawn: async () => older, onTool: async () => "ok", onSession: (...args) => quiet.push(args), botName: () => "Fallback" });
   const other = await plain.live({ sdp: "v=0 offer", tools: [ASK_BOT] });
   assert.deepEqual(quiet, []);
-  assert.match(older.seen.find(([method]) => method === "thread/realtime/appendText")[1].text, /Fallback/);
+  const olderStart = older.seen.find(([method]) => method === "thread/realtime/start")[1];
+  assert.match(olderStart.initialItems[0].text, /Fallback/);
+  assert.match(olderStart.realtimeStartInstructions, /Fallback/);
   plain.end(other.id);
   await older.exited;
 });
@@ -532,7 +549,7 @@ test("through the real Voice module: Codex's voices are offered for live voice, 
   const author = { memberId: "m_avery", name: "Avery" };
   const session = await voice.live({ provider: "codex", sdp: "v=0 offer", instructions: "Be brief.", tools: [ASK_BOT], about: { chatId: "chat-1", botId: "bot-1", botName: "Pip", author } });
   assert.deepEqual(noted, [{ chatId: "chat-1", botId: "bot-1", author }]);
-  assert.match(peers.at(-1).seen.find(([method]) => method === "thread/realtime/appendText")[1].text, /Pip/);
+  assert.match(peers.at(-1).seen.find(([method]) => method === "thread/realtime/start")[1].initialItems[0].text, /Pip/);
   voice.endLive(session.id);
   await peers.at(-1).exited;
 });

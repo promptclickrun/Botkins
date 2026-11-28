@@ -28,9 +28,47 @@ export function nodeApi({ workspace, handlers }) {
 
   return {
     "node.status": () => handlers.nodeStatus(),
+    "node.approvals": () =>
+      workspace.interactions
+        .snapshot()
+        // A node's own approvals, and the ones nodes handed back to this computer's chats (nodeAsk).
+        .filter((entry) => entry.nodeJob === true || typeof entry.nodeAsk === "string")
+        .map((entry) => ({
+          id: entry.id,
+          kind: entry.kind,
+          title: entry.title,
+          ...(entry.label && { label: entry.label }),
+          ...(entry.preview && { preview: entry.preview }),
+          ...(entry.detail && { detail: entry.detail }),
+          chatId: entry.chatId,
+          botId: entry.botId,
+          nodeJob: true,
+          ...(entry.dispatch && { dispatch: true }),
+          ...(entry.review && { review: true }),
+          ...(entry.operation && { operation: entry.operation }),
+          ...(entry.resourceId && { resourceId: entry.resourceId }),
+          ...(entry.resourceName && { resourceName: entry.resourceName }),
+          ...(entry.sourceBotName && { sourceBotName: entry.sourceBotName }),
+          ...(entry.sourceHostName && { sourceHostName: entry.sourceHostName }),
+          ...(entry.targetHostName && { targetHostName: entry.targetHostName }),
+          ...(entry.time !== undefined && { time: entry.time }),
+        })),
+    "node.audit": ([limit] = []) => handlers.nodeAuditLog(limit),
     "node.setup": async ([name] = []) => handlers.nodeSetup({ name: text(name, 80, "a name for this node host") }),
     "node.rename": async ([name] = []) => handlers.nodeRename(text(name, 80, "a name for this node host")),
     "node.pause": async ([paused] = []) => handlers.nodePause(paused === true),
+    "node.wholeComputer": async ([enabled] = []) => handlers.nodeSetWholeComputer(enabled === true),
+    "node.execMode": async ([mode] = []) => handlers.nodeSetExecMode(text(mode, 32, "an exec policy mode (deny, allowlist, ask or full)")),
+    "node.allowlist.add": async ([pattern, botId] = []) =>
+      handlers.nodeAddAllowlistRule({
+        pattern: text(pattern, 240, "a command or executable path pattern"),
+        botId: botId === undefined || botId === null || botId === "" ? "*" : text(botId, 160, "a source bot id or *"),
+      }),
+    "node.allowlist.remove": async ([ruleId] = []) => {
+      const id = ruleId === undefined || ruleId === null || ruleId === "" ? undefined : text(ruleId, 120, "an allowlist rule id");
+      const status = await handlers.nodeRemoveAllowlistRule(id);
+      return { ...status, removed: id ?? "all" };
+    },
     "node.share": async ([ref, shared] = []) => {
       const share = shared !== false;
       const project = resolveProject(ref, !share);
@@ -43,5 +81,18 @@ export function nodeApi({ workspace, handlers }) {
       return { ...status, revoked: id ?? "all" };
     },
     "node.disconnect": async () => handlers.nodeDisconnect(),
+    "node.convert.inspect": async () => handlers.nodeConvertInspect(),
+    "node.convert.plan": async ([input] = []) => handlers.nodeConvertPlan(input && typeof input === "object" ? input : {}),
+    "node.convert.run": async ([input] = []) => handlers.nodeConvertRun(input && typeof input === "object" ? input : {}),
+    "node.convert.status": () => handlers.nodeConvertStatus(),
+    "node.convert.undo": async ([snapshotId] = []) =>
+      handlers.nodeConvertUndo(snapshotId ? { snapshotId: text(snapshotId, 160, "a snapshot id") } : {}),
+    "node.remote.status": async ([hostId] = []) => handlers.nodeRemoteStatus(text(hostId, 160, "a remote host id")),
+    "node.remote.control": async ([hostId, action, params] = []) =>
+      handlers.nodeRemoteControl(
+        text(hostId, 160, "a remote host id"),
+        text(action, 32, "a remote control action"),
+        params && typeof params === "object" ? params : {},
+      ),
   };
 }

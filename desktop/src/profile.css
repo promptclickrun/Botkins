@@ -1099,3 +1099,45 @@
     flex-wrap: wrap;
   }
 }
+
+/* ------------------------------------------------------------ inside the full-window Settings */
+/* One card for the setup, as the other sections: the benefits are rows of it split by hairlines,
+   and the notes under them are quiet lines, not boxes in the box. */
+.settings-page .profile-wizard {
+  background: var(--card);
+  border: 0;
+  border-radius: var(--card-radius);
+}
+:root:not([data-backdrop="clean"]) .settings-page .profile-wizard {
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+}
+.settings-page .profile-benefits {
+  gap: 0;
+}
+.settings-page .profile-benefit {
+  position: relative;
+  padding: 10px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.settings-page .profile-benefit + .profile-benefit::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 40px;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+}
+.settings-page .profile-boundary {
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-page .profile-notice {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+}

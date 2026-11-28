@@ -212,6 +212,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
           ...(notify !== undefined && { notify }),
           ...(data.script !== undefined && { script: data.script }),
           ...(data.followUp !== undefined && { followUp: data.followUp }),
+          ...(data.allowReadyTasks !== undefined && { allowReadyTasks: Boolean(data.allowReadyTasks) }),
           ...(model !== undefined && { model }),
         }
       : {
@@ -223,6 +224,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
           ...(deliver && { deliver }),
           ...(notify === false && { notify: false }),
           ...(data.script != null && { script: data.script, followUp: data.followUp === true }),
+          ...(data.allowReadyTasks === true && { allowReadyTasks: true }),
           ...(model && { model }),
         };
     if (found && !Object.keys(app).length) throw new ControlError("Say what to change.", "BAD_ARGUMENT");
@@ -252,6 +254,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
         ...(finalDeliver && { deliver: finalDeliver }),
         ...(deliverChat(finalDeliver) && { deliverChat: deliverChat(finalDeliver) }),
         notify: finalNotify,
+        ...(data.allowReadyTasks !== undefined ? (data.allowReadyTasks ? { allowReadyTasks: true } : {}) : entry?.allowReadyTasks === true ? { allowReadyTasks: true } : {}),
         ...(found && {
           enabled: entry.enabled !== false,
           changes: [
@@ -264,6 +267,7 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
             ...(data.script !== undefined && (fields.script ?? null) !== (entry.script ?? null) ? ["script"] : []),
             ...(data.followUp !== undefined && (fields.followUp === true) !== (entry.followUp === true) ? ["follow-up action"] : []),
             ...(model !== undefined && JSON.stringify(model ?? null) !== JSON.stringify(found.chat.model ?? null) ? ["model"] : []),
+            ...(data.allowReadyTasks !== undefined && Boolean(data.allowReadyTasks) !== (entry.allowReadyTasks === true) ? ["ready tasks"] : []),
           ],
         }),
       },
@@ -273,6 +277,32 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
   return {
     /** One routine whole: its bot, its schedule in words and as data, its next times, its prompt (`instructions`), where its result goes. */
     "routines.get": ([ref]) => view(routine(ref)),
+    /**
+     * A routine's latest runs, newest first: how each ended, and its reply (the first 2,000 characters). `limit` is 1 to 50.
+     * A routine's script reads it for what it said last time (`botkins routines runs "$BOTKINS_ROUTINE_ID" --json`).
+     */
+    "routines.runs": ([ref, limit = 10]) => {
+      const { chat } = routine(ref);
+      const most = Math.max(1, Math.min(50, Math.floor(Number(limit)) || 10));
+      return state()
+        .runs.filter((run) => run.chatId === chat.id)
+        .slice(0, most)
+        .map((run) => {
+          const reply = chat.messages.findLast((message) => message.runId === run.id && message.role === "assistant" && !message.interim)?.text;
+          return {
+            id: run.id,
+            status: run.status,
+            trigger: run.trigger ?? null,
+            time: run.time ? iso(run.time) : null,
+            ...(run.finished && { finished: iso(run.finished) }),
+            ...(run.detail && { detail: String(run.detail).slice(0, 300) }),
+            ...(run.silent && { silent: true }),
+            ...(run.script && { script: { exitCode: run.script.exitCode, ...(run.script.timedOut && { timedOut: true }) } }),
+            ...(run.delivery && { delivery: { to: run.delivery.to } }),
+            ...(typeof reply === "string" && reply && { reply: reply.slice(0, 2000) }),
+          };
+        });
+    },
     /**
      * What a routine will be, before anything is saved. `ref` is null for a new routine, whose `data` is
      * { bot, name, prompt, cadence, timezone?, deliver?, notify? }. With a routine, `data` holds only what
@@ -343,6 +373,41 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
       if (entry.routine) throw new ControlError("That is a routine's own schedule. Use `botkins routines pause`, `resume` or `remove`.", "BAD_ARGUMENT");
       await handlers.changeSchedule(chat.id, id, action);
       return { chatId: chat.id, chat: chat.title, id, action, ...(action === "delete" ? { removed: true } : { enabled: action === "resume" }) };
+    },
+    // ── Event-based Workflows ──
+    "workflows.list": () => handlers.workflowsList(),
+    async "workflows.add"([input]) {
+      return await handlers.workflowCreate(input);
+    },
+    async "workflows.edit"([id, patch]) {
+      return await handlers.workflowUpdate(id, patch);
+    },
+    async "workflows.remove"([id]) {
+      const wf = (state().workflows ?? []).find((w) => w.id === id);
+      await handlers.workflowDelete(id);
+      return { id, name: wf?.name ?? id, removed: true };
+    },
+    async "workflows.pause"([id]) {
+      return await handlers.workflowPause(id);
+    },
+    async "workflows.resume"([id]) {
+      return await handlers.workflowResume(id);
+    },
+    async "workflows.run"([id, options]) {
+      return await handlers.workflowRun(id, options);
+    },
+    async "workflows.retry"([runId, fromNodeId]) {
+      return await handlers.workflowRetryRun(runId, fromNodeId);
+    },
+    async "workflows.approve"([runId, nodeId, decision, note]) {
+      return await handlers.workflowRespondApproval(runId, nodeId, decision, note);
+    },
+    async "workflows.cancel"([runId]) {
+      return await handlers.workflowCancelRun(runId);
+    },
+    "workflows.export": ([id]) => handlers.workflowExportText(id),
+    async "workflows.import"([raw, agentMap]) {
+      return await handlers.workflowImportText(raw, agentMap);
     },
   };
 }

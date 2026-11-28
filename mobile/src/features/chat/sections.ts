@@ -39,6 +39,75 @@ export function arrangeChats(chats: ChatSummary[], sections: Section[] | undefin
   return groups;
 }
 
+/**
+ * The Chats list as one list (the phone's layout since the redesign): every chat that isn't pinned,
+ * newest first, under "Recent", whatever its section; pinned chats are drawn above it as a row of
+ * their own. While a chat is dragged, Pinned and each section show as places to drop it on, above
+ * the list. The chips above it choose which chats it holds (`chatsForFilter`).
+ */
+export function arrangeChatsFlat(chats: ChatSummary[], sections: Section[] | undefined, { dragging = false }: { dragging?: boolean } = {}): ChatGroup[] {
+  const recent = [...chats].filter((chat) => !chat.pinned).sort((a, b) => b.time - a.time);
+  const groups: ChatGroup[] = [];
+  if (dragging) {
+    groups.push({ key: "pinned", title: "Pinned", chats: [] });
+    for (const section of sections ?? []) groups.push({ key: "section:" + section.id, title: section.name, chats: [], section });
+  }
+  if (recent.length || dragging) groups.push({ key: "recent", title: "Recent", chats: recent });
+  return groups;
+}
+
+/** What the chips over the Chats list show: every chat, the unread ones, the ones with a turn under way, or one of the person's sections. */
+export type ChatFilter = "all" | "unread" | "running" | `section:${string}`;
+
+/** The chats with a turn under way: the computer's live `active` list, and any chat with a reply being written. */
+export function runningChatIds(live: { active?: readonly string[]; streams?: Readonly<Record<string, unknown>> } | undefined): Set<string> {
+  return new Set([...(live?.active ?? []), ...Object.keys(live?.streams ?? {})]);
+}
+
+/** The chats a chip shows. A section that is gone shows every chat. */
+export function chatsForFilter<T extends Pick<ChatSummary, "id" | "sectionId">>(chats: T[], filter: ChatFilter, sections: Section[] | undefined, unread: ReadonlySet<string>, running: ReadonlySet<string> = new Set()): T[] {
+  if (filter === "unread") return chats.filter((chat) => unread.has(chat.id));
+  if (filter === "running") return chats.filter((chat) => running.has(chat.id));
+  if (filter.startsWith("section:")) {
+    const id = filter.slice("section:".length);
+    if (!sections?.some((section) => section.id === id)) return chats;
+    return chats.filter((chat) => chat.sectionId === id);
+  }
+  return chats;
+}
+
+export type ChatChip = { value: ChatFilter; label: string; count?: number };
+
+/**
+ * The chips, in their usual order: All, Unread (with its count, only for someone who may read chats),
+ * Running (with its count), then each section. `order` is the person's own order (`prefs.chatChipOrder`):
+ * the chips it names come first, in its order, and any it doesn't name (a new section) follow in the usual order.
+ */
+export function chatChips(sections: Section[] | undefined, unreadCount: number, canView: boolean, runningCount = 0, order: readonly string[] = []): ChatChip[] {
+  const usual: ChatChip[] = [
+    { value: "all", label: "All" },
+    ...(canView ? [{ value: "unread" as const, label: "Unread", ...(unreadCount ? { count: unreadCount } : {}) }] : []),
+    { value: "running", label: "Running", ...(runningCount ? { count: runningCount } : {}) },
+    ...(sections ?? []).map((section) => ({ value: ("section:" + section.id) as ChatFilter, label: section.name })),
+  ];
+  const rank = new Map(order.map((value, at) => [value, at]));
+  return usual.map((chip, at) => ({ chip, at })).sort((a, b) => (rank.get(a.chip.value) ?? order.length + a.at) - (rank.get(b.chip.value) ?? order.length + b.at)).map(({ chip }) => chip);
+}
+
+/** The chip order after `value` is dropped at `index` among the others. The leftmost chip is the one the Chats screen opens on. */
+export function withChipAt(chips: readonly ChatChip[], value: ChatFilter, index: number): ChatFilter[] {
+  const rest = chips.map((chip) => chip.value).filter((one) => one !== value);
+  rest.splice(Math.max(0, Math.min(index, rest.length)), 0, value);
+  return rest;
+}
+
+/** The chip order with `value` one place left (-1) or right (1), or null when it is already at that end. */
+export function withChipMoved(chips: readonly ChatChip[], value: ChatFilter, by: -1 | 1): ChatFilter[] | null {
+  const at = chips.findIndex((chip) => chip.value === value);
+  const to = at + by;
+  return at >= 0 && to >= 0 && to < chips.length ? withChipAt(chips, value, to) : null;
+}
+
 /** The list as a flat run of items: each group's heading, then its chats unless the section is folded. */
 export type ListItem = { key: string; kind: "head"; group: string } | { key: string; kind: "row"; group: string; chatId: string };
 export function listItems(groups: ChatGroup[], folded: readonly string[]): ListItem[] {
@@ -92,6 +161,9 @@ export function chatDropPlan(chat: Pick<ChatSummary, "pinned" | "sectionId">, se
     if (!sections?.some((section) => section.id === id)) return undefined;
     if (chat.pinned) plan.pinned = false;
     if (own !== id) plan.sectionId = id;
+  } else if (group === "recent") {
+    // The one list under the chips holds every chat, in a section or not: a drop there only unpins.
+    if (chat.pinned) plan.pinned = false;
   } else if (group === "none" || group.startsWith("day:")) {
     if (chat.pinned) plan.pinned = false;
     if (own) plan.sectionId = null;

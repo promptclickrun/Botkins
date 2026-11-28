@@ -5,7 +5,8 @@ import { BotStudio } from "./BotStudio";
 import { BotAvatar } from "./Avatar";
 import { availableHeads, freshLook } from "./botkins";
 import type { BotLook, BotTemplate, ImportableAgent, MarketAgent, MarketAgentTemplate, State } from "./types";
-import { supportsAgentTemplates } from "./MarketAgents";
+import { supportsTemplateBundles, TemplateBundle } from "./TemplateBundle";
+import { readAgentTemplate, supportsAgentTemplates } from "./MarketAgents";
 import { errorText } from "./SettingsRows";
 import { type Starter, starterById, STARTERS } from "../desktop/starters.mjs";
 import "./agents.css";
@@ -65,7 +66,8 @@ export default function BotForm({
   const [starterId, setStarterId] = useState(first?.id);
   const starter = starterById(starterId);
   const [studio, setStudio] = useState(false);
-  const [mine, setMine] = useState<string>();
+  const [chosen, setChosen] = useState<BotTemplate>();
+  const mine = chosen?.id;
   /** The marketplace template the form was filled from, until another start is chosen. */
   const [market, setMarket] = useState(start);
   const [name, setName] = useState(filled?.name ?? "");
@@ -76,11 +78,13 @@ export default function BotForm({
   const [targetHost, setTargetHost] = useState(remote?.settingsHost ?? "local");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState<Picker>();
-  const chosen = saved.find((t) => t.id === mine);
+  const bundle = market?.bundle ?? chosen?.bundle;
+  const bundlesSupported = supportsTemplateBundles(remote);
+  const canCreate = !busy && (!bundle || bundlesSupported);
   function useStarter(s: Starter) {
     setStarterId(s.id);
     setMarket(undefined);
-    setMine(undefined);
+    setChosen(undefined);
     setAgentKey(undefined);
     setName(s.name);
     setRole(s.role);
@@ -92,7 +96,7 @@ export default function BotForm({
   function useMarket(t: MarketAgentTemplate) {
     setStarterId(undefined);
     setMarket(t);
-    setMine(undefined);
+    setChosen(undefined);
     setAgentKey(undefined);
     setName(t.name);
     setRole(t.role);
@@ -104,7 +108,7 @@ export default function BotForm({
   function useAgent(a: ImportableAgent) {
     setStarterId(undefined);
     setMarket(undefined);
-    setMine(undefined);
+    setChosen(undefined);
     setAgentKey(a.key);
     setName(a.name);
     setRole(a.role);
@@ -115,7 +119,7 @@ export default function BotForm({
   function useMine(t: BotTemplate) {
     setStarterId(undefined);
     setMarket(undefined);
-    setMine(t.id);
+    setChosen(t);
     setAgentKey(undefined);
     setName(t.name);
     setRole(t.role);
@@ -140,6 +144,7 @@ export default function BotForm({
       className="botform"
       onSubmit={async (e) => {
         e.preventDefault();
+        if (!canCreate) return;
         setBusy(true);
         try {
           const id = await window.botkins.addBot({
@@ -150,6 +155,7 @@ export default function BotForm({
             ...(summary.trim() && { summary: summary.trim() }),
             ...(agent && { agent: agent.key }),
             ...(starter && { starter: starter.id }),
+            ...(bundle && { bundle }),
             ...(onlineUnifiedHosts.length > 1 && { hostId: targetHost }),
           });
           created(id, { setUp: !!starter?.suggestProactive });
@@ -176,7 +182,7 @@ export default function BotForm({
           useAgent={useAgent}
           importOne={() => void importOne()}
           forget={(id) => {
-            if (mine === id) setMine(undefined);
+            if (mine === id) setChosen(undefined);
             window.botkins.deleteTemplate(id).catch(fail);
           }}
           exportOne={(id) => void window.botkins.exportTemplate({ templateId: id }).catch(fail)}
@@ -213,7 +219,8 @@ export default function BotForm({
           </select>
         </div>
       )}
-      <div className="botform-top">
+      {/* The bot as the phone shows it: its Botkin beside its name and role, then what it is for. */}
+      <div className="botform-top group padded botform-card">
         <div className="botform-face">
           <button
             type="button"
@@ -252,38 +259,41 @@ export default function BotForm({
           </label>
         </div>
       </div>
-      <label>
-        <span>
-          About <span className="optional">Optional</span>
-        </span>
-        <Input
-          name="summary"
-          aria-label="About"
-          maxLength={240}
-          placeholder="A line about what this bot is for"
-          value={summary}
-          onValueChange={setSummary}
-        />
-      </label>
-      <label>
-        Instructions
-        <textarea
-          name="instructions"
-          placeholder="How should this bot help? What should it always or never do?"
-          rows={chosen || agent || market || starter ? 6 : 5}
-          required
-          maxLength={30000}
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-        />
-      </label>
+      <div className="group padded botform-card">
+        <label>
+          <span>
+            About <span className="optional">Optional</span>
+          </span>
+          <Input
+            name="summary"
+            aria-label="About"
+            maxLength={240}
+            placeholder="A line about what this bot is for"
+            value={summary}
+            onValueChange={setSummary}
+          />
+        </label>
+        <label>
+          Instructions
+          <textarea
+            name="instructions"
+            placeholder="How should this bot help? What should it always or never do?"
+            rows={chosen || agent || market || starter ? 6 : 5}
+            required
+            maxLength={30000}
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          />
+        </label>
+      </div>
+      <TemplateBundle bundle={bundle} supported={bundlesSupported} />
       <footer className="botform-foot">
         {cancel && (
           <Button variant="glass" className="lg-compact" onClick={cancel}>
             Cancel
           </Button>
         )}
-        <Button type="submit" variant="filled" className="lg-compact" icon={<Plus size={15} />} disabled={busy}>
+        <Button type="submit" variant="filled" className="lg-compact" icon={<Plus size={15} />} disabled={!canCreate}>
           Create bot
         </Button>
       </footer>
@@ -423,7 +433,7 @@ function TemplateMenu({
           </div>
           <div className="template-section" role="group" aria-label="Marketplace templates">
             <span className="template-heading">Marketplace</span>
-            {supportsAgentTemplates(remote) ? <MarketTemplates key={remote?.using?.id} pick={useMarket} /> : (
+            {supportsAgentTemplates(remote) ? <MarketTemplates key={remote?.using?.id} bundlesSupported={supportsTemplateBundles(remote)} pick={useMarket} /> : (
               <p className="set-status"><strong>Agents need an update</strong><br />Update the app on your computer to see agent templates here.</p>
             )}
           </div>
@@ -493,7 +503,7 @@ function TemplateMenu({
   );
 }
 
-function MarketTemplates({ pick }: { pick: (template: MarketAgentTemplate) => void }) {
+function MarketTemplates({ pick, bundlesSupported }: { bundlesSupported: boolean; pick: (template: MarketAgentTemplate) => void }) {
   const [agents, setAgents] = useState<MarketAgent[]>();
   const [id, setId] = useState("");
   const [error, setError] = useState("");
@@ -503,11 +513,11 @@ function MarketTemplates({ pick }: { pick: (template: MarketAgentTemplate) => vo
     let live = true;
     setError("");
     const read = id
-      ? window.botkins["agents.template"](id).then((t) => live && apply(t))
+      ? readAgentTemplate(id, bundlesSupported).then((t) => live && apply(t))
       : window.botkins["agents.browse"]({}).then((page) => live && setAgents(page.agents));
     read.catch((e) => live && setError(errorText(e)));
     return () => { live = false; };
-  }, [id, tries]);
+  }, [id, tries, bundlesSupported]);
 
   if (error) return <p className="set-status error-text" role="alert">{error} <button type="button" className="set-link" onClick={() => setTries(tries + 1)}>Retry</button></p>;
   if (!agents || id) return <p className="set-status">{id ? "Reading the template…" : "Loading agents…"}</p>;

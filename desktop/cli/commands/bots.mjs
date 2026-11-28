@@ -85,6 +85,29 @@ function agentBlock(agents) {
   ]);
 }
 
+function bundleLines(bundle) {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const lines = [];
+  for (const skill of bundle?.skills ?? []) {
+    lines.push("", "Skill for this bot: " + named(skill.name), "  " + named(skill.description), indent(skill.instructions, "  "));
+  }
+  for (const routine of bundle?.routines ?? []) {
+    const { kind, time, days: selected } = routine.cadence;
+    const when = kind === "weekly" ? selected.map(day => days[day]).join(", ") : kind === "weekdays" ? "Weekdays" : "Daily";
+    lines.push("", "Paused routine: " + named(routine.name), "  " + when + " at " + safe(time) + " (host time)", indent(routine.instructions, "  "));
+  }
+  return lines;
+}
+
+async function readTemplate(context, ref) {
+  try {
+    return await call(context, "templates.get", ref);
+  } catch (error) {
+    if (!ref.includes("@")) throw error;
+    return call(context, "templates.market", ref, 2);
+  }
+}
+
 const templateText = (template) =>
   [
     named(template.name) + "   " + template.id,
@@ -92,6 +115,7 @@ const templateText = (template) =>
     ...(template.summary ? ["About: " + named(template.summary)] : []),
     "From: " + (template.source === "imported" ? "a file that was imported" + (template.from ? " (" + named(template.from) + ")" : "") : "a bot of this computer"),
     ...(template.instructions !== undefined ? ["", "Instructions:", indent(template.instructions, "  ")] : []),
+    ...bundleLines(template.bundle),
   ].join("\n");
 
 /** A marketplace template, as `templates show` and `templates use` show it. */
@@ -104,6 +128,7 @@ const marketText = (template) =>
     "",
     "Instructions:",
     indent(template.instructions, "  "),
+    ...bundleLines(template.bundle),
   ].join("\n");
 
 export const botsCommands = {
@@ -116,6 +141,14 @@ export const botsCommands = {
         details: "The copy has the same role, instructions and model, and the name \"<name> copy\". It has no chats and no memory of its own yet.",
         async run(context) {
           context.print(await call(context, "bots.duplicate", one(context, "Name the bot (its name or id).")), (copy) => "Copied " + named(copy.from.name) + " as " + named(copy.name) + ". Change its name with `botkins bots edit " + botWord(copy.name) + " --name <text>`.");
+        },
+      },
+      "reload-tools": {
+        summary: "Reconnect a bot's tools in all its chats",
+        usage: "botkins bots reload-tools <bot>",
+        details: "Each of the bot's chats starts its harness afresh at its next turn, so it connects to Botkins' own tools and the bot's MCP servers again. Conversations and messages stay. A chat in a turn reloads when the turn ends. In one chat, type /reload-tools.",
+        async run(context) {
+          context.print(await call(context, "bots.reloadTools", one(context, "Name the bot (its name or id).")), (found) => "Reloaded the tools of " + named(found.name) + ". Each chat reconnects at its next reply.");
         },
       },
       order: {
@@ -304,6 +337,14 @@ export const botsCommands = {
               context.print(await call(context, "bots.sections.rename", context.args[0], context.args[1]), (done) => "Renamed it to " + named(done.name) + ".");
             },
           },
+          move: {
+            summary: "Move a section to a place on Home (1 is the top)",
+            usage: "botkins bots sections move <section> <place>",
+            async run(context) {
+              if (context.args.length !== 2) throw usage("Name the section (its name or id), then its place (1 is the top).");
+              context.print(await call(context, "bots.sections.move", context.args[0], context.args[1]), (list) => list.map((entry, at) => at + 1 + ". " + named(entry.name)).join("\n"));
+            },
+          },
           remove: {
             summary: "Remove a section. Its bots stay, in no section",
             usage: "botkins bots sections remove <section> [--yes]",
@@ -350,7 +391,7 @@ export const botsCommands = {
   },
   templates: {
     summary: "Save, share and remove bot templates",
-    details: "A template is a bot's setup without its history: its name, role, about text, instructions and look. Save one from a bot, export it as a file, or import one that someone shared.",
+    details: "A template holds a bot's name, role, about text, instructions, look, and any bundled skills and routines. Save one from a bot, export it as a file, or import one that someone shared.",
     commands: {
       list: {
         summary: "List the templates",
@@ -365,12 +406,8 @@ export const botsCommands = {
         details: "A template of your own by its name or id, or one from a marketplace by its id from `botkins templates browse` (name@marketplace).",
         async run(context) {
           const ref = one(context, "Name the template (its name or id, or name@marketplace from `botkins templates browse`).");
-          try {
-            context.print(await call(context, "templates.get", ref), templateText);
-          } catch (error) {
-            if (!ref.includes("@")) throw error;
-            context.print(await call(context, "templates.market", ref), marketText);
-          }
+          const found = await readTemplate(context, ref);
+          context.print(found, found.marketplace ? marketText : templateText);
         },
       },
       browse: {
@@ -389,16 +426,16 @@ export const botsCommands = {
         },
       },
       use: {
-        summary: "Make a bot from a marketplace template",
-        usage: "botkins templates use <id> [--name <text>] [--yes]",
+        summary: "Make a bot from a saved or marketplace template",
+        usage: "botkins templates use <template> [--name <text>] [--yes]",
         options: { name: { type: "string", value: "text", about: "The bot's name (the template's without it)" }, ...YES },
-        details: "Shows the template's name, role, about text and whole instructions first, and asks: they steer the new bot. With no terminal it needs --yes. Change the bot afterwards with `botkins bots edit`.",
+        details: "Shows the template, including any skills and paused routines, before asking to create the bot. With no terminal it needs --yes. Change the bot afterwards with `botkins bots edit`.",
         async run(context) {
-          const id = one(context, "Name the template by its id (see `botkins templates browse`).");
-          const found = await call(context, "templates.market", id);
-          show(context, ["This template's words steer the bot that is made from it:", "", marketText(found)].join("\n"));
+          const ref = one(context, "Name a template from `botkins templates list` or `botkins templates browse`.");
+          const found = await readTemplate(context, ref);
+          show(context, ["This template's words steer the bot that is made from it:", "", found.marketplace ? marketText(found) : templateText(found)].join("\n"));
           if (!(await confirm(context, "Make a bot from it?"))) return EXIT.failed;
-          context.print(await call(context, "templates.use", id, context.options.name), (made) => "Added " + named(made.name) + " (" + named(made.role) + "). Talk to it with `botkins chat " + shellWord(made.name, "<the bot>") + "`.");
+          context.print(await call(context, "templates.use", found.id, context.options.name, { version: 2, saved: !found.marketplace, template: found }), (made) => "Added " + named(made.name) + " (" + named(made.role) + "). Talk to it with `botkins chat " + shellWord(made.name, "<the bot>") + "`.");
         },
       },
       save: {
@@ -438,7 +475,7 @@ export const botsCommands = {
           file: { type: "string", value: "path", about: "Write the file here. \"-\", or no --file, prints it" },
           ...YES,
         },
-        details: "Give a template, or --bot. The file is JSON. It holds the name, role, about text, instructions and look, and nothing of the bot's folders, chats or credentials. Printed as text, it has each character that hides or turns text written as its number; --file and --json give it as it is. An existing file is replaced only after a yes. The app also keeps a copy among the bot's files.",
+        details: "Give a template, or --bot. The file is JSON. It holds the name, role, about text, instructions, look, and any bundled skills and routines. Printed as text, it has each character that hides or turns text written as its number; --file and --json give it as it is. An existing file is replaced only after a yes. The app also keeps a copy among the bot's files.",
         async run(context) {
           const o = context.options;
           if (context.args.length > 1 || (context.args.length === 1) === (o.bot !== undefined)) throw usage("Name one template, or give --bot <bot>, one of them.");
@@ -466,7 +503,7 @@ export const botsCommands = {
           const text = await textFrom(context, path, "file");
           const file = { ...(path !== "-" && { name: basename(path) }), text };
           const found = await call(context, "templates.import.preview", file);
-          show(context, ["This file holds a template. Its words steer a bot that is made from it:", "", "  " + named(found.name), "      Role: " + named(found.role), ...(found.summary ? ["      About: " + named(found.summary)] : []), "      Instructions (" + count(found.instructions.length, "character") + "):", indent(found.instructions, "        "), ...(found.exists ? ["", "A template with this name is saved already. This one is saved beside it."] : [])].join("\n"));
+          show(context, ["This file holds a template. Its words steer a bot that is made from it:", "", "  " + named(found.name), "      Role: " + named(found.role), ...(found.summary ? ["      About: " + named(found.summary)] : []), "      Instructions (" + count(found.instructions.length, "character") + "):", indent(found.instructions, "        "), ...bundleLines(found.bundle), ...(found.exists ? ["", "A template with this name is saved already. This one is saved beside it."] : [])].join("\n"));
           if (!(await confirm(context, "Save this template?"))) return EXIT.failed;
           context.print(await call(context, "templates.import", file), (template) => "Saved the template " + named(template.name) + ".");
         },

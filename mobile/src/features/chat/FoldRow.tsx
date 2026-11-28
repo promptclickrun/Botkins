@@ -74,7 +74,7 @@ function Body({ chatId, run, entries, bot }: { chatId: string; run: Run; entries
               </T>
             </View>
           );
-        return <Aside key={first.key} kind="update" text={first.text} />;
+        return <Aside key={first.key} kind="update" text={first.text} chatId={chatId} />;
       })}
       <Tap onPress={() => activity(chatId, runId)} feel="select" hitSlop={0} accessibilityLabel="Details, show activity" style={{ alignSelf: "flex-start", minHeight: 44, justifyContent: "center", paddingLeft: FACE_INDENT }}>
         <T variant="footnote" weight="600" color="accentText">

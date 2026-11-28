@@ -32,6 +32,7 @@ import { createFollowing } from "./following";
 import { createPartsBatcher } from "./partsBatch";
 import { canBrowse, NearbyPace } from "./reconnect";
 import { findNearby } from "./nearby";
+import { type BackgroundReason, createBackgroundController } from "./backgroundRelay";
 
 // One pairing, as versions before several computers saved it. It is read once and moved to the list.
 const LEGACY_KEY = "botkins.pairing.v1";
@@ -139,6 +140,41 @@ useChatPrefs.subscribe((prefs, before) => {
 });
 /** Who waits for the next sync to come back (`freshSync`). */
 const syncWaiters = new Set<() => void>();
+
+// Background relay socket lifecycle: wait a short grace window after entering background before
+// resting the link and closing the relay WebSocket cleanly, unless active background work (uploads,
+// voice/call, Watch voice, or a push wake) holds the socket open.
+const background = createBackgroundController({
+  initialState: AppState.currentState ?? "active",
+  onBackground: () => {
+    partsBatcher.flush();
+  },
+  onSleep: () => {
+    for (const c of allClients()) c.rest();
+    fetcher.rest({ force: true });
+  },
+  onWake: () => {
+    nearbyPace.reset();
+    void retrySavedStorage();
+    // Give the returning screen time to reclaim its cached page.
+    watched.returned();
+    for (const c of allClients()) c.wake();
+  },
+});
+
+/**
+ * Keeps the link and relay WebSocket open while genuine background work is in flight
+ * (e.g. an active attachment upload, live voice/talk call, Watch voice session, or push wake).
+ * Call the returned release function when the work completes or fails.
+ */
+export function holdBackgroundLink(reason: BackgroundReason): () => void {
+  return background.hold(reason);
+}
+
+/** Wakes the link immediately (e.g. when a notification or push is tapped before AppState flips). */
+export function wakeForNotification() {
+  background.wake();
+}
 
 function follow(pairing: Pairing) {
   stopPool();
@@ -405,17 +441,7 @@ async function startApp() {
   void import("./device").then((device) => device.startDeviceAnswers()).catch(() => {});
   void import("./watch").then((watch) => watch.startWatchCompanion()).catch(() => {});
   AppState.addEventListener("change", (state) => {
-    if (state === "active") {
-      nearbyPace.reset();
-      void retrySavedStorage();
-      // Give the returning screen time to reclaim its cached page.
-      watched.returned();
-      for (const c of allClients()) c.wake();
-    } else if (state === "background") {
-      partsBatcher.flush();
-      for (const c of allClients()) c.rest();
-      fetcher.rest();
-    }
+    background.setAppState(state);
   });
   // The foreground transition may have happened while prefs were loading.
   if (lockedWhileAway && AppState.currentState === "active") void retrySavedStorage();
@@ -778,6 +804,25 @@ export async function reactToMessage(chatId: string, index: number, time: number
   });
 }
 
+/** Dispatches or dismisses a workflow action card and updates loaded chat pages immediately. */
+export async function chatCardAction(chatId: string, target: number | string, action: "dispatch" | "dismiss") {
+  const host = client;
+  const result = await api["chat.cardAction"](chatId, target, action);
+  useApp.setState(state => {
+    const view = state.chats[chatId];
+    if (client !== host || !view) return {};
+    const offset =
+      typeof target === "number"
+        ? target - view.from
+        : view.messages.findIndex(m => m.actionCard?.id === target);
+    if (offset < 0 || offset >= view.messages.length) return {};
+    const messages = view.messages.slice();
+    messages[offset] = { ...messages[offset], actionCard: result.card };
+    return { chats: { ...state.chats, [chatId]: { ...view, messages } } };
+  });
+  return result;
+}
+
 /** Runs a call and shows its failure as a toast. Resolves to undefined when it failed. */
 export async function attempt<T>(work: Promise<T>, done?: string): Promise<T | undefined> {
   try {
@@ -908,11 +953,13 @@ export async function syncForPush(ms: number) {
   return remaining > 0 && freshSync(remaining);
 }
 
-/** Back to rest after a wake in the background, unless the person opened the app meanwhile. */
+/** Back to rest after a wake in the background, unless the person opened the app meanwhile or a hold is active. */
 export function restIfAway() {
   if (AppState.currentState !== "active") {
+    if (background.held) return;
     for (const c of allClients()) c.rest();
-    fetcher.rest();
+    fetcher.rest({ force: true });
+    background.sleepNowIfAway();
   }
 }
 export { mergeChat };

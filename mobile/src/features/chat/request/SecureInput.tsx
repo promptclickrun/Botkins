@@ -133,7 +133,7 @@ function Field({ field, index, count, register, onFilled, onSubmit, disabled }: 
           )}
         </View>
       )}
-      {kind.masked && !picked && (
+      {!picked && (
         <CredentialPicker
           disabled={disabled}
           onPick={(credential, name) => {

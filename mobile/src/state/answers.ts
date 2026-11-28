@@ -7,7 +7,7 @@
 // native side how it went: the card shows "Sent", or gets its buttons back.
 import { Activities, type QueuedAnswer } from "../../modules/botkins-activity";
 import { answerCall } from "./answerCall";
-import { api, freshSync, restIfAway, switchComputer } from "./link";
+import { api, freshSync, holdBackgroundLink, restIfAway, switchComputer } from "./link";
 import { useApp } from "./store";
 import { idForHost } from "./unified";
 
@@ -20,6 +20,7 @@ const sending = new Set<string>();
 async function send(answer: QueuedAnswer) {
   if (sending.has(answer.id) || !Activities?.answered) return;
   sending.add(answer.id);
+  const releaseHold = holdBackgroundLink("push");
   try {
     // An answer to another paired computer's request uses that computer, unless it is already live in unified mode.
     const { pairing, pairings, unified, unifiedHosts } = useApp.getState();
@@ -48,6 +49,7 @@ async function send(answer: QueuedAnswer) {
     }
   } finally {
     sending.delete(answer.id);
+    releaseHold();
     restIfAway();
   }
 }

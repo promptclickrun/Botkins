@@ -14,7 +14,7 @@ export type Mode = "light" | "dark";
 export const DEFAULT_BACKDROP: BackdropId = "clean";
 export const BACKDROPS: { id: BackdropId; name: string; description: string }[] = [
   { id: "clean", name: "Clean", description: "Solid theme surface" },
-  { id: "mesh", name: "Mesh", description: "Vibrant radial blobs with soft sheen" },
+  { id: "mesh", name: "Mesh", description: "Vibrant grainy mesh" },
   { id: "botkins", name: "Botkins", description: "Ambient indigo, pink and teal orbs" },
   { id: "grid", name: "Grid", description: "Subtle 28px hairline grid" },
 ];

@@ -33,43 +33,117 @@ let model = (args[args.indexOf("--model") + 1] ?? "").split("/");
 let thinking = args.includes("--thinking") ? args[args.indexOf("--thinking") + 1] : "high";
 const resumed = args.includes("--resume") ? args[args.indexOf("--resume") + 1] : "";
 const sessionId = resumed || "omp-session-1";
+let todoPhases = [];
+if (resumed && process.env.FAKE_OMP_MISSING === resumed) {
+  process.stderr.write("Session not found: " + resumed + "\n");
+  process.exit(1);
+}
+if (resumed && process.env.FAKE_OMP_RESUMED_PHASES) {
+  try { todoPhases = JSON.parse(process.env.FAKE_OMP_RESUMED_PHASES); } catch {}
+}
 const dialogs = new Map();
 let next = 1;
-const ask = (title) =>
+// As Botkins' extension asks (desktop/providers/pi/extension-shared.mjs): "more" is followed by an input for the detail.
+const ask = (title, method = "select") =>
   new Promise((resolve) => {
     const id = "ui-" + next++;
     dialogs.set(id, resolve);
-    send({ type: "extension_ui_request", id, method: "select", title, options: ["allow", "deny"] });
+    send({ type: "extension_ui_request", id, method, title, ...(method === "select" && { options: ["allow", "deny", "more"] }) });
   });
 let aborted = false;
+// OMP's own subagents (its `task` tool), as the real OMP 19.1.0 reports them (test/omp-subagent-probe-live.mjs):
+// "kids:<name>:<outcome>,…" in a prompt spawns one background child per entry (outcome ok|bad|cancel).
+let subagentLevel = "off";
+const kidReplies = new Map();
+const lifecycle = (payload) => subagentLevel !== "off" && send({ type: "subagent_lifecycle", payload: { agent: "task", agentSource: "bundled", detached: true, ...payload } });
+let taskCalls = 0;
+// As OMP does: the `task` call is asked about first (Botkins' extension), then its children start as
+// background jobs naming it ("<call id>|<item id>"). "kids:a:ok@300" ends child a 300 ms later, after the turn.
+async function spawnKids(spec) {
+  const toolCallId = "task-" + ++taskCalls;
+  const answer = await ask("botkins:permission " + JSON.stringify({ toolCallId, toolName: "task", input: { tasks: spec } }));
+  log({ taskCall: { toolCallId, answer: answer.value } });
+  if (answer.value !== "allow" && answer.value !== "more") return;
+  spec.split(",").forEach((entry, index) => {
+    const [name, rest = "ok"] = entry.split(":");
+    const [outcome, delay] = rest.split("@");
+    const id = "kid-" + name;
+    const parentToolCallId = toolCallId + "|fc_" + taskCalls;
+    lifecycle({ id, index, parentToolCallId, status: "started" });
+    setTimeout(() => {
+      if (outcome === "ok") kidReplies.set(id, "kid " + name);
+      // A duplicate frame, as a reconnecting bus can send: Botkins must not run a hook twice for it.
+      lifecycle({ id, index, parentToolCallId, status: outcome === "ok" ? "completed" : outcome === "cancel" ? "aborted" : "failed" });
+      if (outcome === "ok") lifecycle({ id, index, parentToolCallId, status: "completed" });
+    }, delay ? Number(delay) : 20 + index * 20);
+  });
+}
 
 async function turn(text) {
   aborted = false;
   send({ type: "agent_start" });
   send({ type: "message_start", message: { role: "user" } });
+  const kids = /kids:(\S+)/.exec(text);
+  if (kids) await spawnKids(kids[1]);
   const bash = /bash:(\S+)/.exec(text);
   const mcp = /mcp:([a-z0-9_-]+):([a-z0-9_-]+)/.exec(text);
   const own = /own:([a-z0-9_-]+)/.exec(text);
+  const nativeTodo = /native-todo:(\{.+\})/.exec(text);
+  if (nativeTodo) {
+    const details = JSON.parse(nativeTodo[1]);
+    if (Array.isArray(details.phases)) todoPhases = details.phases;
+    send({ type: "tool_execution_start", toolCallId: "todo-1", toolName: "todo", args: { op: details.op ?? "init" } });
+    send({
+      type: "tool_execution_end",
+      toolCallId: "todo-1",
+      toolName: "todo",
+      isError: false,
+      result: { content: [{ type: "text", text: "Updated todos." }], details },
+    });
+  }
   if (bash || mcp || own) {
     const toolCallId = "call-1";
     const toolName = bash ? "bash" : mcp ? `mcp__${mcp[1]}_${mcp[2]}` : `mcp__botkins_${own[1]}`;
     const input = bash ? { command: bash[1] } : mcp ? { id: "x" } : { id: "bot" };
     const server = bash ? undefined : mcp?.[1] ?? "botkins";
     const remoteName = mcp?.[2] ?? own?.[1];
-    const call = { toolCallId, toolName, input, ...(server && { mcpServerName: server, mcpToolName: remoteName }) };
+    const call = { toolCallId, toolName, input, ...(bash && { native: true }),
+      ...(server && { mcpServerName: server, mcpToolName: remoteName, registryServer: server, registryTool: remoteName }) };
     send({ type: "tool_call_pending", toolCallId, toolName });
     const answer = await ask("botkins:permission " + JSON.stringify(call));
     log({ answer });
-    const allowed = answer.value === "allow";
-    send({ type: "tool_execution_start", toolCallId, toolName, args: input });
-    send({ type: "tool_execution_end", toolCallId, toolName, isError: !allowed, result: { content: [{ type: "text", text: allowed ? "ran" : "The person didn't allow this." }] } });
+    let allowed = answer.value === "allow";
+    let ran = input;
+    let refused = "The person didn't allow this.";
+    if (answer.value === "more") {
+      const detail = await ask("botkins:detail " + JSON.stringify(toolCallId), "input");
+      log({ detail });
+      const parsed = detail.cancelled ? null : JSON.parse(detail.value);
+      if (parsed?.input) [allowed, ran] = [true, parsed.input];
+      else if (parsed?.deny) refused = parsed.reason;
+    }
+    log({ ran: allowed ? { toolName, input: ran } : null });
+    send({ type: "tool_execution_start", toolCallId, toolName, args: ran });
+    if (text.includes("slowtool")) await new Promise((resolve) => setTimeout(resolve, 300));
+    const failed = allowed && text.includes("badtool");
+    let result = { text: !allowed ? refused : failed ? "tool broke" : "ran", isError: !allowed || failed };
+    // As the extension does after a tool runs (extension-shared.mjs, tool_result), when a plugin has a result hook.
+    const now = JSON.parse(readFileSync(process.env.BOTKINS_OMP_SESSION, "utf8"));
+    if (now.postToolUse && !aborted) {
+      const answer = await ask("botkins:result " + JSON.stringify({ toolCallId, toolName, input: ran, isError: result.isError, text: result.text, ...(server && { mcpServerName: server, mcpToolName: remoteName }) }), "input");
+      if (!answer.cancelled) result = { ...result, ...JSON.parse(answer.value) };
+    }
+    log({ result });
+    send({ type: "tool_execution_end", toolCallId, toolName, isError: result.isError, result: { content: [{ type: "text", text: result.text }] } });
   }
   if (aborted) {
     send({ type: "agent_end", messages: [], isTerminal: true });
     send({ type: "session_settled" });
     return;
   }
-  const reply = text.includes("fail") || text.includes("extra") ? "" : "echo: " + text;
+  const reply = (text.includes("fail") && !text.includes("failonce")) || text.includes("extra") ? "" : "echo: " + text;
+  // A model request that fails once, then works (as Pi's own retry does).
+  if (text.includes("failonce")) send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "502 {\"error\":{\"message\":\"flaky\"}}" } });
   const error = text.includes("extra")
     ? '402 {"type":"error","error":{"type":"billing_error","message":"API Error: 400 You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
     : "The plan said no.";
@@ -111,11 +185,24 @@ process.stdin.on("data", (chunk) => {
         dialogs.get(command.id)?.(command);
         dialogs.delete(command.id);
         break;
+      case "set_subagent_subscription":
+        subagentLevel = command.level;
+        ok({ level: command.level });
+        break;
+      case "get_subagent_messages": {
+        const reply = kidReplies.get(command.subagentId);
+        ok({ sessionFile: "", fromByte: 0, nextByte: 0, reset: false, entries: [], messages: [{ role: "user", content: [{ type: "text", text: "task" }] }, { role: "assistant", content: reply ? [{ type: "text", text: reply }] : [] }] });
+        break;
+      }
       case "negotiate_protocol":
         ok({ protocolVersion: command.protocolVersion });
         break;
       case "get_state":
-        ok({ sessionId, model: { provider: model[0], id: model[1] }, thinkingLevel: thinking, isSettled: true });
+        ok({ sessionId, model: { provider: model[0], id: model[1] }, thinkingLevel: thinking, isSettled: true, todoPhases });
+        break;
+      case "set_todos":
+        todoPhases = Array.isArray(command.phases) ? command.phases : [];
+        ok({ phases: todoPhases });
         break;
       case "set_model":
         model = [command.provider, command.modelId];
@@ -126,6 +213,28 @@ process.stdin.on("data", (chunk) => {
         ok();
         break;
       case "prompt":
+        if (command.message.startsWith("/todo done ")) {
+          const target = command.message.slice("/todo done ".length).trim();
+          for (const phase of todoPhases) {
+            for (const task of phase.tasks ?? []) {
+              if (task.content === target) task.status = "completed";
+            }
+          }
+          send({ type: "command_output", text: "Marked completed: " + target });
+          ok({ agentInvoked: false });
+          break;
+        }
+        if (command.message.startsWith("/todo drop ")) {
+          const target = command.message.slice("/todo drop ".length).trim();
+          for (const phase of todoPhases) {
+            for (const task of phase.tasks ?? []) {
+              if (task.content === target) task.status = "abandoned";
+            }
+          }
+          send({ type: "command_output", text: "Abandoned: " + target });
+          ok({ agentInvoked: false });
+          break;
+        }
         ok({ agentInvoked: true });
         void turn(command.message);
         break;

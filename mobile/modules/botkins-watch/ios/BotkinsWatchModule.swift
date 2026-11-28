@@ -3,6 +3,7 @@
 import ExpoModulesCore
 import Foundation
 import AVFoundation
+import UIKit
 import WatchConnectivity
 
 private enum WatchPacketKind: UInt8 {
@@ -74,8 +75,20 @@ private extension Data {
   }
 }
 
+/// Activates WCSession during app launch so commands from a Watch (such as startVoice while the
+/// iPhone is backgrounded or launched on demand) are buffered until JS finishes booting.
+public class BotkinsWatchAppDelegate: ExpoAppDelegateSubscriber {
+  public func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+  ) -> Bool {
+    Task { @MainActor in PhoneWatchSession.shared.activateEarly() }
+    return false
+  }
+}
+
 public final class BotkinsWatchModule: Module {
-  private let bridge = PhoneWatchSession()
+  private let bridge = PhoneWatchSession.shared
 
   public func definition() -> ModuleDefinition {
     Name("BotkinsWatch")
@@ -140,9 +153,13 @@ public final class BotkinsWatchModule: Module {
 
 @MainActor
 private final class PhoneWatchSession: NSObject, WCSessionDelegate {
+  static let shared = PhoneWatchSession()
   nonisolated override init() { super.init() }
 
   private var emit: ((String, [String: Any]) -> Void)?
+  private var pendingCommands: [[String: Any]] = []
+  private var startTask: UIBackgroundTaskIdentifier = .invalid
+  private var startTaskTimer: Task<Void, Never>?
   func shutdown() {
     disconnect?.cancel()
     rtc?.close()
@@ -150,6 +167,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     if voiceSession != nil { try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation]) }
     voiceSession = nil
     stopKeepAliveAudio()
+    endStartBackgroundTask()
     emit = nil
   }
   private var voiceSession: String?
@@ -166,12 +184,52 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     WCSession.isSupported() ? WCSession.default : nil
   }
 
+  func activateEarly() {
+    guard let session = self.session else { return }
+    session.delegate = self
+    if session.activationState == .notActivated { session.activate() }
+  }
+
   func start(notify: @escaping (String, [String: Any]) -> Void) {
     self.emit = notify
     guard let session = self.session else { return }
     session.delegate = self
     if session.activationState == .notActivated { session.activate() }
     self.tellReachability(session)
+    if !pendingCommands.isEmpty {
+      let queued = pendingCommands
+      pendingCommands.removeAll()
+      for event in queued {
+        notify("command", event)
+      }
+    }
+  }
+
+  /// Holds a short UIBackgroundTask while Watch voice or refresh starts up in a backgrounded app.
+  private func beginStartBackgroundTask() {
+    endStartBackgroundTask()
+    var taskId: UIBackgroundTaskIdentifier = .invalid
+    taskId = UIApplication.shared.beginBackgroundTask(withName: "botkins-watch-start") { [weak self] in
+      Task { @MainActor in
+        if self?.startTask == taskId { self?.endStartBackgroundTask() }
+      }
+    }
+    startTask = taskId
+    startTaskTimer = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: 25_000_000_000)
+      guard !Task.isCancelled else { return }
+      self?.endStartBackgroundTask()
+    }
+  }
+
+  private func endStartBackgroundTask() {
+    startTaskTimer?.cancel()
+    startTaskTimer = nil
+    if startTask != .invalid {
+      let id = startTask
+      startTask = .invalid
+      UIApplication.shared.endBackgroundTask(id)
+    }
   }
 
   func update(_ snapshot: String, durable: Bool = true) {
@@ -220,18 +278,20 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     self.outputSequence = 0
     self.lastRtcLevel = Date.distantPast
     self.outputRate = UInt32(max(1, outputRate))
+    // Best-effort iPhone background audio keep-alive: when the iPhone is locked or backgrounded,
+    // iOS may refuse AVAudioSession.setActive(true) (.cannotStartPlaying) for a process that was
+    // not already playing audio. Do not abort the Watch call — the Watch owns the active mic/speaker
+    // and WCSession traffic keeps the bridge alive alongside the startup background task.
     do {
       let audio = AVAudioSession.sharedInstance()
-      try audio.setCategory(.playback, mode: .spokenAudio, options: [])
+      try audio.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
       try audio.setPreferredSampleRate(Double(inputRate))
       try audio.setPreferredIOBufferDuration(0.02)
       try audio.setActive(true)
       try self.startKeepAliveAudio()
     } catch {
-      self.voiceSession = nil
       self.stopKeepAliveAudio()
       try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-      throw Exception(name: "E_WATCH_AUDIO", description: "The Watch voice session could not keep audio active.")
     }
     do {
       let message: [String: Any] = ["kind": "voiceStarted", "sessionId": sessionId, "inputRate": inputRate, "outputRate": outputRate]
@@ -250,6 +310,9 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
       guard voiceSession == sessionId else {
         throw Exception(name: "E_WATCH_ENDED", description: "The Watch call ended.")
       }
+      if keepAliveEngine?.isRunning == true {
+        endStartBackgroundTask()
+      }
     } catch {
       voiceEnded(sessionId, (error as? Exception)?.message ?? error.localizedDescription)
       throw error
@@ -261,8 +324,8 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     self.voiceSession = nil
     self.stopKeepAliveAudio()
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    self.endStartBackgroundTask()
     self.disconnect?.cancel()
-    self.disconnect = nil
     var message: [String: Any] = ["kind": "voiceEnded", "sessionId": sessionId]
     message["reason"] = reason
     self.send(message)
@@ -359,6 +422,7 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     self.voiceSession = nil
     self.stopKeepAliveAudio()
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    self.endStartBackgroundTask()
     self.disconnect?.cancel()
     self.disconnect = nil
     self.send(["kind": "voiceEnded", "sessionId": sessionId])
@@ -483,8 +547,10 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
   }
 
   nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-    Task { @MainActor in accept(message) }
-    replyHandler(["accepted": true])
+    Task { @MainActor in
+      accept(message)
+      replyHandler(["accepted": true])
+    }
   }
 
   nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
@@ -541,6 +607,14 @@ private final class PhoneWatchSession: NSObject, WCSessionDelegate {
     var event: [String: Any] = ["command": value]
     if let revision = message["revision"] as? NSNumber { event["revision"] = revision.int64Value }
     if let sessionId = message["sessionId"] as? String, sessionId.count <= 200 { event["sessionId"] = sessionId }
-    emit?("command", event)
+    if command == "startVoice" || command == "refresh" {
+      beginStartBackgroundTask()
+    }
+    if let emit {
+      emit("command", event)
+    } else {
+      if pendingCommands.count >= 8 { pendingCommands.removeFirst() }
+      pendingCommands.append(event)
+    }
   }
 }

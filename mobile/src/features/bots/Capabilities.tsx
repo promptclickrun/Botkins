@@ -8,14 +8,13 @@ import { botSkills } from "@/features/skills/shared";
 
 const toggle = (list: string[] | undefined, item: string, on: boolean) => (on ? (list ?? []).filter((entry) => entry !== item) : [...(list ?? []).filter((entry) => entry !== item), item]);
 
-/** Which skills and tools one bot may use, within what is on for everyone. */
+/** Which skills and tools one bot may use. */
 export default function Capabilities() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const bot = useBot(id);
   const all = useSkills();
-  // A script command is typed by the person; a bot neither has it nor leaves it out.
-  const skills = all && botSkills(all);
   const offForAll = usePart("skills")?.disabled;
+  const skills = all && botSkills(all, bot, offForAll);
   const servers = usePart("mcp");
 
   if (!bot)
@@ -35,13 +34,13 @@ export default function Capabilities() {
         ) : (
           <Group>
             {skills.map((skill) => {
-              const everyone = !skill.enabled || !!offForAll?.includes(skill.name);
+              const everyone = !skill.enabled;
               return (
                 <Row
                   key={skill.name}
                   title={skill.name}
                   subtitle={skill.description}
-                  value={everyone ? "Off for everyone" : undefined}
+                  value={!skill.shared ? "Bot template" : everyone ? "Off for everyone" : undefined}
                   toggled={!everyone && !bot.skillsOff?.includes(skill.name)}
                   disabled={everyone}
                   onToggle={(on) => void attempt(api.setBotIntegrations(bot.id, { skillsOff: toggle(bot.skillsOff, skill.name, on) }))}

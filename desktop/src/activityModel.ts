@@ -72,6 +72,141 @@ const KIND_PATTERNS: [RegExp, StepKind][] = [
 ];
 
 const QUIET_TOOL = /^(report_intent|think|thinking|task_complete|read_agent|list_agents)$/;
+/** Tools whose bot-to-bot interaction renders as a dedicated agent-message rail card when backed by run.teamwork or run.taskHandoffs. */
+export const RAIL_COVERED_TEAMWORK_TOOL = /^(ask_teammate|list_node_files|node_read_file|node_write_file|node_mkdir|node_move_file|node_delete_file|node_stat_file|node_search_files|node_exec|node_which|node_screen_info|node_screen_capture|node_screen_input|node_notify)$/i;
+export const RAIL_COVERED_TASK_TOOL = /^task_create$/i;
+
+type RailTeamworkRef = {
+  id?: string;
+  toolCallId?: string;
+  botId?: string;
+  message?: string;
+  expecting?: string;
+  reply?: string;
+  remote?: { hostId?: string; botName?: string };
+};
+type RailTaskHandoffRef = { id?: string; taskId?: string; toolCallId?: string };
+type RailStepRef = Pick<Step, "id" | "name" | "status" | "source" | "input" | "output">;
+type RailRunRef = {
+  steps?: readonly RailStepRef[];
+  teamwork?: readonly RailTeamworkRef[];
+  taskHandoffs?: readonly RailTaskHandoffRef[];
+};
+
+function parseJsonObject(text?: string): Record<string, unknown> | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+type LegacyAskFields = {
+  message: string;
+  teammate: string;
+  host: string;
+  expecting: string;
+  reply: string;
+};
+
+function legacyAskFields(step: RailStepRef | null | undefined): LegacyAskFields | null {
+  if (!step || step.source || step.status === "Failed") return null;
+  if (String(step.name || "").trim().toLowerCase() !== "ask_teammate") return null;
+  const input = parseJsonObject(step.input);
+  const message = typeof input?.message === "string" ? input.message.trim() : "";
+  if (!message) return null;
+  const teammate = typeof input?.teammate === "string" ? input.teammate.trim().replace(/^@/, "").toLowerCase() : "";
+  const host = typeof input?.host === "string" ? input.host.trim() : "";
+  const expecting = typeof input?.expecting === "string" ? input.expecting.trim() : "";
+  const output = parseJsonObject(step.output);
+  const reply = typeof output?.reply === "string" ? output.reply.trim() : "";
+  return { message, teammate, host, expecting, reply };
+}
+
+function legacyAskCompatible(fields: LegacyAskFields, entry: RailTeamworkRef): boolean {
+  const entryMessage = typeof entry.message === "string" ? entry.message.trim() : "";
+  if (!entryMessage || fields.message !== entryMessage) return false;
+  const entryHost = typeof entry.remote?.hostId === "string" ? entry.remote.hostId.trim() : "";
+  if (fields.host !== entryHost) return false;
+  if (entryHost) {
+    if (!fields.teammate) return false;
+    const remoteTargets = [entry.botId, entry.remote?.botName]
+      .filter((v): v is string => typeof v === "string" && !!v.trim())
+      .map((v) => v.trim().toLowerCase());
+    if (!remoteTargets.includes(fields.teammate)) return false;
+  }
+  const entryExpecting = typeof entry.expecting === "string" ? entry.expecting.trim() : "";
+  if ((fields.expecting || entryExpecting) && fields.expecting !== entryExpecting) return false;
+  const entryReply = typeof entry.reply === "string" ? entry.reply.trim() : "";
+  if (fields.reply && entryReply && fields.reply !== entryReply) return false;
+  return true;
+}
+
+function isUnambiguousLegacyAskMatch(
+  step: RailStepRef,
+  entry: RailTeamworkRef,
+  run: RailRunRef,
+): boolean {
+  const fields = legacyAskFields(step);
+  if (!fields || !legacyAskCompatible(fields, entry)) return false;
+  if (!Array.isArray(run.steps)) return false;
+  const exactCardIds = new Set((run.teamwork ?? []).map((item) => item?.toolCallId).filter((v): v is string => !!v));
+  const matchingSteps = run.steps.filter((candidate) => {
+    if (!candidate || exactCardIds.has(candidate.id)) return false;
+    const candidateFields = legacyAskFields(candidate);
+    return !!candidateFields && legacyAskCompatible(candidateFields, entry);
+  });
+  if (matchingSteps.length !== 1 || matchingSteps[0]?.id !== step.id) return false;
+  const matchingEntries = (run.teamwork ?? []).filter(
+    (candidate) => candidate && !candidate.toolCallId && legacyAskCompatible(fields, candidate),
+  );
+  return matchingEntries.length === 1 && matchingEntries[0] === entry;
+}
+
+function matchesTeamworkCard(
+  step: RailStepRef,
+  entry: RailTeamworkRef | null | undefined,
+  run: RailRunRef,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  return isUnambiguousLegacyAskMatch(step, entry, run);
+}
+
+function matchesTaskHandoffCard(
+  step: Pick<Step, "id" | "output">,
+  entry: RailTaskHandoffRef | null | undefined,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.toolCallId) return step.id === entry.toolCallId;
+  const taskId = entry.taskId || entry.id;
+  if (taskId) {
+    const output = parseJsonObject(step.output);
+    if (output?.id === taskId) return true;
+  }
+  return false;
+}
+
+/** True when a tool step is already represented by a sender-side agent-message rail card on this run, so it should not also appear as a tool row. */
+export function isStepCoveredByRail(
+  step: RailStepRef | null | undefined,
+  run?: RailRunRef | null,
+): boolean {
+  if (!step || !run || step.source || step.status === "Failed") return false;
+  const name = String(step.name || "").trim();
+  if (!name) return false;
+  if (run.teamwork?.length && RAIL_COVERED_TEAMWORK_TOOL.test(name)) {
+    return run.teamwork.some((entry) => matchesTeamworkCard(step, entry, run));
+  }
+  if (run.taskHandoffs?.length && RAIL_COVERED_TASK_TOOL.test(name)) {
+    return run.taskHandoffs.some((entry) => matchesTaskHandoffCard(step, entry));
+  }
+  return false;
+}
 
 const SUMMARY_WORDS: Record<StepKind, [string, string]> = {
   command: ["Ran a command", "Ran %d commands"],
@@ -512,19 +647,21 @@ function asStepKind(value: string): StepKind {
 }
 
 export function formatFeedWork(
-  run: Pick<Run, "status" | "summary" | "steps" | "usedTools" | "stepKinds" | "stepCount" | "failedCount">,
+  run: Pick<Run, "status" | "summary" | "steps" | "usedTools" | "stepKinds" | "stepCount" | "failedCount" | "teamwork" | "taskHandoffs">,
 ): { kinds: StepKind[]; summary: string; stepCount: number; failedCount: number } {
-  const steps = run.steps ?? [];
-  const kinds = run.stepKinds?.length ? run.stepKinds.slice(0, 4).map(asStepKind) : uniqueKinds(steps, run.usedTools, 4);
+  const hasSteps = Array.isArray(run.steps) && run.steps.length > 0;
+  const steps = hasSteps ? run.steps!.filter((s) => !isStepCoveredByRail(s, run)) : [];
+  const legacyTools = hasSteps ? undefined : run.usedTools;
+  const kinds = run.stepKinds?.length ? run.stepKinds.slice(0, 4).map(asStepKind) : uniqueKinds(steps, legacyTools, 4);
   const failedCount = typeof run.failedCount === "number" ? run.failedCount : steps.filter((s) => s.status === "Failed").length;
-  const visibleToolCount = (run.usedTools ?? []).filter((n) => toolKind(n) != null).length;
+  const visibleToolCount = (legacyTools ?? []).filter((n) => toolKind(n) != null).length;
   const stepCount = typeof run.stepCount === "number" ? run.stepCount : visibleSteps(steps).length || visibleToolCount;
   let summary = run.summary || "";
   if (!summary && steps.length) {
     summary = summarizeSteps(steps, { running: run.status === "Working" });
   }
-  if (!summary && run.usedTools?.length) {
-    summary = summarizeToolNames(run.usedTools);
+  if (!summary && legacyTools?.length) {
+    summary = summarizeToolNames(legacyTools);
   }
   return { kinds, summary, stepCount, failedCount };
 }

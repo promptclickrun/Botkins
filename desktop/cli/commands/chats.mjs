@@ -171,11 +171,32 @@ export const chatsCommands = {
         },
       },
       approve: {
-        summary: "Review and answer a pending permission on this computer",
-        usage: "botkins chats approve <chat-id>",
+        summary: "Approve or deny a pending request by chat id, node-job id or request id",
+        usage: "botkins chats approve <id>",
         async run(context) {
-          const { request } = await context.client.call("chat.read", one(context, "Give the chat id from botkins chats list."));
-          if (request?.kind !== "permission") throw usage("This chat has no pending approval.");
+          const target = one(context, "Give the chat id, node-job id or request id.");
+          let pending;
+          try {
+            pending = await context.client.call("interactions.list");
+          } catch {
+            pending = undefined;
+          }
+          let request = Array.isArray(pending)
+            ? pending.find(
+                (entry) =>
+                  entry.id === target ||
+                  entry.chatId === target ||
+                  (entry.nodeJob && entry.chatId === "node-job-" + target),
+              )
+            : undefined;
+          if (!request && !target.startsWith("node-job-")) {
+            try {
+              ({ request } = await context.client.call("chat.read", target));
+            } catch (error) {
+              if (!Array.isArray(pending)) throw error;
+            }
+          }
+          if (request?.kind !== "permission") throw usage("There is no pending approval for " + safe(target) + ".");
           const action = await approvalAction(context, request);
           const result = await context.client.call("chat.respond", request.id, { action }, ...(action === "deny" ? [] : [{ agreed: true, ...(request.review && { reviewed: true }) }]));
           context.print(result, "Decision recorded.");
@@ -186,6 +207,21 @@ export const chatsCommands = {
         usage: "botkins chats show <chat>",
         async run(context) {
           context.print(await context.client.call("chats.get", one(context, CHAT)), chatText);
+        },
+      },
+      messages: {
+        summary: "Print a chat's latest messages, oldest first",
+        usage: "botkins chats messages <chat> [--last <n>] [--role user|assistant]",
+        options: { last: { type: "string", value: "n", about: "How many messages, 1 to 100 (10)" }, role: { type: "string", value: "role", about: "Only the person's (user) or the bot's (assistant)" } },
+        details: "Each message has its index, role, text and time. A routine's script can read it with --json, for example to see whether the person answered.",
+        async run(context) {
+          const ref = one(context, CHAT);
+          const last = context.options.last === undefined ? undefined : Number(context.options.last);
+          if (last !== undefined && (!Number.isInteger(last) || last < 1 || last > 100)) throw usage("--last is a whole number from 1 to 100.");
+          const options = { ...(last !== undefined && { last }), ...(context.options.role !== undefined && { role: context.options.role }) };
+          context.print(await context.client.call("chats.messages", ref, options), (view) =>
+            view.messages.length ? view.messages.map((message) => "[" + message.index + "] " + message.role + ": " + safe(message.text.replace(/\s+/g, " ").slice(0, 300))).join("\n") : "No messages.",
+          );
         },
       },
       rename: {
@@ -225,6 +261,22 @@ export const chatsCommands = {
           const [chat, at, emoji] = context.args;
           if (context.args.length !== 3 || !/^\d+$/.test(at)) throw usage("Give the chat, zero-based message index and one emoji.");
           context.print(await context.client.call("chats.react", chat, Number(at), emoji), (result) => "Reacted " + result.emoji);
+        },
+      },
+      card: {
+        summary: "Dispatch or dismiss a workflow action card in a chat",
+        usage: "botkins chats card <chat> <card-id-or-index> <dispatch|dismiss>",
+        async run(context) {
+          const [chat, target, action] = context.args;
+          if (context.args.length !== 3 || !["dispatch", "dismiss"].includes(action)) {
+            throw usage("Give the chat, card id or zero-based message index, and dispatch or dismiss.");
+          }
+          const parsedTarget = /^\d+$/.test(target) ? Number(target) : target;
+          context.print(await context.client.call("chats.card", chat, parsedTarget, action), (result) =>
+            result.state === "dispatched"
+              ? `Dispatched to ${result.botName || "bot"} (${result.chatId})`
+              : "Card dismissed.",
+          );
         },
       },
       fork: {

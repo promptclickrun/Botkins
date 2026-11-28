@@ -537,7 +537,7 @@ test("an answer to a request that waits in a chat leaves a line: the chat, the k
   assert.equal(lines.join("\n").includes("PRIVATE"), false);
 });
 
-test("the terminal opens Main chat, resets and resumes its forks, and sets the proactive destination", { skip }, async t => {
+test("the terminal opens Main chat, resets its context in place and resumes its forks, and sets the proactive destination", { skip }, async t => {
   const { botkins, client } = await service(t);
   await client.call("bots.add", { name: "Nova" });
   const { chatId: id } = await client.call("chat.main", "Nova");
@@ -547,8 +547,8 @@ test("the terminal opens Main chat, resets and resumes its forks, and sets the p
   assert.equal(reset.exit, 0, reset.err);
   const fresh = reset.json();
   assert.equal(fresh.id, id);
-  assert.notEqual(fresh.activeFork, "original");
-  assert.match((await botkins(["chats", "show", id])).out, new RegExp(fresh.activeFork));
+  // Reset clears the bot's context and keeps the same chat and fork: a Main chat never looks new.
+  assert.equal(fresh.activeFork, "original");
   const back = await botkins(["chats", "switch-fork", id, "original", "--json"]);
   assert.equal(back.exit, 0, back.err);
   assert.equal(back.json().activeFork, "original");

@@ -47,6 +47,7 @@ void WifiNetwork::join(const std::string& ssid, const std::string& password) {
     password_ = password;
     failures_ = 0;
     address_.clear();
+    connected_.clear();
   }
   state_ = ssid.empty() ? kOff : kJoining;
   // Leaving the network in use (the core moving on to the next saved one, or a setup over USB):
@@ -105,12 +106,22 @@ void WifiNetwork::on_event(void* arg, const char* base, int32_t id, void* data) 
     ESP_LOGW(TAG, "not on the network (reason %d, try %d)", event ? event->reason : -1, failures);
     self->state_ = failures >= kFailedAfter ? kFailed : kJoining;
     self->retry_later();
+  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+    const auto* event = static_cast<wifi_event_sta_connected_t*>(data);
+    std::lock_guard<std::mutex> lock(self->mutex_);
+    self->connected_.assign((const char*)event->ssid, event->ssid_len < sizeof(event->ssid) ? event->ssid_len : sizeof(event->ssid));
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     const auto* event = static_cast<ip_event_got_ip_t*>(data);
     char text[16];
     esp_ip4addr_ntoa(&event->ip_info.ip, text, sizeof text);
     {
       std::lock_guard<std::mutex> lock(self->mutex_);
+      // An address that comes after join() switched, from the network being left, is not the new one's
+      // (a network a person is trying must not count as working on the old one's address).
+      if (self->connected_ != self->ssid_) {
+        ESP_LOGI(TAG, "an address from the network being left: not counted");
+        return;
+      }
       self->address_ = text;
       self->failures_ = 0;
     }
@@ -135,6 +146,11 @@ int WifiNetwork::signal() {
   wifi_ap_record_t ap = {};
   if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return 0;
   return ap.rssi < 0 ? ap.rssi : 0;
+}
+
+std::string WifiNetwork::joined_ssid() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return state_ == kOn ? connected_ : std::string();
 }
 
 std::string WifiNetwork::address() {

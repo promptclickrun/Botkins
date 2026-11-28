@@ -55,6 +55,7 @@ import {
   checkSpaceDelete,
   checkSpacePut,
   joinPage,
+  mcpAuthRedirect,
   plain,
   prefixed,
   readCappedText,
@@ -383,14 +384,14 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     }
 
     openHosts() {
-      return this.hosts.filter((side) => side.ws.readyState === side.ws.OPEN);
+      return this.hosts.filter((side) => side.ws.readyState === side.ws.OPEN && !side.closing);
     }
     openPhones() {
-      return [...this.phones.values()].filter((side) => side.ws.readyState === side.ws.OPEN);
+      return [...this.phones.values()].filter((side) => side.ws.readyState === side.ws.OPEN && !side.closing);
     }
     openPhone(conn) {
       const side = this.phones.get(conn);
-      return side && side.ws.readyState === side.ws.OPEN ? side : null;
+      return side && side.ws.readyState === side.ws.OPEN && !side.closing ? side : null;
     }
     activeHost() {
       const open = this.openHosts();
@@ -672,8 +673,9 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
 
     /** Closes a socket from this side, to make room for another. The reason is one of our own fixed words. */
     end(side, code, reason) {
+      if (side.closing) return;
       log("drop", { kind: side.kind, code, reason });
-      if (side.kind === "host") side.closing = true;
+      side.closing = true;
       try {
         side.ws.close(code, reason);
       } catch {
@@ -686,7 +688,8 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     settle() {
       const times = [
         this.recovery?.until ?? Infinity,
-        ...(this.openPhones().length ? this.openHosts() : []).map((side) => (side.version === "v3" ? this.activity(side).deadline : Infinity)),
+        this.pending.nextExpiry(),
+        ...(this.pending.length ? this.openHosts() : []).map((side) => (side.version === "v3" ? this.activity(side).deadline : Infinity)),
       ];
       const due = Math.min(...times);
       if (due !== this.due) {
@@ -812,6 +815,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     if (url.pathname === "/") return plain("Botkins relay. Messages pass through sealed.");
     if (url.pathname === "/v1/health") return Response.json({ ok: true });
     if (url.pathname === "/join") return joinPage();
+    if (url.pathname === "/mcp-auth") return mcpAuthRedirect(url);
     if (url.pathname === "/pair") return pairPage(qrSource);
     if (url.pathname === "/s/frame") return spaceFrame(spaceFrameScript);
     if (url.pathname.startsWith("/s/botkin/")) return picture(url.pathname.slice("/s/botkin/".length));

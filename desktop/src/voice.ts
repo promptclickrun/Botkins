@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import type { DeskLiveSession, DeskVoiceSettings, LiveVoiceEvent } from "./types";
 import { liveInputMode, MicGate, RELEASE_TAIL_MS, type InputMode } from "./liveInput";
-import { formatGeminiCloseError, GeminiLiveSession, openAiManualTurn } from "./liveProtocol";
+import { formatGeminiCloseError, GeminiLiveSession, openAiManualTurn, usesOpenAiRealtimeClientEvents } from "./liveProtocol";
 import { botDeviceVoices } from "./botVoice";
 
 const api = window.botkins;
@@ -294,7 +294,7 @@ function levelOf(analyser: AnalyserNode | null) {
 // ── Live voice ──────────────────────────────────────────────────────────────────────────────────
 
 /** Providers that speak the OpenAI realtime protocol: OpenAI itself and an Azure resource (the computer holds the key for both). */
-const speaksOpenAi = (provider: string) => provider === "openai" || provider === "azure";
+const speaksOpenAi = usesOpenAiRealtimeClientEvents;
 
 export type LiveState = {
   chatId: string;
@@ -532,7 +532,7 @@ class LiveCall {
     const channel = (this.channel = pc.createDataChannel("oai-events"));
     channel.onmessage = (e) => this.openaiEvent(e.data, (event) => channel.readyState === "open" && channel.send(JSON.stringify(event)));
     channel.onopen = () => {
-      if (this.inputMode === "push") channel.send(JSON.stringify({ type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: null } } } }));
+      if (this.inputMode === "push" && speaksOpenAi(this.state.provider)) channel.send(JSON.stringify({ type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: null } } } }));
     };
     pc.ontrack = (e) => {
       const audio = (this.remote = new Audio());
@@ -586,6 +586,7 @@ class LiveCall {
     const codex = this.state.provider === "codex";
     switch (event.type) {
       case "session.created":
+      case "session.started":
       case "session.updated":
         this.update({ status: "live" });
         return;
@@ -639,9 +640,14 @@ class LiveCall {
         });
         return;
       }
-      case "error":
-        if (event.error?.message) this.update({ error: String(event.error.message).slice(0, 300) });
+      case "error": {
+        const message = event.error?.message ? String(event.error.message).slice(0, 300) : "";
+        // Codex app-server closes its realtime sidechannel on any stream error; end the call so
+        // the voice cannot stay live without tools.
+        if (codex) this.fail(new Error(message || "Codex ended the live voice."));
+        else if (message) this.update({ error: message });
         return;
+      }
     }
   }
 
@@ -878,16 +884,16 @@ class LiveCall {
     const wait = this.gate.wait();
     if (wait !== null && !this.ended) this.micTimer = window.setTimeout(() => this.applyMic(), wait + 5);
   }
+  private sendOpenAiControl(message: Record<string, unknown>) {
+    if (!speaksOpenAi(this.state.provider)) return;
+    if (this.channel?.readyState === "open") this.channel.send(JSON.stringify(message));
+    else if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
+  }
   interrupt() {
     if (this.ended) return;
-    if (this.state.provider === "codex" || speaksOpenAi(this.state.provider)) {
-      if (this.channel?.readyState === "open") {
-        this.channel.send(JSON.stringify({ type: "response.cancel" }));
-        this.channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
-      } else if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "response.cancel" }));
-        this.ws.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
-      }
+    if (speaksOpenAi(this.state.provider)) {
+      this.sendOpenAiControl({ type: "response.cancel" });
+      this.sendOpenAiControl({ type: "output_audio_buffer.clear" });
     } else if (this.state.provider === "gemini") this.player?.flush();
     else if (this.state.provider === "elevenlabs") this.player?.flush();
     this.gate.cut();
@@ -912,9 +918,7 @@ class LiveCall {
     }
     if (!continuing) this.interrupt();
     this.gate.press();
-    const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
-    const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
-    if (!continuing && open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    if (!continuing) this.sendOpenAiControl({ type: "input_audio_buffer.clear" });
     this.applyMic();
   }
   releaseInput() {
@@ -927,11 +931,7 @@ class LiveCall {
       this.releaseTimer = null;
       if (this.ended) return;
       if (this.state.provider === "gemini") this.geminiSession?.release(this.ws);
-      const socket = speaksOpenAi(this.state.provider) ? this.ws : this.channel;
-      const open = speaksOpenAi(this.state.provider) ? socket?.readyState === WebSocket.OPEN : socket?.readyState === "open";
-      if (open && socket && (speaksOpenAi(this.state.provider) || this.state.provider === "codex")) {
-        for (const message of openAiManualTurn(this.turnMs)) socket.send(JSON.stringify(message));
-      }
+      for (const message of openAiManualTurn(this.turnMs)) this.sendOpenAiControl(message);
       this.applyMic();
     }, RELEASE_TAIL_MS + 10);
   }

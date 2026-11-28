@@ -1,9 +1,12 @@
 // Bot and chat management: primary bot, pins, hiding, sections, duplication and deletion.
 // How a bot looks is in desktop/looks.mjs.
 import { randomUUID } from "node:crypto";
-import { conversations, makeMainChat } from "./link/main-chat.mjs";
+import { cpSync, existsSync, lstatSync } from "node:fs";
+import { conversations, makeMainChat, retireMainChat } from "./link/main-chat.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { textField } from "./panels.mjs";
 import { nextLook } from "./looks.mjs";
+import { holderSessions } from "./providers/sessions.mjs";
 import { GROUP_MIN, isGroup, memberSessionId } from "./groups.mjs";
 import { helperSessionId } from "./teamwork.mjs";
 
@@ -186,10 +189,12 @@ export class Agents {
     // A copy belongs to whoever copied it: the mark of who made the first one is not carried over.
     delete copy.createdBy;
     if (person !== "owner") copy.createdBy = person;
-    this.state.chats.push(makeMainChat(copy.id, person));
-    this.state.bots.splice(this.state.bots.indexOf(source) + 1, 0, copy);
-    this.ws.save();
-    return copy.id;
+    // The copy gets its own copy of the source's marketplace skills.
+    const from = source.catalogSkills?.length ? this.ws.integrations.botCatalogDirectory(source) : null;
+    if (!from || !existsSync(from)) delete copy.catalogSkills;
+    const copyId = this.ws.installBot(copy, this.ws.bundleForBot(source, person), this.state.bots.indexOf(source) + 1);
+    if (copy.catalogSkills) cpSync(from, this.ws.integrations.botCatalogDirectory(copy), { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
+    return copyId;
   }
   async deleteBot(id) {
     const bot = this.ws.bot(id);
@@ -201,9 +206,10 @@ export class Agents {
     const ended = groups.filter((g) => g.botIds.length - 1 < GROUP_MIN);
     chats.push(...ended);
     const memberSessions = [];
+    const def = this.ws.providers.default.id;
     for (const group of groups) {
       if (ended.includes(group)) continue;
-      if (group.members?.[id]?.established) memberSessions.push(memberSessionId(group, id));
+      if (group.members?.[id]) memberSessions.push(...holderSessions(group.members[id], memberSessionId(group, id), def));
       group.botIds = group.botIds.filter((b) => b !== id);
       delete group.members?.[id];
       if (group.botId === id) group.botId = group.botIds[0];
@@ -211,7 +217,7 @@ export class Agents {
     // Sessions this bot kept as a helping teammate in other bots' chats (desktop/teamwork.mjs).
     for (const chat of this.state.chats.flatMap(conversations)) {
       if (!chat.helpers?.[id]) continue;
-      if (chat.helpers[id].established && !chats.includes(chat)) memberSessions.push(helperSessionId(chat, id));
+      if (!chats.includes(chat)) memberSessions.push(...holderSessions(chat.helpers[id], helperSessionId(chat, id), def));
       delete chat.helpers[id];
     }
     const chatIds = new Set(chats.map((c) => c.id));
@@ -239,6 +245,8 @@ export class Agents {
     this.state.bots[0].hidden = false;
     this.ws.clearCatalogs();
     this.ws.save();
+    if (bot.bundle?.skills) this.ws.integrations.removeBotSkills(bot);
+    if (bot.catalogSkills) this.ws.integrations.removeBotCatalogSkills(bot);
     await this.deleteSessions(chats, memberSessions);
   }
   addSection(name) {
@@ -249,6 +257,13 @@ export class Agents {
   }
   renameSection(id, name) {
     this.section(id).name = textField(name, 40, "section name");
+    this.ws.save();
+  }
+  /** Puts the sections in the order of `ids`. Sections it doesn't name keep their order after the named ones. */
+  orderSections(ids) {
+    if (!Array.isArray(ids)) throw new Error("Give the section ids in their new order.");
+    const named = [...new Set(ids)].map((id) => this.section(id));
+    this.state.sections = [...named, ...this.state.sections.filter((section) => !named.includes(section))];
     this.ws.save();
   }
   deleteSection(id) {
@@ -265,7 +280,12 @@ export class Agents {
       if (typeof value !== "boolean") throw new Error("Invalid chat flag");
       next[key] = value;
     }
-    if (chat.main && next.archived) throw new Error("Main chat stays in your chats.");
+    // Archiving a Main chat retires it: it stays as an ordinary chat, and the next visit to the bot makes a new Main chat.
+    if (chat.main && next.archived) {
+      this.assertIdle([chat], "chat");
+      retireMainChat(chat);
+    }
+    if (isRoutineChat(chat) && next.unread) next.unread = false;
     Object.assign(chat, next);
     this.ws.save();
   }
@@ -297,9 +317,13 @@ export class Agents {
   }
   async deleteChat(id) {
     const chat = this.ws.chat(id);
-    if (chat.main) throw new Error("Main chat stays with its bot. Use Reset context to start fresh.");
+    // Deleting a Main chat is allowed: the next visit to the bot makes a new one (workspace.mainChat).
     this.assertIdle([chat], "chat");
+    // Not while a job's setup, bring-in or removal is under way (desktop/jobs.mjs).
+    if (chat.job) this.ws.jobs?.idle(chat);
     this.state.chats = this.state.chats.filter((c) => c !== chat);
+    // A job's worktree goes with it; its branch stays (desktop/jobs.mjs).
+    this.ws.jobs?.forget(chat);
     // A question left waiting in the chat goes with it.
     this.ws.interactions.cancel(id, { detached: true });
     this.ws.mcpApps?.removeChats([id]);
@@ -318,19 +342,14 @@ export class Agents {
     const browser = this.ws.secureInputs?.formBrowser;
     if (browser) await Promise.all(chats.map(chat => browser.close(chat.id)));
     // A group chat has one session per member (desktop/groups.mjs); any chat may hold teammates' sessions.
+    const def = this.ws.providers.default.id;
     const sessions = chats.flatMap(conversations).flatMap((c) => [
       ...(isGroup(c)
-        ? Object.entries(c.members ?? {})
-            .filter(([, m]) => m.established)
-            .map(([botId, m]) => [memberSessionId(c, botId), m.sessionProvider])
-        : c.established
-          ? [[c.sessionId ?? c.id, c.sessionProvider]]
-          : []),
-      ...Object.entries(c.helpers ?? {})
-        .filter(([, h]) => h.established)
-        .map(([botId, h]) => [helperSessionId(c, botId), h.sessionProvider]),
+        ? Object.entries(c.members ?? {}).flatMap(([botId, m]) => holderSessions(m, memberSessionId(c, botId), def))
+        : holderSessions(c, c.sessionId ?? c.id, def)),
+      ...Object.entries(c.helpers ?? {}).flatMap(([botId, h]) => holderSessions(h, helperSessionId(c, botId), def)),
     ]);
-    sessions.push(...extra.map((id) => [id, undefined]));
+    sessions.push(...extra.map((item) => (Array.isArray(item) ? item : [item, undefined])));
     if (!sessions.length) return;
     const results = await Promise.allSettled(sessions.map(([id, provider]) => this.ws.providers.get(provider).deleteSession(id)));
     const failed = results.find((r) => r.status === "rejected" && !/not found/i.test(String(r.reason?.message)));

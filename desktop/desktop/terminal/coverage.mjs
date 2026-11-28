@@ -40,6 +40,7 @@ export const WORKSPACE = {
   updateBot: cmd("bots edit"),
   deleteBot: cmd("bots remove"),
   duplicateBot: cmd("bots duplicate"),
+  reloadBotTools: cmd("bots reload-tools"),
   reorderBots: cmd("bots order"),
   makePrimary: cmd("bots primary"),
   setBotFlags: cmd("bots flags"),
@@ -49,6 +50,7 @@ export const WORKSPACE = {
   ...each("addSection", cmd("bots sections add")),
   renameSection: cmd("bots sections rename"),
   deleteSection: cmd("bots sections remove"),
+  orderSections: cmd("bots sections move"),
   ...each("importableAgents importAgents", cmd("bots import")),
   saveTemplate: cmd("templates save"),
   renameTemplate: cmd("templates rename"),
@@ -90,6 +92,7 @@ export const WORKSPACE = {
   regenerateChatTitle: cmd("chats regenerate-title"),
   deleteChat: cmd("chats delete"),
   reactToMessage: cmd("chats react"),
+  "chat.cardAction": cmd("chats card"),
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
   setChatFlags: cmd("chats flags"),
@@ -116,6 +119,39 @@ export const WORKSPACE = {
   duplicateRoutine: cmd("routines duplicate"),
   previewCadence: cmd("routines when"),
   changeSchedule: cmd("routines schedule"),
+  // ── Workflows ──
+  workflowsList: cmd("workflows list"),
+  workflowCreate: cmd("workflows add"),
+  workflowUpdate: cmd("workflows edit"),
+  workflowDelete: cmd("workflows remove"),
+  workflowPause: cmd("workflows pause"),
+  workflowResume: cmd("workflows resume"),
+  workflowRun: cmd("workflows run"),
+  workflowRetryRun: cmd("workflows retry"),
+  workflowRespondApproval: cmd("workflows approve"),
+  workflowCancelRun: cmd("workflows cancel"),
+  workflowExportText: cmd("workflows export"),
+  workflowImportText: cmd("workflows import"),
+  workflowExport: no("window"), // native save file dialog; `workflows export <id>` prints JSON
+  workflowImport: no("window"), // native open file dialog; `workflows import <file>` reads a path
+  workflowRotateWebhookSecret: no("person"), // returns a newly generated webhook secret; stays in the window or owner phone
+  workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
+  workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
+  workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
+  // ── Channel Hooks ──
+  channelsList: cmd("channels list"),
+  channelAdd: cmd("channels add"),
+  channelUpdate: cmd("channels add"),
+  channelRemove: cmd("channels remove"),
+  channelBind: cmd("channels bind"),
+  channelSetPolicy: cmd("channels policy"),
+  channelPause: cmd("channels pause"),
+  channelResume: cmd("channels resume"),
+  channelPairList: cmd("channels pair list"),
+  channelPairApprove: cmd("channels pair approve"),
+  channelPairDeny: cmd("channels pair deny"),
+  channelTest: cmd("channels test"),
+  channelLogs: cmd("channels logs"),
   // ── Plugins ──
   "skills.upload": cmd("skills upload"),
   // A script command (desktop/script-commands.mjs): `skills add-script` shows the whole script and needs a yes; `skills show` prints it.
@@ -126,6 +162,15 @@ export const WORKSPACE = {
   "skillsCatalog.install": cmd("skills install"),
   // The featured shelf: upstream skills pinned to a commit, installed with `skills preview` and `skills install`.
   "skillsCatalog.featured": cmd("skills featured"),
+  // ── Marketplace format version 2 (desktop/catalog-v2.mjs): catalog skills, packs and version 3 templates ──
+  "market.catalog": cmd("marketplace list"),
+  "market.skillImage": no("window's own"),
+  "market.skillPreview": cmd("marketplace show"),
+  "market.skillInstall": cmd("marketplace install"),
+  "market.packPreview": cmd("marketplace show"),
+  "market.packInstall": cmd("marketplace install"),
+  "market.templatePreview": cmd("marketplace show"),
+  "market.templateInstall": cmd("marketplace install"),
   // ── The direct apps catalog (desktop/mcp-catalog.mjs) ──
   "mcpCatalog.list": cmd("tools catalog"),
   // A key comes from a hidden question or --secrets; a program's line is shown and needs a yes.
@@ -200,6 +245,14 @@ export const WORKSPACE = {
   projectDiff: cmd("projects diff"),
   projectCommit: cmd("projects commit"),
   startProjectChat: cmd("projects chat"),
+  projectJobSetup: cmd("jobs setup"),
+  approveJobSetup: cmd("jobs allow-setup"),
+  startProjectJob: cmd("jobs start"),
+  projectJobStatus: cmd("jobs status"),
+  bringInJob: cmd("jobs bring-in"),
+  catchUpJob: cmd("jobs catch-up"),
+  removeJobWorktree: cmd("jobs remove"),
+  startJobTurn: cmd("jobs start-anyway"),
   addTodo: cmd("todos add"),
   updateTodo: cmd("todos edit"),
   moveTodo: cmd("todos move"),
@@ -227,6 +280,8 @@ export const WORKSPACE = {
   "artifacts.list": cmd("artifacts list"),
   "artifacts.read": cmd("artifacts read"),
   "artifacts.resolve": cmd("artifacts resolve"),
+  // Claude artifacts (Settings › General › Claude artifacts): standing bot approvals and status are managed by the owner in the app/phone UI.
+  ...each("claudeArtifacts.status claudeArtifacts.setModel claudeArtifacts.setBotApproval claudeArtifacts.revokeBotApproval", no("person")),
   // ── Preferences, credentials, usage, voice ──
   setPreferences: cmd("preferences set"),
   // No command shows a value: a list has names, kinds and where each is read from. A new value comes from a hidden question or standard input.
@@ -241,7 +296,10 @@ export const WORKSPACE = {
   // service's memory, so every later caller of the socket could list the person's logins. And a
   // field that is linked under a name that the caller chose is a secret that the person's own
   // picker then hands over. (`passwordManagers` and `lockPasswordManager` have commands.)
-  ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField", no("person")),
+  ...each("unlockPasswordManager passwordManagerVaults passwordManagerItems passwordManagerItem linkPasswordManagerField copyPasswordManagerField setCredentialGrant", no("person")),
+  credentialGrants: cmd("credentials grants"),
+  revokeCredentialGrant: cmd("credentials revoke"),
+  credentialAudit: cmd("credentials audit"),
   passwordManagers: cmd("password-managers list"),
   ...each("protonPassInstallPlan protonPassInstall", cmd("password-managers install")),
   ...each("protonPassSignInStart protonPassSignInRead protonPassSignInInput protonPassSignInCancel", cmd("password-managers sign-in")),
@@ -322,16 +380,28 @@ export const WORKSPACE = {
   nodeSetup: cmd("node setup"),
   nodeRename: cmd("node rename"),
   nodePause: cmd("node pause"),
+  nodeSetWholeComputer: cmd("node whole-computer"),
+  nodeSetExecMode: cmd("node policy"),
+  nodeAddAllowlistRule: cmd("node allowlist"),
+  nodeRemoveAllowlistRule: cmd("node allowlist"),
+  nodeAuditLog: cmd("node audit"),
   nodeShareProject: cmd("node share"),
   nodeRevokeGrant: cmd("node revoke"),
   nodeDisconnect: cmd("node disconnect"),
+  nodeConvertInspect: cmd("node convert"),
+  nodeConvertPlan: cmd("node convert"),
+  nodeConvertRun: cmd("node convert"),
+  nodeConvertStatus: cmd("node convert"),
+  nodeConvertUndo: cmd("node convert"),
+  nodeRemoteStatus: cmd("node remote"),
+  nodeRemoteControl: cmd("node remote"),
   // ── What needs a window ──
   ...each("chooseFiles chooseProjectFolder pickPluginFolder pickSkillUpload addSkillFolder", no("window")), // a file or folder dialog (a path is given to the command instead)
   ...each("revealProject revealSkill revealWiki revealWikiExport openChatPath openLink openAppRelease", no("window")), // opens a folder, a file or a link on the computer's screen
   ...each("copyText copyReply", no("window")), // the clipboard
   ...each("exportTemplate importTemplate exportUsage exportWiki", no("window")), // a save or open dialog; the text forms have commands
   ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool liveVoiceTranscript recordVoiceLine transcribe speak", no("window")), // the window's microphone and speaker
-  ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen", no("window")), // a notification or a permission the system asks for on the screen
+  ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen computerUseStatus requestComputerUsePermission", no("window")), // a notification or a permission the system asks for on the screen
   // ── What only the window uses to draw itself ──
   ...each("sidePane frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
 };
@@ -382,7 +452,7 @@ export const LINK = {
   // Admin mode is each owner device's own way of looking: the command line shows everything, as an owner with it on.
   "link.team.setAdminMode": no("phone's own"),
   // A phone's way to the computer's saved credentials and password managers. The owner at the terminal has the commands of the app's own calls for what a command covers; the rest needs a person at the app.
-  ...each("link.credentials.check link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.save link.credentials.unlock link.credentials.vaults", no("phone's own")),
+  ...each("link.credentials.audit link.credentials.check link.credentials.copy link.credentials.grants link.credentials.item link.credentials.items link.credentials.link link.credentials.lock link.credentials.managers link.credentials.remove link.credentials.revokeGrant link.credentials.save link.credentials.setGrant link.credentials.unlock link.credentials.vaults", no("phone's own")),
   ...each("link.credentials.protonPassInstallPlan link.credentials.protonPassInstall", cmd("password-managers install")),
   ...each("link.credentials.protonPassSignInStart link.credentials.protonPassSignInRead link.credentials.protonPassSignInInput link.credentials.protonPassSignInCancel", cmd("password-managers sign-in")),
   "link.credentials.protonPassDisconnect": cmd("password-managers disconnect"),
@@ -437,6 +507,9 @@ export const CHANGES = {
   "plugins.removeMarketplace": 0,
   "skills.upload": (_, result) => result?.added?.join(", "),
   "skillsCatalog.install": (_, result) => result?.added?.[0],
+  "market.skillInstall": (_, result) => result?.added?.[0],
+  "market.packInstall": (_, result) => result?.added?.join(", "),
+  "market.templateInstall": (_, result) => result?.botId,
   // By the catalog entry's id, never a key.
   "mcpCatalog.add": 0,
   "piPackages.install": 0,
@@ -477,6 +550,7 @@ export const CHANGES = {
   // ── More of a bot, and templates (control-bots.mjs) ──
   // (By the name of the bot, the section or the template, as the answer has it. The text of a memory, an agent's instructions and a template's words are never in a line.)
   "bots.duplicate": (args, value) => value?.name ?? args?.[0],
+  "bots.reloadTools": (args, value) => value?.name ?? args?.[0],
   "bots.order": null,
   "bots.primary": (args, value) => value?.name ?? args?.[0],
   "bots.flags.set": (args, value) => value?.name ?? args?.[0],
@@ -487,6 +561,7 @@ export const CHANGES = {
   "bots.memory.set": (args, value) => value?.name ?? args?.[0],
   "bots.sections.add": (args, value) => value?.name ?? args?.[0],
   "bots.sections.rename": (args, value) => value?.name ?? args?.[0],
+  "bots.sections.move": (args) => args?.[0],
   "bots.sections.remove": (args, value) => value?.name ?? args?.[0],
   "bots.import": (args, value) => some(value?.added?.map((bot) => bot.name)),
   "templates.save": (args, value) => value?.name ?? args?.[0],
@@ -502,6 +577,7 @@ export const CHANGES = {
   "chats.regenerateTitle": (args, value) => value?.id,
   "chats.delete": (args, value) => value?.id,
   "chats.react": (_args, value) => value?.id,
+  "chats.card": (_args, value) => value?.id,
   "chats.reset": (args, value) => value?.id,
   "chats.switchFork": (args, value) => value?.id,
   "chats.fork": (args, value) => value?.from,
@@ -529,6 +605,16 @@ export const CHANGES = {
   "routines.duplicate": (args, value) => (value?.fastMinutes ? withRate(value.name, value.fastMinutes) : (value?.name ?? args?.[0])),
   // A chat's own schedule (a prompt it set with /every or /after): the chat's title, and what was done (pause, resume or delete).
   "routines.schedule": (args, value) => (["pause", "resume", "delete"].includes(value?.action) ? levelOf(value.chat ?? args?.[0], value.action) : (value?.chat ?? args?.[0])),
+  "workflows.add": (args, value) => value?.name ?? args?.[0]?.name,
+  "workflows.edit": (args, value) => value?.name ?? args?.[0],
+  "workflows.remove": (args, value) => value?.name ?? args?.[0],
+  "workflows.pause": (args, value) => value?.name ?? args?.[0],
+  "workflows.resume": (args, value) => value?.name ?? args?.[0],
+  "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
+  "workflows.retry": (args, value) => value?.id ?? args?.[0],
+  "workflows.approve": (args, value) => value?.id ?? args?.[0],
+  "workflows.cancel": (args, value) => value?.id ?? args?.[0],
+  "workflows.import": (args, value) => value?.workflow?.name ?? "imported",
   // ── Projects, to-dos, tasks and artifacts (control-projects.mjs) ──
   // The project's name (the answer has it, whether the caller gave its name or its id). Never a folder, a message, a to-do's words or a diff.
   "projects.add": (args, value) => value?.name ?? args?.[0]?.name,
@@ -547,6 +633,13 @@ export const CHANGES = {
     if ((value ? value.mode : args?.[1]?.mode) !== "yolo") return name;
     return thingForLog(name) && name.length <= 73 ? name + " (yolo)" : "(yolo)";
   },
+  // A job is in the log by its project (setup, start) or by its chat's id: never its prompt, its setup's commands or a branch.
+  "jobs.allowSetup": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.start": (args, value) => value?.project?.name ?? args?.[0],
+  "jobs.bringIn": (_args, value) => value?.job?.id,
+  "jobs.catchUp": (_args, value) => value?.job?.id,
+  "jobs.remove": (_args, value) => value?.job?.id,
+  "jobs.startAnyway": (_args, value) => value?.job?.id,
   // A to-do is a person's own text: its line names the project.
   "todos.add": (args, value) => value?.project?.name ?? args?.[0],
   "todos.edit": (args, value) => value?.project?.name ?? args?.[0],
@@ -580,6 +673,7 @@ export const CHANGES = {
   "credentials.save": (args, value) => value?.name ?? args?.[0]?.name,
   "credentials.edit": (args, value) => value?.name ?? args?.[0],
   "credentials.remove": (args, value) => value?.name ?? args?.[0],
+  "credentials.revokeGrant": (args, value) => value?.revoked ?? args?.[0],
   "credentials.vaultRemove": (args, value) => value?.name ?? args?.[0],
   // The line says that the vault was reset, and only when it was: a refused reset is a "Tried" line that does not say so.
   "credentials.vaultReset": (args, value) => (value?.reset === true ? "the vault was reset" : null),
@@ -669,29 +763,48 @@ export const CHANGES = {
   // The owner's own picture: set or cleared, never the picture.
   "profile.picture": (args) => (args?.[0] ? "set" : "cleared"),
   // ── Node host (control-node.mjs) ──
-  // Logs the node name, project name, grant id, or pause state — never local folder paths.
+  // Logs the node name, policy mode, project name, grant id, or pause state — never local folder paths, command args, or vault secrets.
   "node.setup": (args, value) => value?.name ?? args?.[0],
   "node.rename": (args, value) => value?.name ?? args?.[0],
   "node.pause": (args, value) => (value?.paused === true || args?.[0] === true ? "paused" : "online"),
+  "node.wholeComputer": (args, value) => (value?.wholeComputer === true || args?.[0] === true ? "on" : "off"),
+  "node.execMode": (args, value) =>
+    value?.execPolicy?.mode ??
+    (["deny", "allowlist", "ask", "full"].includes(String(args?.[0] ?? "").toLowerCase()) ? String(args[0]).toLowerCase() : null),
+  "node.allowlist.add": (args) => (typeof args?.[1] === "string" && args[1].trim() ? args[1].trim() : "*"),
+  "node.allowlist.remove": (args, value) => value?.removed ?? args?.[0] ?? "all",
   "node.share": (args, value) => levelOf(value?.project?.name ?? args?.[0], (value?.project?.shared ?? args?.[1] !== false) ? "shared" : "unshared"),
   "node.revoke": (args, value) => value?.revoked ?? args?.[0] ?? "all",
   "node.disconnect": null,
+  "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
+  "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
+  "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
   // ── Connected computers & unified multi-host view (control-hosts.mjs) ──
   "hosts.unified": (args) => (args?.[0] === true ? "on" : "off"),
   "hosts.include": (args) => levelOf(args?.[0], args?.[1] === true ? "included" : "excluded"),
   "hosts.focus": (args) => args?.[0] || "local",
+  // Channel Hooks: log connection label/id only, never tokens or message bodies.
+  "channels.add": (args, value) => value?.label ?? args?.[0]?.label ?? args?.[0]?.kind,
+  "channels.update": (args, value) => value?.label ?? args?.[0],
+  "channels.remove": (args, value) => value?.id ?? args?.[0],
+  "channels.bind": (args, value) => value?.label ?? args?.[0],
+  "channels.policy": (args, value) => value?.label ?? args?.[0],
+  "channels.pause": (args, value) => value?.label ?? args?.[0],
+  "channels.resume": (args, value) => value?.label ?? args?.[0],
+  "channels.pair.approve": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
+  "channels.pair.deny": (args, value) => value?.connectionId ?? args?.[1] ?? "pair",
 };
 /** The service's own calls that only read, wait or talk in a chat: no line. Every call is in this list, in CHANGES or in LOGS_ITSELF. */
-export const READS = ["skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
+export const READS = ["interactions.list", "skills.review", "chat.scriptCommand", "skillsCatalog.search", "skillsCatalog.preview", "skillsCatalog.featured", "market.catalog", "market.skillImage", "market.skillPreview", "market.packPreview", "market.templatePreview", "mcpCatalog.list", "piPackages.browse", "piPackages.preview", "piPackages.list", "status", "logs.read", "doctor", "events.wait", "pair.status", "devices.list", "bots.list", "bots.get", "providers.list", "providers.services", "providers.login.read", "providers.login.input", "providers.login.cancel", "models", "chat.open", "chat.list", "chat.send", "chat.read", "chat.stop", "runs.list", "routines.list", "plugins.list", "plugins.marketplaces", "plugins.refresh", "plugins.browse", "plugins.preview", "config.get", "config.describe", "relay.status", "update.status", "update.check", "methods", "plugins.get", "tools.list", "tools.get", "tools.import.preview", "tools.signIn.read", "tools.signIn.input", "tools.signIn.cancel", "skills.list", "skills.get", "bots.tools", "bots.access", "bots.menu", "folders.list", "gadgets.get", "profile.status", "profile.home"];
 // The reads of the rest of the workspace, one line for each area (each area's builder writes only its own line).
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
-  chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.review", "routines.when", "routines.schedules"],
-  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
+  chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
+  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],
-  credentials: ["credentials.list", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
+  credentials: ["credentials.list", "credentials.grants", "credentials.audit", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],
   voice: ["voice.get", "voice.options"], // (`voice.options` can make the service ask a provider for its lists, with the saved key, at the address that the app saved: the call cannot choose it.)
   // (Spaces and panels)
   spaces: ["space.list", "space.get", "panel.list", "panel.get", "panel.routine.review", "card.list", "card.get"],
@@ -702,9 +815,11 @@ export const MORE_READS = {
   // (Marketplace › Apps: the person's Composio apps, control-apps.mjs)
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
-  node: ["node.status"],
+  node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
   // (Connected computers & unified view, control-hosts.mjs)
   hosts: ["hosts.status"],
+  // (Channel Hooks, control-channels.mjs)
+  channels: ["channels.list", "channels.pair.list", "channels.test", "channels.logs"],
 };
 READS.push(...Object.values(MORE_READS).flat());
 

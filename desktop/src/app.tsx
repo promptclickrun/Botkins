@@ -24,13 +24,14 @@ import Composer from "./Composer";
 import Today from "./Today";
 import BoardPanel from "./Board";
 import Settings from "./Settings";
+import MarketPage from "./MarketPage";
 import ModelPicker, { chatDefault, isRoutineChat, modelLabel } from "./ModelPicker";
 import ProviderIcon from "./ProviderIcon";
 import { isConnected, useModelCatalog, useProviders } from "./providers";
 import { AvatarAnimations } from "./Avatar";
 import ChatView, { type SideAnswer } from "./ChatView";
 import { WindowState, type HotMessage } from "./hotState";
-import { ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
+import { ChatListColumn, ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
 import { ActivityPage } from "./Work";
 import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
 import RoutinesPage from "./Routines";
@@ -63,15 +64,18 @@ import { chatsPageUnreadChats } from "./chatSections";
 import "glisse/styles.css";
 import "./style.css";
 import "./glisse.css";
+import "./ui.css";
+import "./sidebar.css";
 
 // The remembered colors go on before anything is drawn.
 startAppearance();
 const api = window.botkins;
 /** Where the first-run choice is kept for the window's session (src/SetupChoice.tsx). */
 const SETUP_KEY = "botkins.setupPath";
+const CHAT_LIST_KEY = "botkins.chatList";
 // Work is three pages with tabs between them (Routines, Projects, Tasks); Activity and Usage open from its top.
 // With Spaces ("spaces-v1"), a space's page and All spaces take the Today page's place (src/SpacePage.tsx).
-type Page = "Home" | "Today" | "Chats" | "Wiki" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces";
+type Page = "Home" | "Today" | "Chats" | "Wiki" | "Market" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces";
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
@@ -168,6 +172,24 @@ function App() {
   function createBot(template: MarketAgentTemplate) {
     setBotStart(template);
     setModal("bot");
+  }
+  // The chat list beside an open chat (the panel-left button in the chat's header), kept for next time.
+  const [chatListShown, setChatListShown] = useState(() => {
+    try {
+      return localStorage.getItem(CHAT_LIST_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  function toggleChatList() {
+    setChatListShown((shown) => {
+      try {
+        localStorage.setItem(CHAT_LIST_KEY, shown ? "0" : "1");
+      } catch {
+        /* storage unavailable */
+      }
+      return !shown;
+    });
   }
   const [settingsTab, setSettingsTab] = useState("General");
   const [settingsRevision, setSettingsRevision] = useState(0);
@@ -285,8 +307,21 @@ function App() {
       window.removeEventListener("keydown", shortcut);
     };
   }, []);
+  // Esc leaves Settings for the page underneath, as it closed the Settings window before; a sheet
+  // or menu open inside Settings takes its own Esc first.
   useEffect(() => {
-    if (modal) dialog.current?.showModal();
+    if (modal !== "settings") return;
+    const leave = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      setModal("");
+    };
+    window.addEventListener("keydown", leave);
+    return () => window.removeEventListener("keydown", leave);
+  }, [modal]);
+  useEffect(() => {
+    // Settings is a page over the whole window (below), not this dialog.
+    if (modal && modal !== "settings") dialog.current?.showModal();
     else dialog.current?.close();
   }, [modal]);
   const chat = state?.chats.find((c) => c.id === chatId);
@@ -335,7 +370,7 @@ function App() {
   const look = state?.settings.appearance;
   useEffect(() => {
     if (look) applyAppearance(look);
-  }, [look?.theme, look?.colorTheme, look?.darkColorTheme, look?.contrast, look?.textSize, look?.font, look?.bubble]);
+  }, [look?.theme, look?.colorTheme, look?.darkColorTheme, look?.contrast, look?.textSize, look?.font, look?.bubble, look?.backdrop]);
   // The main process is told which chat is on screen, so a phone isn't pinged for a reply here.
   const onScreen = page === "Chats" && chatId && !modal ? chatId : null;
   useEffect(() => {
@@ -504,8 +539,10 @@ function App() {
     open(key);
     return key;
   }
+  // Every bot has a Main chat on a computer that keeps them; the Proactive setting doesn't decide that.
+  const keepsMain = !state?.remote?.using || state.remote.using.capabilities.includes("main-chat-v1");
   async function mainChat(id: string) {
-    if (!state?.proactive?.chatMode) return newChat(id);
+    if (!keepsMain) return newChat(id);
     const key = await api.mainChat(id);
     await openNew(key);
     return key;
@@ -513,7 +550,7 @@ function App() {
   function botChat(b: Bot) {
     leave(() => {
       // Settings › Chat › When you select a bot: "Main chat", when this computer keeps one.
-      if (state?.proactive?.chatMode && (state.settings.botTap ?? "main") === "main" && teamCan(state, "agents", "chat")) {
+      if (keepsMain && (state?.settings.botTap ?? "main") === "main" && state && teamCan(state, "agents", "chat")) {
         markBotRead(b.id);
         void mainChat(b.id).catch(fail);
         return;
@@ -589,7 +626,8 @@ function App() {
         return;
       }
       if (command === "new" || command === "clear") {
-        if (command === "clear" && chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
+        // In a Main chat both clear its context in place; the Main chat stays the same chat.
+        if (chat?.main) await api.changeMainFork(chat.id, "reset", undefined, chat.activeFork);
         else await newChat(bot?.id || state!.bots[0].id);
         clear();
         return;
@@ -842,6 +880,8 @@ function App() {
   const canViewAgents = teamCan(state, "agents");
   const canChat = teamCan(state, "agents", "chat");
   const placeAllowed = (place: string) => {
+    // The Market adds apps, bots and skills: whoever may manage plugins sees it.
+    if (place === "Market") return teamCan(state, "plugins");
     if (!memberHost) return true;
     if (place === "Home" || place === "Chats") return canViewAgents;
     if (place === "Today") return teamCan(state, "today");
@@ -854,7 +894,7 @@ function App() {
     go: workPage,
     activity: () => nav("Activity"),
     usage: () => nav("Usage"),
-    waiting: (state.tasks ?? []).filter((t) => t.status === "review" || t.status === "blocked").length,
+    waiting: (state.tasks ?? []).filter((t) => t.status === "blocked" || (t.status === "review" && !t.reviewerBotId)).length,
   };
   const openWork = () => workPage(work.tabs.includes(workTab) ? workTab : work.tabs[0]);
   // Collapses the side menu to icons: beside Settings when open, at the top of the strip when collapsed.
@@ -873,37 +913,35 @@ function App() {
   return (
     <AvatarAnimations enabled={state.settings.appearance.avatarAnimations !== false}>
     <BackdropLayer backdrop={backdropOf(state.settings.appearance.backdrop)} />
-    <div className={"shell" + (collapsed ? " collapsed" : "")}>
+    <div className={"shell" + (collapsed ? " collapsed" : "")} inert={modal === "settings"}>
       <aside aria-label="Side menu">
+        {/* The logo, then the side menu's own two buttons: collapse it, and New chat (the phone's +). */}
         <div className="brand">
           <img className="brand-name for-light" src="./wordmark.png" alt="Botkins" />
           <img className="brand-name for-dark" src="./wordmark-dark.png" alt="Botkins" />
-          {/* Marketplace, then New chat, at the top of the list, as the + is in the phone app. */}
-          {teamCan(state, "plugins") && (
-            <button type="button" className="newchat market" aria-label="Marketplace" title="Marketplace" onClick={() => settings("marketplace")}>
-              <Store size={17} />
-            </button>
-          )}
-          {canChat && (
-            <button type="button" className="newchat" aria-label="New chat" title="New chat" onClick={() => setModal("chat")}>
-              <SquarePen size={17} />
-            </button>
-          )}
-          {collapsed && toggle}
+          <span className="brand-actions">
+            {toggle}
+            {canChat && (
+              <button type="button" className="newchat" aria-label="New chat" title={"New chat"} onClick={() => setModal("chat")}>
+                <SquarePen size={17} />
+              </button>
+            )}
+          </span>
         </div>
         <nav aria-label="Workspace">
           {placeOrder(state.settings.sidebar?.order).filter((p) => placeAllowed(p) && !(spaces && p === "Today")).map((p) => {
             const working = p === "Work" && Object.keys(state.streams).length > 0;
             const selected = p === "Work" ? WORK_PAGES.includes(page) : p === page;
+            const unreadChats = p === "Chats" ? allUnreadChats(state.chats).length : 0;
             return (
               <button
                 key={p}
                 className={selected ? "selected" : ""}
                 aria-current={selected ? "page" : undefined}
-                aria-description={working ? "Bots are working" : undefined}
+                aria-description={working ? "Bots are working" : unreadChats ? unreadChats + " unread" : undefined}
                 onClick={() => (p === "Work" ? openWork() : p === "Wiki" ? wiki() : nav(p))}
               >
-                <PlaceIcon place={p} size={collapsed ? 24 : 20} />
+                <PlaceIcon place={p} size={collapsed ? 24 : 18} />
                 {/* With icons only, the name shows beside the icon on hover and on keyboard focus. */}
                 <span className="nav-label">
                   {p}
@@ -914,6 +952,11 @@ function App() {
                   )}
                 </span>
                 {working && <i />}
+                {unreadChats > 0 && !collapsed && (
+                  <span className="count-badge" aria-hidden="true">
+                    {unreadChats}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -945,43 +988,35 @@ function App() {
                 )}
               </span>
             </div>
-            <SidebarBots state={state} actions={actions} compact={collapsed} />
+            <SidebarBots state={state} actions={actions} compact={collapsed} selectedBotId={chat ? chat.botId : profileBot?.id} />
           </>
         )}
+        {/* One row at the bottom: the computer in use (its menu switches computers and opens the
+            model providers and Admin mode) and Settings. */}
         <div className="sidebar-foot">
-          <button className="settings-link" aria-label="Settings" title={collapsed ? "Settings (" + MOD + ",)" : undefined} onClick={() => settings("General")}>
+          <HostSwitcher
+            state={state}
+            collapsed={collapsed}
+            connect={() => settings("Computers")}
+            admin={() => settings("Team")}
+            models={{
+              label: "Models · " + modelsState,
+              line: modelsState,
+              on: connectedProviders.length > 0,
+              icons: connectedProviders.length ? (
+                connectedProviders.slice(0, 3).map((p) => <ProviderIcon key={p.id} provider={p.id} name={p.name} size={14} />)
+              ) : (
+                <BrainCircuit size={15} />
+              ),
+              open: () => settings("Account"),
+            }}
+          />
+          <button className="settings-link" aria-label="Settings" title={"Settings (" + MOD + ",)"} onClick={() => settings("General")}>
             <SlidersHorizontal size={17} />
             <span className="nav-label">Settings</span>
             {teamRequests > 0 && <span className="settings-badge" aria-hidden="true">{teamRequests}</span>}
           </button>
-          {/* With no other computer paired there is no computer's name in the menu, so the tag stands here. */}
-          {state.adminMode && !state.remote?.hosts.length && (
-            <button className="admin-tag" aria-label="Admin mode" title={collapsed ? "Admin mode" : undefined} onClick={() => settings("Team")}>
-              {collapsed ? <ShieldCheck size={15} /> : "Admin mode"}
-            </button>
-          )}
-          {!collapsed && toggle}
         </div>
-        <HostSwitcher state={state} collapsed={collapsed} connect={() => settings("Computers")} />
-        <button
-          className={"account models-status" + (connectedProviders.length ? " on" : "")}
-          aria-label={"Models · " + modelsState}
-          title={collapsed ? "Models · " + modelsState : undefined}
-          onClick={() => settings("Account")}
-        >
-          <span className="provider-stack" aria-hidden="true">
-            {connectedProviders.length ? (
-              connectedProviders.slice(0, 3).map((p) => <ProviderIcon key={p.id} provider={p.id} name={p.name} size={15} />)
-            ) : (
-              <BrainCircuit size={18} />
-            )}
-          </span>
-          <span className="nav-label">
-            Models
-            <small>{modelsState}</small>
-          </span>
-          <ChevronRight size={14} />
-        </button>
       </aside>
       <main>
         {!hostDown && <HostBanner state={state} pairAgain={() => settings("Computers")} />}
@@ -1016,7 +1051,11 @@ function App() {
         {hostDown ? (
           <HostUnreachable state={state} pairAgain={() => settings("Computers")} />
         ) : chat && bot ? (
+          <div className={"chat-with-list" + (chatListShown ? " list-shown" : "")}>
+          {chatListShown && <ChatListColumn state={state} actions={actions} selectedChatId={chat.id} />}
           <ChatView
+            listShown={chatListShown}
+            toggleList={toggleChatList}
             updates={updates}
             completions={completionByHost.get(host)!}
             onScreen={onScreen === chat.id}
@@ -1048,6 +1087,7 @@ function App() {
             openRoutines={routines}
             openBot={() => botPage(bot.id)}
           />
+          </div>
         ) : profileBot ? (
           <div className="content">
             <BotProfile
@@ -1090,6 +1130,8 @@ function App() {
         ) : (
           <div className="content">
             {page === "AllSpaces" && <AllSpaces state={state} openSpace={openSpace} fail={fail} />}
+            {/* The Market: apps, bots, skills, plugins and Pi packages to add (Settings › Marketplace has the same). */}
+            {page === "Market" && <MarketPage state={state} bots={state.bots} createBot={createBot} />}
             {page === "Today" && !spaces && (
               <Today
                 state={state}
@@ -1112,6 +1154,9 @@ function App() {
                   "home",
                   "Ask " + state.bots[0].name + "…",
                 ) : null}
+                openWork={openWork}
+                openRoutines={routines}
+                openToday={openToday}
               />
             )}
             {page === "Chats" && (
@@ -1178,9 +1223,9 @@ function App() {
               />
             )}
             {page === "Usage" && (
-              <div className="usage-page">
+              <div className="page work-page usage-page">
                 <WorkBack back={openWork} />
-                <h1>Usage</h1>
+                <h1 className="page-title">Usage</h1>
                 <Usage runCount={state.runs.length} />
               </div>
             )}
@@ -1228,20 +1273,6 @@ function App() {
             )}
           </>
         )}
-        {modal === "settings" && (
-          <Settings
-            key={settingsTab + ":" + settingsRevision}
-            state={state}
-            close={() => setModal("")}
-            bots={state.bots}
-            initialTab={settingsTab}
-            settings={state.settings}
-            initialBot={settingsBot || bot?.id || state.bots[0]?.id || ""}
-            runCount={state.runs.length}
-            initialJoin={teamJoinUrl}
-            createBot={createBot}
-          />
-        )}
         {modal === "chat" && canChat && (
           <NewChat
             state={state}
@@ -1271,6 +1302,24 @@ function App() {
         )}
       </dialog>
     </div>
+    {/* Settings: a page over the whole window, its own list of sections where the side menu was.
+        Back (or Esc) returns to the page underneath, which kept its place. */}
+    {modal === "settings" && (
+      <div className="settings-host" role="dialog" aria-modal="true" aria-label="Settings">
+        <Settings
+          key={settingsTab + ":" + settingsRevision}
+          state={state}
+          close={() => setModal("")}
+          bots={state.bots}
+          initialTab={settingsTab}
+          settings={state.settings}
+          initialBot={settingsBot || bot?.id || state.bots[0]?.id || ""}
+          runCount={state.runs.length}
+          initialJoin={teamJoinUrl}
+          createBot={createBot}
+        />
+      </div>
+    )}
     </AvatarAnimations>
   );
 }

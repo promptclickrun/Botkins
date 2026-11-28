@@ -18,12 +18,13 @@
 // often hold keys, so the app's page never receives them: it sees the names only.
 export { parseSkill, slug } from "./link/skill-format.mjs";
 import { parseSkill, slug } from "./link/skill-format.mjs";
+import { templateBundle } from "./link/template-bundle.mjs";
 import { McpOAuth, REDIRECT_PORT } from "./oauth.mjs";
 import { MANIFESTS as PLUGIN_MANIFESTS } from "./plugin-reading.mjs";
 import { isRef } from "./vault.mjs";
 import { SCRIPT_FILE, SCRIPT_KIND, cleanScriptCommand, commandKind, hashScript, scriptSkillFile } from "./script-commands.mjs";
 import { reachable } from "./terminal/reach.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -264,6 +265,8 @@ export class Integrations {
     state.skills = {
       ...(Array.isArray(state.skills?.standalone) && {standalone: state.skills.standalone}),
       ...(state.skills?.catalog && {catalog: state.skills.catalog}),
+      // Shared skills installed from a marketplace listing: name → { catalog, name, version, commit, files } (desktop/catalog-v2.mjs).
+      ...(state.skills?.listings && typeof state.skills.listings === "object" && {listings: state.skills.listings}),
       folders: Array.isArray(state.skills?.folders) ? state.skills.folders : [],
       plugins: Array.isArray(state.skills?.plugins) ? state.skills.plugins : [],
       disabled: Array.isArray(state.skills?.disabled) ? state.skills.disabled : [],
@@ -514,11 +517,12 @@ export class Integrations {
    * Signs the person in to a remote server through their browser and keeps the tokens in the
    * vault. Also turns sign-in on for a server that turned out to need it.
    */
-  async signIn(id, { open, patience, finished, followed } = {}) {
+  async signIn(id, { open, patience, finished, followed, redirect, answerRedirect } = {}) {
     const server = this.server(id);
     if (server.type === "stdio") throw new Error("A local server signs in with its environment values.");
-    // (`open`, `patience`, `finished` and `followed` are a terminal host's: desktop/terminal/signin.mjs. The window and a phone pass none.)
-    await this.oauth.signIn(server, { client: this.client(server), scope: server.oauth?.scope, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }) });
+    // (`open`, `patience`, `finished` and `followed` are a terminal host's: desktop/terminal/signin.mjs. `redirect` and
+    // `answerRedirect` are a phone's browser sign-in: desktop/phone-signin.mjs. The window passes none.)
+    await this.oauth.signIn(server, { client: this.client(server), scope: server.oauth?.scope, ...(open && { open }), ...(patience && { patience }), ...(finished && { finished }), ...(followed && { followed }), ...(redirect && { redirect }), ...(answerRedirect && { answerRedirect }) });
     // The server was removed while the browser was open: its sign-in goes with it.
     if (!this.servers.includes(server)) {
       this.sweep();
@@ -576,13 +580,14 @@ export class Integrations {
   async mcpAuth(request) {
     const server = this.servers.find((s) => s.enabled && s.type !== "stdio" && s.name === request?.server);
     if (!server?.oauth) return null;
+    if (request.serverId && (server.id !== request.serverId || server.url !== request.url)) return null;
     // The token goes only to the address the person signed in to.
     try {
       if (request.url && new URL(request.url).origin !== new URL(server.url).origin) return null;
     } catch {
       return null;
     }
-    return this.oauth.token(server, { reason: request.reason, client: this.client(server) });
+    return this.oauth.token(server, { reason: request.reason, client: this.client(server), ...(request.serverId && { rejectedAccessToken: request.rejectedAccessToken }) });
   }
   setServerEnabled(id, enabled) {
     this.server(id).enabled = enabled === true;
@@ -631,9 +636,14 @@ export class Integrations {
     return this.importServers(source, dirname(path));
   }
   /** The servers a bot's sessions connect to, in the shape of the provider contract. */
-  serversFor(bot) {
+  serversFor(bot, { liveOAuth = false } = {}) {
     const off = new Set(bot?.mcpOff ?? []);
-    return Object.fromEntries(this.servers.filter((s) => s.enabled && !off.has(s.id)).map((s) => [s.name, serverConfig(s, this.open)]));
+    return Object.fromEntries(this.servers.filter((s) => s.enabled && !off.has(s.id)).map((s) => {
+      const config = serverConfig(s, this.open);
+      if (liveOAuth && s.type === "http" && s.oauth && !Object.keys(config.headers).some((h) => h.toLowerCase() === "authorization"))
+        config.oauthId = s.id;
+      return [s.name, config];
+    }));
   }
   /**
    * Connects to one server once and reports whether it works and which tools it offers. Botkins
@@ -656,6 +666,98 @@ export class Integrations {
   }
 
   // Skills
+  /** Each bot's portable skill definitions are projected outside every shared skills directory. */
+  botSkillDirectory(bot) {
+    const root = join(this.ws.dir, ".agent-skills");
+    if (lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink())
+      throw new Error("The agent skills folder cannot be a symbolic link.");
+    return join(root, createHash("sha256").update(bot.id).digest("hex"));
+  }
+  installBotSkills(bot) {
+    const { skills } = templateBundle({ skills: bot.bundle.skills });
+    for (const { name } of skills) {
+      if (name === COMMAND_SKILL || Object.hasOwn(this.skillState.scripts ?? {}, name))
+        throw new Error("A command on this computer already uses the skill name " + name + ".");
+    }
+    const dir = this.botSkillDirectory(bot);
+    mkdirSync(dirname(dir), { recursive: true, mode: 0o700 });
+    // Only remove a directory created by this installation. Never overwrite an existing skill.
+    mkdirSync(dir, { mode: 0o700 });
+    try {
+      for (const skill of skills) {
+        const folder = join(dir, skill.name);
+        mkdirSync(folder, { mode: 0o700 });
+        writeFileSync(join(folder, "SKILL.md"), skillFile(skill), { flag: "wx", mode: 0o600 });
+      }
+    } catch (error) {
+      rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+    return dir;
+  }
+  removeBotSkills(bot) {
+    rmSync(this.botSkillDirectory(bot), { recursive: true, force: true });
+  }
+  /** Where one bot's own marketplace skills are (desktop/catalog-v2.mjs): beside its private skills, apart from the shared ones. */
+  botCatalogDirectory(bot) {
+    const root = join(this.ws.dir, ".agent-catalog-skills");
+    if (lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink())
+      throw new Error("The agent skills folder cannot be a symbolic link.");
+    return join(root, createHash("sha256").update(bot.id).digest("hex"));
+  }
+  checkBotCatalogSkill(bot, files, meta) {
+    if (!SKILL_NAME.test(meta.name) || meta.name === COMMAND_SKILL || Object.hasOwn(this.skillState.scripts ?? {}, meta.name) || bot.bundle?.skills?.some((s) => s.name === meta.name))
+      throw new Error("This bot already has a skill or command named " + meta.name + ".");
+    const other = bot.catalogSkills?.find((s) => s.name === meta.name && s.catalog !== meta.catalog);
+    if (other) throw new Error("This bot already has " + meta.name + " from " + other.catalog + ".");
+    if (files.size > 512) throw new Error("Too many files in this skill.");
+    let size = 0;
+    for (const [path, data] of files) {
+      size += data.length;
+      if (size > 12 * 1024 * 1024) throw new Error("This skill is larger than 12 MiB.");
+      // The same portable paths as every skill import; a path that leaves the folder is refused.
+      if (path.split("/").some((part) => !part || part === "." || part === ".." || /[\\:<>"|?*\x00-\x1f]/.test(part))) throw new Error("Unsafe skill file path.");
+    }
+  }
+  /**
+   * Installs a marketplace skill's pinned files for one bot only. The same listing installed again
+   * (an update) replaces that bot's copy. `meta` is { catalog, name, version, commit, files } and is
+   * kept on the bot as `catalogSkills`.
+   */
+  installBotCatalogSkill(bot, files, executable, meta) {
+    this.checkBotCatalogSkill(bot, files, meta);
+    const root = this.botCatalogDirectory(bot);
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const stage = mkdtempSync(join(root, ".install-"));
+    try {
+      for (const [path, data] of files) {
+        const target = join(stage, path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, data, { flag: "wx", mode: executable.has(path) ? 0o755 : 0o644 });
+      }
+      const dest = join(root, meta.name);
+      const old = join(stage, ".old");
+      if (existsSync(dest)) renameSync(dest, old);
+      renameSync(stage, dest);
+      rmSync(join(dest, ".old"), { recursive: true, force: true });
+    } catch (error) {
+      rmSync(stage, { recursive: true, force: true });
+      throw error;
+    }
+    bot.catalogSkills = [...(bot.catalogSkills ?? []).filter((s) => s.name !== meta.name), meta];
+    if (bot.skillsOff) bot.skillsOff = bot.skillsOff.filter((n) => n !== meta.name);
+    this.changed();
+  }
+  removeBotCatalogSkill(bot, name) {
+    if (!bot.catalogSkills?.some((s) => s.name === name)) throw new Error("This bot has no marketplace skill named " + name + ".");
+    rmSync(join(this.botCatalogDirectory(bot), name), { recursive: true, force: true });
+    bot.catalogSkills = bot.catalogSkills.filter((s) => s.name !== name);
+    if (!bot.catalogSkills.length) delete bot.catalogSkills;
+    this.changed();
+  }
+  removeBotCatalogSkills(bot) {
+    rmSync(this.botCatalogDirectory(bot), { recursive: true, force: true });
+  }
   /** Every skill Botkins can see, with where it comes from and whether it is on. */
   skills() {
     const disabled = new Set(this.skillState.disabled);
@@ -743,6 +845,8 @@ export class Integrations {
   saveScriptCommand({ name, description, script, original }) {
     const fields = cleanScriptCommand({ name, description, script });
     const id = fields.name;
+    if (this.ws.state.bots.some(bot => bot.bundle?.skills?.some(skill => skill.name === id)))
+      throw new Error("/" + id + " is a skill of a bot on this computer. Choose another name.");
     const current = original ? this.ownSkillDir(original) : null;
     if (original && !this.scriptCommands().some((s) => s.name === original)) throw new Error("This isn't a script command. Change it as a skill.");
     if (id !== original && this.skills().some((s) => s.name === id)) throw new Error("A skill named " + id + " already exists.");
@@ -900,6 +1004,8 @@ export class Integrations {
       if (!Object.keys(this.skillState.scripts).length) delete this.skillState.scripts;
     }
     for (const [id, name] of Object.entries(this.skillState.catalog ?? {})) if (added.includes(name) || plans.some(plan => plan.existing?.name === name)) delete this.skillState.catalog[id];
+    // A skill imported over a marketplace one is no longer that listing; the listing's own install sets it again.
+    for (const name of [...added, ...plans.map((plan) => plan.existing?.name)]) if (name && this.skillState.listings) delete this.skillState.listings[name];
     if (enable) this.skillState.disabled = this.skillState.disabled.filter((name) => !added.includes(name));
     this.changed();
     return { added, conflicts: [] };
@@ -913,8 +1019,12 @@ export class Integrations {
     }
     if (this.skillState.standalone) this.skillState.standalone = this.skillState.standalone.filter(entry => entry !== basename(dir));
     for (const [id, skill] of Object.entries(this.skillState.catalog ?? {})) if (skill === name) delete this.skillState.catalog[id];
+    if (this.skillState.listings) delete this.skillState.listings[name];
     this.skillState.disabled = this.skillState.disabled.filter((n) => n !== name);
-    for (const bot of this.ws.state.bots) if (bot.skillsOff) bot.skillsOff = bot.skillsOff.filter((n) => n !== name);
+    for (const bot of this.ws.state.bots) {
+      if (bot.skillsOff && !bot.bundle?.skills?.some((skill) => skill.name === name))
+        bot.skillsOff = bot.skillsOff.filter((n) => n !== name);
+    }
     this.changed();
   }
   removeFolder(id) {
@@ -946,11 +1056,25 @@ export class Integrations {
    */
   skillsFor(bot, { member = false } = {}) {
     const base = [bundledSkills];
+    const privateNames = new Set(bot?.bundle?.skills?.map(({ name }) => name));
     if (existsSync(this.skillsDir)) {
       // Only change precedence when the person installed a replacement for a built-in skill.
       const overrides = skillsIn(bundledSkills).some(s => existsSync(join(this.skillsDir, slug(s.name), "SKILL.md")));
       if (overrides) base.unshift(this.skillsDir);
       else base.push(this.skillsDir);
+    }
+    // A bot's own marketplace skills (desktop/catalog-v2.mjs) come before the shared ones, in this bot's sessions only.
+    if (bot?.catalogSkills?.length) {
+      const dir = this.botCatalogDirectory(bot);
+      if (lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) base.unshift(dir);
+    }
+    if (privateNames.size) {
+      const dir = this.botSkillDirectory(bot);
+      const info = lstatSync(dir, { throwIfNoEntry: false });
+      if (!info) this.installBotSkills(bot); // A restored workspace file carries its skill definitions.
+      else if (!info.isDirectory()) throw new Error("The agent skills folder must be a plain directory.");
+      // A private skill wins a shared name only in this bot's sessions.
+      base.unshift(dir);
     }
     return {
       // A linked folder that has become a plugin since it was linked is not handed on, as a plugin can start commands. It stays linked, and is looked at again at each call.
@@ -959,7 +1083,7 @@ export class Integrations {
       // The command-line skill goes last, and only a host where a bot's shell finds the command offers it.
       // Never in a member's turn: the socket knows no member, so a member's bot must not be taught to act as the owner at the socket.
       // A script command is the person's to type; no model is offered it as a skill (desktop/script-commands.mjs).
-      disabled: [...new Set([...this.skillState.disabled, ...(bot?.skillsOff ?? []), ...Object.keys(this.skillState.scripts ?? {}), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],
+      disabled: [...new Set([...this.skillState.disabled.filter(name => !privateNames.has(name)), ...(bot?.skillsOff ?? []), ...Object.keys(this.skillState.scripts ?? {}), ...(this.reachable() && !member ? [] : [COMMAND_SKILL])])],
     };
   }
 }

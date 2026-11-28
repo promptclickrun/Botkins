@@ -9,6 +9,31 @@ export type CatalogSkill = { id: string; source: string; skillId: string; name: 
 /** Where a featured skill comes from: its repository at a pinned commit, its license and who wrote it. */
 export type SkillSource = { author: string; license: string; repo: string; commit: string; path: string; url: string; pack?: string };
 export type CatalogPreview = { name: string; description: string; text: string; token: string; installed?: string; /** A featured skill's source. */ source?: SkillSource; /** A featured skill's files, the license among them. */ files?: string[] };
+/** Marketplace format version 2 ("marketplace-v2-v1", desktop/catalog-v2.mjs). */
+export type MarketSkillTools = "shell" | "node" | "python" | "browser" | "network";
+export type MarketSkillListing = {
+  id: string; kind: "skill"; name: string; version: string; summary: string; category?: string; categoryName?: string; author?: string;
+  license: string; requires: { tools: MarketSkillTools[]; optional: MarketSkillTools[] }; hasPreview: boolean;
+  marketplace: string; marketplaceName: string; commit: string;
+  installed?: { shared?: { version: string; commit: string }; bots: { id: string; name: string; version: string }[] };
+  update?: boolean; warnings: string[];
+};
+export type MarketPackListing = { id: string; kind: "pack"; name: string; version: string; summary: string; skills: string[]; plugins: string[]; marketplace: string; marketplaceName: string; commit: string };
+export type MarketTemplateListing = MarketAgent & { kind: "template"; format: 3; commit: string; requires?: { skills?: string[]; packs?: string[]; plugins?: string[] }; routines?: number };
+export type MarketCatalog = { skills: MarketSkillListing[]; packs: MarketPackListing[]; templates: MarketTemplateListing[]; errors?: { marketplace: string; error: string }[] };
+export type MarketSkillReview = CatalogPreview & {
+  source: SkillSource & { catalog: string; version: string };
+  files: string[]; executable: string[]; size: number; listing: MarketSkillListing;
+  update?: { from: string; to: string; added: string[]; changed: string[]; removed: string[] };
+};
+export type MarketPluginReview = { id: string; name: string; version?: string; description?: string; revision: string; contents?: { mcpServers?: { name: string; kind: string; url?: string; command?: string; args?: string[] }[]; hooks?: { event?: string; command?: string }[] }; warnings?: string[]; installed?: { bots: "all" | string[]; enabled: boolean; revision?: string; matchesRevision?: boolean } };
+export type MarketPackReview = { id: string; name: string; version: string; summary: string; marketplaceName: string; commit: string; token: string; skills: MarketSkillReview[]; plugins: MarketPluginReview[] };
+export type MarketRoutineReview = { name: string; instructions: string; cadence: NonNullable<AgentTemplateBundle["routines"]>[number]["cadence"]; active: boolean };
+export type MarketTemplateReview = {
+  id: string; token: string; commit: string; marketplaceName: string; version: string; name: string; role: string; summary: string; instructions: string; look?: MarketAgent["look"];
+  packs: { name: string; version: string; summary: string }[]; skills: MarketSkillReview[]; privateSkills: { name: string; description: string; instructions: string }[];
+  plugins: MarketPluginReview[]; routines: MarketRoutineReview[];
+};
 /** A skill on the featured shelf ("skills-featured-v1"). Its id is `owner/repo/skill@commit7`: preview and install it as a catalog skill. */
 export type FeaturedSkill = SkillSource & { id: string; name: string; summary: string; group: string; installed?: string };
 
@@ -61,6 +86,7 @@ export type Bot = {
   name: string;
   role: string;
   instructions: string;
+  bundle?: AgentTemplateBundle;
   clarificationInstructions?: string;
   /** The Botkin this bot is drawn as (src/botkins.ts). Every bot has one; phones show the same. */
   look?: BotLook;
@@ -135,7 +161,7 @@ export type Attachment = {
   kind?: "file" | "directory";
 };
 export type ArtifactKind = "folder" | "file" | "image" | "audio" | "video";
-export type ArtifactSource = "tool" | "media" | "upload" | "export";
+export type ArtifactSource = "tool" | "media" | "upload" | "export" | "claude";
 export type Artifact = {
   id: string;
   botId: string;
@@ -149,6 +175,8 @@ export type Artifact = {
   size: number | null;
   time: number;
   source: ArtifactSource;
+  /** External URL for published Claude artifacts (private on claude.ai). */
+  url?: string;
 };
 /** A record named in a message with "#" (a project, a wiki page, or a file in the bot's workspace). */
 export type Mention =
@@ -160,14 +188,26 @@ export type Mention =
   | { kind: "board"; id: string; label: string; board?: "feed" | "idea" | "goal"; body?: string; links?: { url: string; title?: string }[] };
 /** What the composer sends for a mention; the main process checks it and fills in the label. */
 export type MentionInput = { kind: "project" | "board"; id: string } | { kind: "file" | "wiki"; path: string };
+/** Structured sender metadata for bot-to-bot messages (teamwork, task handoffs, remote dispatches). */
+export type MessageFrom = {
+  kind: "bot";
+  botId: string;
+  name: string;
+  hostId?: string;
+  hostName?: string;
+  chatId?: string;
+  via: "teamwork" | "task" | "remote";
+};
 export type Message = {
   reactions?: { actor: string; emoji: string }[];
   clientMessageId?: string;
+  voiceId?: string;
   voiceCaption?: string;
   role: "assistant" | "user" | "command";
   text: string;
   interim?: boolean;
   steeredRunId?: string;
+  receipt?: boolean;
   answer?: { runId: string; requestId: string; kind: string; title: string };
   /** A proactive alert the bot sent on its own: the run that made it, and its actions ("proactive-team-v1"). */
   proactiveRunId?: string;
@@ -184,6 +224,42 @@ export type Message = {
   botId?: string;
   /** A team member's stamped identity. The original displayed text is unchanged. */
   author?: { memberId: string; name: string };
+  /** Structured sender metadata when another bot sent this message. */
+  from?: MessageFrom;
+  /** Metadata when this message was posted by a Workflow Output step. */
+  fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
+  /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
+  actionCard?: WorkflowActionCard;
+};
+export type WorkflowActionCard = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  blocks: PanelBlock[];
+  link?: { label: string; url: string };
+  needsYou: boolean;
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  actedBy?: string;
+  actedAt?: number;
+};
+export type ChatCardActionResult = {
+  ok: true;
+  state: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  card: WorkflowActionCard;
 };
 export type Chat = {
   hostDispatch?: true;
@@ -206,6 +282,8 @@ export type Chat = {
   invited?: string[];
   /** The project folder this chat works in, and how freely its bot acts there. */
   projectId?: string;
+  /** Set on a chat that a job started (desktop/jobs.mjs). */
+  job?: Job;
   folder?: string;
   mode?: ChatMode;
   panelId?: string;
@@ -278,6 +356,8 @@ export type Run = {
   connects?: ConnectCard[];
   /** Tools with an MCP App view that ran in this turn. */
   mcpApps?: McpAppCard[];
+  /** Private Claude artifacts published or updated in this turn. */
+  claudeArtifacts?: ClaudeArtifactCard[];
   chatId: string;
   title: string;
   time: number;
@@ -315,14 +395,148 @@ export type Run = {
   failures?: { botId: string; detail: string }[];
   /** Teammates the bot asked for help during this turn, in order (desktop/teamwork.mjs). */
   teamwork?: TeamAsk[];
+  /** Task Board jobs this bot created for another bot during this turn (desktop/tasks.mjs). */
+  taskHandoffs?: TaskHandoff[];
 };
+export type WorkflowNodeKind = "trigger" | "agent" | "model" | "condition" | "approval" | "output";
+export type WorkflowTriggerKind = "task" | "schedule" | "manual" | "routine" | "chat" | "webhook" | "github" | "channel";
+
+export interface WorkflowGithubSignIn {
+  status: "idle" | "starting" | "waiting" | "done" | "failed";
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  login: string | null;
+}
+
+export interface WorkflowGithubStatus {
+  installed: boolean;
+  authenticated: boolean;
+  login: string | null;
+  scopes: string[];
+  repos: string[];
+  installUrl: string;
+  signIn: WorkflowGithubSignIn;
+}
+export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
+
+export interface WorkflowFieldDef {
+  name: string;
+  type?: "string" | "number" | "boolean";
+  choices?: string[];
+  description?: string;
+  required?: boolean;
+  path?: string;
+}
+
+export interface WorkflowConditionRule {
+  field: string;
+  op:
+    | "equals"
+    | "not_equals"
+    | "contains"
+    | "not_contains"
+    | "starts_with"
+    | "ends_with"
+    | "matches"
+    | "in"
+    | "gt"
+    | "gte"
+    | "lt"
+    | "lte"
+    | "exists"
+    | "empty";
+  value?: string;
+}
+
+export interface WorkflowNode {
+  id: string;
+  kind: WorkflowNodeKind;
+  triggerKind?: WorkflowTriggerKind;
+  label: string;
+  position: { x: number; y: number };
+  config: Record<string, any>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  from: string;
+  to: string;
+  branch?: "default" | "yes" | "no" | "approved" | "rejected" | string;
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  pausedAt?: number | null;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowInput {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  nodes: Array<Omit<WorkflowNode, "position"> & { position?: { x: number; y: number } }>;
+  edges: Array<{ id?: string; from: string; to: string; branch?: string }>;
+}
+
+export type WorkflowStepStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "skipped" | "rejected";
+export type WorkflowRunStatus = "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+
+export interface WorkflowStepRun {
+  nodeId: string;
+  kind: WorkflowNodeKind;
+  label: string;
+  status: WorkflowStepStatus;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  error?: string | null;
+  summary?: string;
+  branch?: string;
+  decision?: "approved" | "rejected";
+  note?: string;
+  chatId?: string;
+  outputs?: Record<string, unknown>;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  triggerNodeId: string;
+  triggerKind?: WorkflowTriggerKind;
+  manual?: boolean;
+  status: WorkflowRunStatus;
+  startedAt: number;
+  finishedAt?: number | null;
+  retriedAt?: number | null;
+  error?: string | null;
+  pendingApproval?: {
+    nodeId: string;
+    label: string;
+    message: string;
+    requestedAt: number;
+  } | null;
+  context: Record<string, unknown>;
+  steps: Record<string, WorkflowStepRun>;
+}
+
 /** One request from a bot to a teammate, and what came of it. */
 export type TeamAsk = {
   id: string;
+  /** Tool step ID that triggered this ask, when correlated. */
+  toolCallId?: string;
   /** The teammate that was asked. */
   botId: string;
   /** The bot that asked. */
   fromBotId: string;
+  /** Structured sender metadata set by the backend. */
+  from?: MessageFrom;
   remote?: { hostId: string; hostName: string; botName: string };
   message: string;
   expecting?: string;
@@ -337,6 +551,22 @@ export type TeamAsk = {
   /** The tools the teammate used. */
   steps?: Step[];
   usedTools?: string[];
+};
+/** A Task Board job a bot created for another bot during a turn. */
+export type TaskHandoff = {
+  id: string;
+  taskId: string;
+  /** Tool step ID that created this handoff, when correlated. */
+  toolCallId?: string;
+  botId: string;
+  fromBotId: string;
+  from?: MessageFrom;
+  title: string;
+  details?: string;
+  priority?: TaskPriority;
+  status: TaskStatus | "archived";
+  chatId?: string;
+  started: number;
 };
 export type Reasoning = {
   id: string;
@@ -484,7 +714,8 @@ export type TeamJoinState = { id: string; team: string; status: "pending" | "app
 export type NodeHostProject = {
   id: string;
   name: string;
-  path: string;
+  path?: string;
+  folder?: string;
   shared?: boolean;
 };
 export type NodeHostGrant = {
@@ -495,31 +726,319 @@ export type NodeHostGrant = {
   operation: string;
   resourceId: string;
   resourceName: string;
+  scope?: "always" | "today";
   until: number | null;
   createdAt: number;
 };
 export type NodeHostLastCompleted = {
-  requestId: string;
+  id?: string;
+  requestId?: string;
   operation: string;
   resourceId: string;
   resourceName: string;
   sourceHostName: string;
   sourceBotName: string;
   status: string;
-  at: number;
+  at?: number;
+  finishedAt?: number;
+  summary?: string;
+};
+export type NodeConversionAction = "move" | "keep" | "delete";
+export type NodeConversionTarget = {
+  serverId: string;
+  name: string;
+  role: string;
+  online: boolean;
+  unavailable?: boolean;
+  paused?: boolean;
+  botCount: number;
+};
+export type NodeConversionBotInventory = {
+  id: string;
+  name: string;
+  role: string;
   summary: string;
+  hidden: boolean;
+  teamwork: boolean;
+  chatCount: number;
+  messageCount: number;
+  groupChatCount: number;
+  routineCount: number;
+  activeRoutineCount: number;
+  routineTimezones: string[];
+  memoryBytes: number;
+  memoryEntries: number;
+  profileFiles: string[];
+  panelCount: number;
+  skillCount: number;
+  skills: string[];
+  plugins: Array<{ id: string; name: string }>;
+  projectRefs: Array<{ id: string; name: string; folder: string; sharedOnSource: boolean }>;
+};
+export type NodeConversionSnapshotSummary = {
+  id: string;
+  path: string;
+  createdAt: number;
+  botCount: number;
+  chatCount: number;
+  nodeName: string;
+};
+export type NodeConversionJobItem = {
+  botId: string;
+  botName: string;
+  action: NodeConversionAction;
+  targetHostId: string | null;
+  targetHostName: string | null;
+  transferId: string | null;
+  targetBotId: string | null;
+  stage: string;
+  error: string | null;
+  verification: {
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    panelCount: number;
+    contentSha256: string;
+  } | null;
+};
+export type NodeConversionJob = {
+  id: string;
+  status: "running" | "completed" | "paused" | "failed" | "undone";
+  nodeName: string;
+  sharedProjects: string[];
+  snapshotId: string | null;
+  snapshotPath: string | null;
+  createdAt: number;
+  updatedAt: number;
+  error: string | null;
+  items: NodeConversionJobItem[];
+};
+export type NodeConversionInspect = {
+  hasLocalData: boolean;
+  suggestedName: string;
+  bots: NodeConversionBotInventory[];
+  targets: NodeConversionTarget[];
+  shared: {
+    wiki: { pageCount: number; pages: string[]; note: string };
+    skills: { customCount: number; linkedCount: number; names: string[] };
+    plugins: { count: number; items: Array<{ id: string; name: string; enabled: boolean; bots: "all" | string[] }> };
+    panels: { count: number; botOwnedCount: number; otherCount: number };
+    vault: { count: number; locked: boolean; entries: Array<{ id: string; label: string; kind: string; owner: string }>; note: string };
+    projects: { count: number; items: Array<{ id: string; name: string; folder: string; hasFolder: boolean; shared: boolean }> };
+    groupChats: { count: number; items: Array<{ id: string; title: string; botIds: string[]; messageCount: number }> };
+  };
+  snapshot: NodeConversionSnapshotSummary | null;
+  activeJob: NodeConversionJob | null;
+  nodeHost?: NodeHostState;
+};
+export type NodeConversionPlan = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  nodeName: string;
+  sharedProjects: string[];
+  botPlans: Array<{
+    botId: string;
+    botName: string;
+    role: string;
+    action: NodeConversionAction;
+    targetHostId: string | null;
+    targetHostName: string | null;
+    chatCount: number;
+    messageCount: number;
+    routineCount: number;
+    activeRoutineCount: number;
+    panelCount: number;
+    memoryBytes: number;
+    profileFileCount: number;
+    skillCount: number;
+    pluginCount: number;
+    projectRefCount: number;
+  }>;
+  counts: {
+    totalBots: number;
+    moveBots: number;
+    keepBots: number;
+    deleteBots: number;
+    chatsMoving: number;
+    chatsKeeping: number;
+    chatsDeleting: number;
+    messagesMoving: number;
+    routinesMoving: number;
+    routinesKeeping: number;
+    routinesDeleting: number;
+    panelsMoving: number;
+    panelsDeleting: number;
+    memoryBotsMoving: number;
+    profileFilesMoving: number;
+    skillsMoving: number;
+    pluginEnablementsMoving: number;
+    projectRefsMoving: number;
+    vaultEntriesLeftBehind: number;
+    wikiPagesKept: number;
+    projectsToShare: number;
+  };
+  requiresDeleteConfirmation: boolean;
+  deleteConfirmationPhrase: string;
+  deleteConfirmed: boolean;
+  snapshotDir: string;
+};
+export type NodeConversionUndoResult = {
+  undone: boolean;
+  snapshotId: string;
+  snapshotPath: string;
+  restoredBots: number;
+  restoredChats: number;
+  nodeHost: NodeHostState;
+  rolledBackRemoteBots: string[];
+  unreachableTargets: Array<{ botId: string; botName: string; targetHostName: string }>;
+  pausedToPreventDupes: Array<{ botId: string; routineName: string }>;
+};
+export type NodeHostAllowlistRule = {
+  id: string;
+  botId: string;
+  pattern: string;
+  createdAt: number;
+};
+export type NodeHostExecPolicy = {
+  mode: "deny" | "allowlist" | "ask" | "full";
+  allowlist: NodeHostAllowlistRule[];
+};
+export type NodeHostAuditEntry = {
+  id: string;
+  time: number;
+  sourceHostId: string;
+  sourceHostName: string;
+  sourceBotId: string;
+  sourceBotName: string;
+  operation: string;
+  resourceId: string;
+  resourceName: string;
+  argsSummary: string;
+  status: string;
+  exitCode?: number | null;
+  error?: string;
+  durationMs?: number;
+};
+export type NodeHostPendingApproval = {
+  id: string;
+  chatId: string;
+  title: string;
+  operation?: string;
+  sourceBotName?: string;
+  sourceHostName?: string;
+  resourceName?: string;
+  time?: number;
 };
 export type NodeHostState = {
   enabled: boolean;
+  role?: "node" | "standard";
   name: string;
-  status: "off" | "online" | "paused";
+  status?: "off" | "online" | "paused";
+  online?: boolean;
   paused: boolean;
+  listening?: boolean;
+  wholeComputer?: boolean;
+  execPolicy?: NodeHostExecPolicy;
   capabilitiesVersion: number;
+  remoteControlSupported?: boolean;
+  hasLocalData?: boolean;
   sharedProjects: NodeHostProject[];
   availableProjects: NodeHostProject[];
   grants: NodeHostGrant[];
+  pendingApprovals?: NodeHostPendingApproval[];
+  auditLog?: NodeHostAuditEntry[];
   lastCompleted: NodeHostLastCompleted | null;
+  conversion?: {
+    activeJob: NodeConversionJob | null;
+    snapshot: NodeConversionSnapshotSummary | null;
+  };
 };
+export type ChannelKind = "slack" | "telegram" | "discord" | "imessage";
+export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "off";
+export type ChannelGroupMode = "mention" | "all";
+export type ChannelToolProfile = "restricted" | "standard";
+export type ChannelStatusState =
+  | "connected"
+  | "reconnecting"
+  | "auth_error"
+  | "disabled"
+  | "paused"
+  | "waiting_permission"
+  | "disconnected";
+
+export interface ChannelPolicy {
+  dm: ChannelDmPolicy;
+  allowlist: string[];
+  groups: {
+    enabled: boolean;
+    mode: ChannelGroupMode;
+    channels: string[];
+  };
+  toolProfile: ChannelToolProfile;
+  ignoreBots?: boolean;
+  notifyPhone?: boolean;
+  limits?: {
+    senderPerMinute?: number;
+    connectionPerMinute?: number;
+    maxInboundLength?: number;
+    maxAttachmentBytes?: number;
+    dailyTurnCap?: number;
+  };
+}
+
+export interface ChannelConnection {
+  id: string;
+  kind: ChannelKind;
+  label: string;
+  transport: string;
+  enabled: boolean;
+  paused?: boolean;
+  botId: string;
+  nodeHostId?: string;
+  policy: ChannelPolicy;
+  configuredSecrets?: string[];
+  pendingPairings?: Array<{
+    code: string;
+    senderId: string;
+    display: string;
+    conversationId: string;
+    createdAt: number;
+    expiresAt: number;
+  }>;
+  status?: {
+    state: ChannelStatusState;
+    detail?: string;
+    updatedAt?: number;
+  };
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ChannelPairing {
+  code: string;
+  connectionId: string;
+  label?: string;
+  kind?: ChannelKind;
+  channel?: ChannelKind;
+  senderId: string;
+  display?: string;
+  senderDisplay?: string;
+  conversationId: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ChannelAuditEntry {
+  at: string;
+  connectionId: string;
+  channel: string;
+  senderId: string;
+  conversationId: string;
+  decision: string;
+  reason?: string;
+}
+
 export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
@@ -540,6 +1059,8 @@ export type State = {
   profile?: ProfileState;
   /** Local node host role, shared folders, active job grants, and last completed request. */
   nodeHost?: NodeHostState;
+  /** Published external messaging channels (owner view only). */
+  channels?: ChannelConnection[];
   bots: Bot[];
   /** Full team management data for this computer's owner, or this member's filtered identity. */
   team?: OwnerTeam | MemberTeam;
@@ -551,6 +1072,7 @@ export type State = {
   streams: Record<string, string>;
   intents: Record<string, string>;
   settings: Preferences;
+  taskLimits?: TaskLimits;
   requests: AgentRequest[];
   sections: Section[];
   /** The person's own sections on the Chats page, in their order ("chat-sections-v1"). Left out when the computer in use has none. */
@@ -570,6 +1092,10 @@ export type State = {
   adminMode?: boolean;
   /** The Kanban board of work for bots. */
   tasks?: BotTask[];
+  /** Event-based Workflows in Routines (`workflows-v1`). */
+  workflows?: Workflow[];
+  /** Recent runs of event-based Workflows (`workflows-v1`). */
+  workflowRuns?: WorkflowRun[];
   /** The Proactive agent: the computer's switch, and each bot's agent with what it did (desktop/proactive.mjs). Missing on an older computer. */
   proactive?: ProactivePart;
   /** Project workspaces. One with a folder is also a coding project. */
@@ -639,6 +1165,8 @@ export type ChatSchedule = {
   script?: string;
   /** On a script routine: after the script, the bot follows `prompt` with the script's output. */
   followUp?: boolean;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type Cadence =
   | { kind: "once"; date: string; time: string }
@@ -675,6 +1203,8 @@ export type RoutineInput = {
   notify?: boolean;
   /** Specific notification targets ("routine-notify-targets-v1"). null resets to everyone; omitted on an edit keeps the existing targets. */
   notifyTargets?: RoutineNotifyTargets | null;
+  /** Owner-approved opt-in: lets this routine create Ready tasks assigned to a bot. */
+  allowReadyTasks?: boolean;
 };
 export type UsageTotals = {
   turns: number;
@@ -781,8 +1311,11 @@ declare global {
         fastMode?: FastMode | null,
       ): Promise<void>;
       setPreferences(
-        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive">> & {
+        patch: Partial<Omit<Preferences, "model" | "appearance" | "proactive" | "tasksMax" | "tasksPerBot">> & {
           appearance?: Partial<Appearance>;
+          /** null clears the setting: the limit is then the environment's, else the default. */
+          tasksMax?: number | null;
+          tasksPerBot?: number | null;
           /** Only what changes: the computer lays it over what it has (desktop/proactive-settings.mjs). */
           proactive?: Partial<ProactiveSettings>;
         },
@@ -796,7 +1329,7 @@ declare global {
       subscribeHot(fn: (message: HotMessage) => void): () => void;
       addBot(
         bot: Pick<Bot, "name" | "role" | "instructions"> &
-          Partial<Pick<Bot, "look" | "summary">> & {
+          Partial<Pick<Bot, "look" | "summary" | "bundle">> & {
             /** The key of the existing agent the form started from. */
             agent?: string;
             /** The starter the form started from (desktop/starters.mjs). */
@@ -886,6 +1419,7 @@ declare global {
       addSection(name: string): Promise<string>;
       renameSection(id: string, name: string): Promise<void>;
       deleteSection(id: string): Promise<void>;
+      orderSections(ids: string[]): Promise<void>;
       setChatFlags(
         id: string,
         patch: Partial<Pick<Chat, "pinned" | "archived" | "unread">>,
@@ -915,6 +1449,17 @@ declare global {
       chooseProjectFolder(id: string, append?: boolean): Promise<string | null>;
       /** A new chat in a project with one bot, or 2 to 6 for a group. Every bot needs access. */
       startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): Promise<string>;
+      /** Jobs (desktop/jobs.mjs): where a project's jobs start, and the setup commands of its repository. */
+      projectJobSetup(projectId: string, folder?: string): Promise<JobSetup>;
+      /** The person saw the setup commands (`hash` is from projectJobSetup) and said yes. */
+      approveJobSetup(projectId: string, folder: string | undefined, hash: string): Promise<string>;
+      /** One job per bot: a chat, a worktree (unless where is "checkout"), the setup, then the prompt. The chats' ids. */
+      startProjectJob(projectId: string, options: JobStart): Promise<string[]>;
+      projectJobStatus(chatId: string): Promise<JobStatus>;
+      bringInJob(chatId: string, message?: string): Promise<{ ok: true; commit: string } | { ok: false; conflicts: string[] }>;
+      catchUpJob(chatId: string): Promise<void>;
+      removeJobWorktree(chatId: string): Promise<void>;
+      startJobTurn(chatId: string): Promise<void>;
       /** Attaches an artifact to a project; one already there moves to the front. Answers the project's list afterwards. */
       addProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
       removeProjectArtifact(projectId: string, artifactId: string): Promise<string[]>;
@@ -930,9 +1475,51 @@ declare global {
       linkPreview(url: string): Promise<LinkPreview | null>;
       // Tasks board
       saveTask(data: TaskInput): Promise<string>;
-      moveTask(id: string, status: TaskStatus | "archived"): Promise<void>;
+      moveTask(id: string, status: TaskStatus | "archived", options?: { note?: string }): Promise<void>;
       startTask(id: string): Promise<void>;
       deleteTask(id: string): Promise<void>;
+      // Event-based Workflows
+      workflowsList(): Promise<{ workflows: Workflow[]; runs: WorkflowRun[] }>;
+      workflowCreate(data: WorkflowInput): Promise<Workflow>;
+      workflowUpdate(id: string, patch: Partial<WorkflowInput>): Promise<Workflow>;
+      workflowDelete(id: string): Promise<boolean>;
+      workflowPause(id: string): Promise<Workflow>;
+      workflowResume(id: string): Promise<Workflow>;
+      workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): Promise<WorkflowRun>;
+      workflowRetryRun(runId: string, nodeId?: string): Promise<WorkflowRun>;
+      workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
+      workflowCancelRun(runId: string): Promise<WorkflowRun>;
+      workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;
+      workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
+      workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
+      workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
+      workflowExport(id: string): Promise<boolean>;
+      workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
+      workflowExportText(id: string): Promise<string>;
+      workflowImportText(raw: string, agentMap?: Record<string, string>): Promise<{ workflow: Workflow; unresolvedAgents: string[] }>;
+      // Channel Hooks (owner-only)
+      channelsList(): Promise<ChannelConnection[]>;
+      channelAdd(input: {
+        kind: ChannelKind;
+        label?: string;
+        transport?: string;
+        botId?: string;
+        nodeHostId?: string;
+        secrets?: Record<string, string>;
+        policy?: Partial<ChannelPolicy>;
+        enabled?: boolean;
+      }): Promise<ChannelConnection>;
+      channelUpdate(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelRemove(ref: string): Promise<{ removed: boolean }>;
+      channelBind(ref: string, botId: string): Promise<ChannelConnection>;
+      channelSetPolicy(ref: string, patch: Record<string, unknown>): Promise<ChannelConnection>;
+      channelPause(ref: string): Promise<ChannelConnection>;
+      channelResume(ref: string): Promise<ChannelConnection>;
+      channelPairList(ref?: string | null): Promise<ChannelPairing[]>;
+      channelPairApprove(code: string, ref?: string | null): Promise<{ approved: boolean; senderId: string; connectionId: string }>;
+      channelPairDeny(code: string, ref?: string | null): Promise<{ denied: boolean; senderId: string; connectionId: string }>;
+      channelTest(ref: string): Promise<{ ok: boolean; state: string; detail: string; identity?: string }>;
+      channelLogs(ref?: string | null, options?: { limit?: number }): Promise<ChannelAuditEntry[]>;
       onPrefill(fn: (data: { chatId?: string; text: string; panelId?: string; spaceId?: string }) => void): () => void;
       /** The person really clicked or pressed a key inside a custom view (its id). Missing on an older main process. */
       onFrameGesture?(fn: (data: { frame: string }) => void): () => void;
@@ -946,6 +1533,7 @@ declare global {
       /** Resolves a dropped or pasted File to its path. Synchronous, in the preload. */
       pathForFile(file: File): string;
       reactToMessage(chatId: string, index: number, time: number | null, emoji: string): Promise<NonNullable<Message["reactions"]>>;
+      "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): Promise<ChatCardActionResult>;
       showEmojiPanel(): Promise<void>;
       forkChat(chatId: string, messageIndex: number): Promise<string>;
       retry(runId: string): Promise<void>;
@@ -1007,6 +1595,24 @@ declare global {
       passwordManagerItem(manager: PasswordManagerId, vaultId: string, itemId: string): Promise<PasswordManagerItem>;
       /** Saves a field of a manager's item as a credential that is read from there each time. Returns its id. */
       linkPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Explicitly copies a field from a password manager into the Botkins vault (marked as a copy). Returns its id. */
+      copyPasswordManagerField(input: { manager: PasswordManagerId; vaultId: string; itemId: string; fieldId: string; name: string }): Promise<string>;
+      /** Lists standing bot credential grants (metadata only; never values). */
+      credentialGrants(filter?: { botId?: string; credentialId?: string }): Promise<CredentialGrant[]>;
+      /** Creates or updates a standing bot credential grant (owner only). */
+      setCredentialGrant(input: {
+        botId: string;
+        botName?: string;
+        credentialId: string;
+        credentialName?: string;
+        destination: string;
+        operation: string;
+        level: CredentialGrantLevel;
+      }): Promise<CredentialGrant>;
+      /** Revokes one standing credential grant by id. */
+      revokeCredentialGrant(id: string): Promise<boolean>;
+      /** Recent credential use audit entries (who, what, where, when, outcome — never values). */
+      credentialAudit(options?: { limit?: number; botId?: string; credentialId?: string }): Promise<CredentialAuditEntry[]>;
       /** Adds the servers in pasted MCP JSON ({ "mcpServers": { … } }). */
       importMcpServers(json: string): Promise<{ added: string[]; skipped: string[] }>;
       /** Asks for a JSON file and adds its servers. null when the person cancels. */
@@ -1061,6 +1667,14 @@ declare global {
       "skillsCatalog.preview"(id: string): Promise<CatalogPreview>;
       "skillsCatalog.install"(token: string, replace?: string[]): Promise<SkillImportResult>;
       "skillsCatalog.featured"(): Promise<FeaturedSkill[]>;
+      "market.catalog"(): Promise<MarketCatalog>;
+      "market.skillImage"(id: string): Promise<string>;
+      "market.skillPreview"(id: string): Promise<MarketSkillReview>;
+      "market.skillInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[] }): Promise<SkillImportResult>;
+      "market.packPreview"(id: string): Promise<MarketPackReview>;
+      "market.packInstall"(token: string, options?: { bots?: "all" | string[]; replace?: string[]; commit?: string }): Promise<SkillImportResult & { plugins: string[] }>;
+      "market.templatePreview"(id: string): Promise<MarketTemplateReview>;
+      "market.templateInstall"(token: string, options?: { routines?: string[]; commit?: string; name?: string }): Promise<{ botId: string; skills: string[]; plugins: string[] }>;
       "mcpCatalog.list"(): Promise<McpCatalog>;
       "mcpCatalog.add"(id: string, options?: { keys?: Record<string, string>; confirm?: string }): Promise<McpCatalogAdded>;
       "piPackages.browse"(query?: { query?: string; page?: number }): Promise<{ packages: PiPackageListing[]; nextPage?: number }>;
@@ -1070,7 +1684,7 @@ declare global {
       "piPackages.setEnabled"(name: string, version: string, enabled: boolean): Promise<InstalledPiPackage>;
       "piPackages.remove"(name: string, version: string): Promise<void>;
       "agents.browse"(query?: { query?: string; category?: string; marketplace?: string }): Promise<{ agents: MarketAgent[]; categories: MarketAgentCategory[] }>;
-      "agents.template"(id: string): Promise<MarketAgentTemplate>;
+      "agents.template"(id: string, version?: 2): Promise<MarketAgentTemplate>;
       // Marketplace › Apps: the person's Composio apps, through the computer's Composio tool and its sign-in
       /** `fresh`: asks the catalog's server now (a person asked for the list again); a failure is thrown. */
       "composio.catalog"(options?: { fresh?: boolean }): Promise<ComposioCatalog>;
@@ -1264,6 +1878,10 @@ declare global {
       resetPhoneRelay(): Promise<PhoneLink>;
       /** Asks macOS for a permission the screen needs, and opens the page of System Settings where it is switched on. */
       requestScreenPermission(kind: "screenRecording" | "accessibility"): Promise<PhoneLink>;
+      /** Bundled CUA Driver availability and OS permission status for native computer use on this computer. */
+      computerUseStatus(): Promise<ComputerUseStatus>;
+      /** Asks macOS for Accessibility or Screen Recording for native computer use and opens System Settings. */
+      requestComputerUsePermission(kind: "accessibility" | "screenRecording"): Promise<ComputerUseStatus>;
       /** Opens the page of System Settings where macOS lets Botkins use the local network. */
       allowLocalNetwork(): Promise<PhoneLink>;
       // iMessage and Mail tools for bots (Settings › MCP servers › On this Mac). Only this window can make these calls.
@@ -1363,14 +1981,34 @@ declare global {
       nodeSetup(input?: { name?: string }): Promise<NodeHostState>;
       nodeRename(name: string): Promise<NodeHostState>;
       nodePause(paused: boolean): Promise<NodeHostState>;
+      nodeSetWholeComputer(enabled: boolean): Promise<NodeHostState>;
+      nodeSetExecMode(mode: "deny" | "allowlist" | "ask" | "full"): Promise<NodeHostState>;
+      nodeAddAllowlistRule(rule: { pattern: string; botId?: string }): Promise<NodeHostState>;
+      nodeRemoveAllowlistRule(ruleId?: string | null): Promise<NodeHostState>;
+      nodeAuditLog(limit?: number): Promise<NodeHostAuditEntry[]>;
       nodeShareProject(projectId: string, shared: boolean): Promise<NodeHostState>;
       nodeRevokeGrant(grantId?: string | null): Promise<NodeHostState>;
       nodeDisconnect(): Promise<NodeHostState>;
+      nodeConvertInspect(): Promise<NodeConversionInspect>;
+      nodeConvertPlan(input?: Record<string, unknown>): Promise<NodeConversionPlan>;
+      nodeConvertRun(input?: Record<string, unknown>): Promise<{ job: NodeConversionJob; nodeHost: NodeHostState }>;
+      nodeConvertStatus(): Promise<NodeHostState & { jobs: NodeConversionJob[] }>;
+      nodeConvertUndo(input?: { snapshotId?: string }): Promise<NodeConversionUndoResult>;
+      nodeRemoteStatus(hostId: string): Promise<{ hostId: string; hostName: string; nodeHost: NodeHostState }>;
+      nodeRemoteControl(
+        hostId: string,
+        action: string,
+        params?: Record<string, unknown>,
+      ): Promise<{ hostId: string; hostName: string; action: string; nodeHost: NodeHostState }>;
       /** Each connected provider's plan and limits. `refresh` reads every provider again first. */
       providerUsage(options?: { refresh?: boolean }): Promise<ProviderUsage[]>;
       /** A read that nobody waited for has come in: ask again. */
       onProviderUsage(fn: () => void): () => void;
       exportUsage(days: number): Promise<boolean>;
+      "claudeArtifacts.status"(refresh?: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setModel"(model: "haiku" | "sonnet" | "opus"): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.setBotApproval"(botId: string, allowed: boolean): Promise<ClaudeArtifactsStatus>;
+      "claudeArtifacts.revokeBotApproval"(botId: string): Promise<ClaudeArtifactsStatus>;
       /** A notification click asks to open a chat. */
       onOpenChat(fn: (chatId: string) => void): () => void;
       onOpenSettings(fn: (tab: string) => void): () => void;
@@ -1437,23 +2075,69 @@ export type Credential = {
 // Saved credentials (the phone link's store, desktop/link/credentials.mjs), shown in Settings ›
 // Credentials and offered where a bot asks for a secret. Not the MCP vault above. Never a value.
 export type CredentialSource = "vault" | "onepassword" | "bitwarden" | "protonpass";
-export type CredentialKind = "api-key" | "login" | "note";
+export type CredentialKind = "api-key" | "login" | "note" | "totp";
+export type CredentialGrantLevel = "ask" | "today" | "always" | "deny";
+export type CredentialGrant = {
+  id: string;
+  botId: string;
+  botName?: string;
+  credentialId: string;
+  credentialName?: string;
+  destination: string;
+  destinationLabel?: string;
+  operation: string;
+  level: CredentialGrantLevel;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+  lastUsedAt?: number | null;
+};
+export type CredentialAuditEntry = {
+  id: string;
+  at: number;
+  botId: string;
+  botName?: string;
+  credentialId?: string;
+  credentialName?: string;
+  source?: string;
+  destination?: string;
+  operation: string;
+  outcome: string;
+  grantLevel?: string;
+  reason?: string;
+};
 export type SavedCredential = {
   id: string;
   name: string;
   kind: CredentialKind;
   username?: string;
   website?: string;
+  aliases?: string[];
   notes?: string;
   /** "vault": typed in and kept encrypted on this computer. Otherwise the password manager it is read from each time. */
   source: CredentialSource;
   /** For a linked one: what is read, as text ("Work / GitHub / token"). Never the value. */
   reference?: string;
+  /** True when this entry has an associated TOTP secret for 2FA code generation. */
+  hasTotp?: boolean;
+  /** True when this entry was explicitly copied into the Botkins vault from a password manager. */
+  copied?: boolean;
+  copiedFrom?: { manager: string; reference: string };
   createdAt: number;
   updatedAt: number;
 };
 /** `value: null` (or none) keeps the saved value. */
-export type SavedCredentialInput = { id?: string; name: string; kind?: CredentialKind; username?: string; website?: string; notes?: string; value?: string | null };
+export type SavedCredentialInput = {
+  id?: string;
+  name: string;
+  kind?: CredentialKind;
+  username?: string;
+  website?: string;
+  aliases?: string[];
+  notes?: string;
+  value?: string | null;
+  totpSecret?: string | null;
+};
 export type PasswordManagerId = Exclude<CredentialSource, "vault">;
 export type PasswordManagerStatus = ProtonStatusFields & {
   id: PasswordManagerId;
@@ -1574,7 +2258,7 @@ export type MarketAgent = {
   starter?: boolean;
 };
 export type MarketAgentCategory = { id: string; name: string; count: number };
-export type MarketAgentTemplate = MarketAgent & { instructions: string };
+export type MarketAgentTemplate = MarketAgent & { instructions: string; bundle?: AgentTemplateBundle };
 
 /** The public list of apps Composio connects, as the computer read it. */
 export type ComposioToolkit = { slug: string; name: string; description: string; logo: string | null; categories: string[]; noAuth: boolean };
@@ -1741,6 +2425,8 @@ export type Capability = {
   command: string;
   source: string;
   description: string;
+  /** How a Tool is offered to the model: directly in its tool schemas, or indirectly (e.g. codemode/tool commands). */
+  exposure?: "direct" | "indirect";
 };
 export type Catalog = {
   choices: Capability[];
@@ -2054,6 +2740,25 @@ export type MacToolsStatus = {
   permissions: { fullDisk?: boolean; messagesAutomation?: boolean; mailAutomation?: boolean };
 };
 
+export type ComputerUseStatus = {
+  enabled: boolean;
+  bundled: boolean;
+  binarySource: string | null;
+  version: string;
+  license: string;
+  platform: string;
+  supported: boolean;
+  session: string;
+  limited?: boolean;
+  ready: boolean;
+  checkedWith?: string;
+  permissions: {
+    accessibility: boolean;
+    screenRecording: boolean;
+  };
+  notes: string[];
+};
+
 export type Preferences = {
   fastMode?: FastMode;
   model: ModelChoice;
@@ -2076,6 +2781,8 @@ export type Preferences = {
   linkPreviews?: boolean;
   /** Speak each new reply aloud in the open chat. */
   readAloud?: boolean;
+  /** Show routine-owned chats in the chat list (off by default). */
+  showRoutineChats?: boolean;
   /** The person finished the welcome screen. */
   onboarded?: boolean;
   /** A new workspace has no default model until a provider is connected (desktop/workspace.mjs firstDefaultModel). */
@@ -2086,6 +2793,8 @@ export type Preferences = {
   notifications: NotificationSettings;
   /** On (the default): every bot can use every project. Off: each bot's grant applies. */
   access?: { allBots: boolean };
+  /** Off by default: allows owner-chat bots (and approved node jobs) to inspect and act on native apps via bundled CUA Driver. */
+  computerUse?: boolean;
   /** iMessage and Mail as bot tools, on a Mac. Only the app's own window changes it (setMacTool); a phone can read it to say "set up on your Mac". */
   macTools?: MacToolLevels;
   /**
@@ -2095,6 +2804,8 @@ export type Preferences = {
    * Set either field with setPreferences({ sidebar: { order } }) or ({ sidebar: { collapsed } }).
    */
   sidebar?: { order: string[]; collapsed: boolean; picked?: boolean };
+  /** Model used by headless Claude Code artifact sub-runs. */
+  claudeArtifactModel?: "haiku" | "sonnet" | "opus";
   /**
    * What runs a turn around the model (desktop/harness). "copilot": one harness, the Copilot
    * runtime, runs every chat it can, and the model's own plan answers (GitHub Copilot, ChatGPT,
@@ -2119,7 +2830,15 @@ export type Preferences = {
   autoSummarize?: number;
   /** Settings › Experimental › Proactive agent: the computer's switch (desktop/proactive.mjs). Each bot's own is `State.proactive`. Missing on an older computer. */
   proactive?: ProactiveSettings;
+  /** Task Board tasks that run at once on the computer, 1 to 16, when the person set it (desktop/task-limits.mjs). */
+  tasksMax?: number;
+  /** Task Board tasks that one bot runs at once, 1 to 8, when the person set it. */
+  tasksPerBot?: number;
+  /** Opt-in migration: hand existing bot-created tasks in Review to their creator bot. */
+  tasksCreatorReviewExisting?: boolean;
 };
+/** The Task Board's limits in force, and each one's value without the person's setting (the environment's, else the default). Missing on an older computer. */
+export type TaskLimits = { tasksMax: number; tasksPerBot: number; defaults: { tasksMax: number; tasksPerBot: number } };
 export type ProactiveWatch = "runs" | "tasks" | "requests" | "context";
 /** The computer's switch for the Proactive agent. Off pauses every bot's agent without forgetting its settings. */
 export type ProactiveSettings = { enabled: boolean };
@@ -2209,8 +2928,8 @@ export type FormField = {
   maxLength?: number;
   format?: string;
 };
-/** A cross-host permission is scoped to the source and target bots and hosts shown on the card. */
-export type DispatchAction = "approve" | "today" | "remember" | "deny";
+/** A cross-host or credential permission is scoped to the bot, credential and destination shown on the card. */
+export type DispatchAction = "approve" | "today" | "remember" | "deny" | "deny_always";
 export type RequestAnswer = {
   action: DispatchAction | "cancel" | "answer" | "accept";
   /** A saved credential's reference instead of text: the computer puts the value in. */
@@ -2221,6 +2940,14 @@ export type RequestAnswer = {
 };
 export type AgentRequest = {
   dispatch?: true;
+  /** True on a bot credential-use approval card (scoped to bot, credential, destination and operation). */
+  credentialGrant?: true;
+  credentialName?: string;
+  credentialSource?: string;
+  destination?: string;
+  artifactGrant?: true;
+  rememberScope?: "bot";
+  botName?: string;
   /** Its words (a script command's whole script) are read in the app: never answered from a notification, a card or a gadget. */
   review?: true;
   nodeJob?: true;
@@ -2295,6 +3022,46 @@ export type Project = {
   lastUsed: number;
   createdAt: number;
 };
+/** A job: a prompt that started its own chat, in a git worktree of its own or in the checkout. */
+export type Job = {
+  prompt?: string;
+  where: "worktree" | "checkout";
+  state: "open" | "brought-in" | "removed";
+  createdAt: number;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  setup?: "waiting" | "running" | "done" | "failed" | "skipped" | "none";
+  setupError?: string;
+  mergedSha?: string;
+  carryFailed?: true;
+};
+export type JobStart = { botIds: string[]; prompt: string; where?: "worktree" | "checkout"; folder?: string; mode?: ChatMode; carry?: boolean };
+export type JobSetup =
+  | { repo: false; folder?: string }
+  | { repo: true; folder: string; root: string; base: string | null; sha: string | null; short: string | null; changed: number; setup: string[]; branch: string; file: boolean; hash: string; error?: string; approved: boolean };
+export type JobStatus = {
+  where: "worktree" | "checkout";
+  state: Job["state"];
+  working: boolean;
+  canBringIn: boolean;
+  reason: string;
+  branch?: string;
+  base?: string;
+  baseSha?: string;
+  exists?: boolean;
+  ahead?: number;
+  behind?: number;
+  uncommitted?: number;
+  files?: { path: string; added: number; removed: number; new?: true }[];
+  added?: number;
+  removed?: number;
+  conflicts?: string[];
+  conflictsUnknown?: true;
+  checkout?: string | null;
+  checkoutChanged?: number;
+  mergedSha?: string;
+};
 export type ProjectInput = { name?: string; description?: string; color?: ProjectColor | null; folder?: string };
 export type BotAccessGrant = { all: boolean; projects: string[] };
 /** How freely a coding chat's bot acts: ask before risky steps, plan first without changing code, or run without asking. */
@@ -2306,7 +3073,22 @@ export type ProjectChanges =
 
 /** An HTML app a bot showed in a turn, as its card in the chat. */
 export type AppCard = { id: string; title: string; description: string; sendsAnswers: boolean };
-
+/** A Claude artifact published or updated in a turn, as its link card in the chat. */
+export type ClaudeArtifactCard = { id: string; title: string; url: string; size?: number; action?: "publish" | "update"; time: number; private?: boolean };
+/** Availability, model, and standing per-bot grants for Claude artifacts. */
+export type ClaudeArtifactsStatus = {
+  available: boolean;
+  installed: boolean;
+  signedIn: boolean;
+  subscription: boolean;
+  version?: string;
+  account?: string;
+  plan?: string;
+  reason?: string;
+  model: "haiku" | "sonnet" | "opus";
+  models: ("haiku" | "sonnet" | "opus")[];
+  grants: { botId: string; botName: string; grantedAt: number }[];
+};
 /**
  * A bot asked the person to connect a Composio app (desktop/connects.mjs). The card holds only the
  * app and where it stands; the page to sign in on is given to the owner who presses Connect.
@@ -2335,6 +3117,15 @@ export type McpAppView = {
 
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+export type TaskReviewMode = "person" | "creator" | "auto";
+export type TaskHistoryEntry = {
+  at: number;
+  by: string;
+  byName?: string;
+  from: TaskStatus | "archived";
+  to: TaskStatus | "archived";
+  note?: string;
+};
 export type BotTask = {
   id: string;
   title: string;
@@ -2343,6 +3134,10 @@ export type BotTask = {
   priority: TaskPriority;
   status: TaskStatus | "archived";
   createdBy: string;
+  /** Chat where a bot created this task via task_create, for linking back. */
+  createdChatId?: string;
+  review?: TaskReviewMode;
+  reviewerBotId?: string;
   createdAt: number;
   updatedAt: number;
   chatId?: string;
@@ -2351,12 +3146,21 @@ export type BotTask = {
   hostId?: string;
   hostName?: string;
   problem?: string;
+  pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
+  history?: TaskHistoryEntry[];
 };
-export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready" };
+export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 
 export type LinkPreview = { url: string; title: string; description: string; site: string; image?: string };
 
+/** Content copied to the new bot by a computer with agent-template-bundles-v1. */
+export type AgentTemplateBundle = {
+  skills?: { name: string; description: string; instructions: string }[];
+  routines?: { name: string; instructions: string; cadence: Extract<Cadence, { kind: "daily" | "weekdays" | "weekly" }> }[];
+};
+
 export type BotTemplate = {
+  bundle?: AgentTemplateBundle;
   id: string;
   name: string;
   role: string;

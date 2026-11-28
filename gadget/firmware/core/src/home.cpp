@@ -433,6 +433,7 @@ const char kChat[] = ICON("<path d=\"M4 5h16v11H9l-5 4V5z\"/><path d=\"M12 8v5M9
 const char kClose[] = ICON("<path d=\"M7 7l10 10M17 7L7 17\"/>");
 const char kMinus[] = ICON("<path d=\"M6 12h12\"/>");
 const char kPlus[] = ICON("<path d=\"M12 6v12M6 12h12\"/>");
+const char kWifi[] = ICON("<path d=\"M5 12.5a10 10 0 0 1 14 0\"/><path d=\"M2 9a15 15 0 0 1 20 0\"/><path d=\"M8.5 16a5 5 0 0 1 7 0\"/><path d=\"M12 19.5h.01\"/>");
 #undef ICON
 
 struct Button {
@@ -446,6 +447,8 @@ constexpr Button kButtons[] = {
     {QuickAction::NewChat, 159, 288, 52, 60},    {QuickAction::Close, 307, 288, 52, 60},
     {QuickAction::VolumeDown, 143, 382, 28, 36}, {QuickAction::VolumeUp, 323, 382, 28, 36},
 };
+// The Wi-Fi button (QuickOptions::wifi): small, in the gap at the centre, clear of the four around it.
+constexpr Button kWifiButton = {QuickAction::Wifi, 233, 222, 22, 27};
 // The volume dial: three quarters of a turn from the lower left, clockwise, open at the foot.
 constexpr float kDialStart = 0.625f, kDialTurns = 0.75f;
 
@@ -461,7 +464,7 @@ void round_button(Frame& f, const Button& b, Rgb border) {
 
 }  // namespace
 
-void draw_quick(Canvas& canvas, const View& view, Faces& faces) {
+void draw_quick(Canvas& canvas, const View& view, Faces& faces, const QuickOptions& options) {
   canvas.clear(kBlack);
   Frame f(canvas);
   const View::Settings& s = view.settings;
@@ -484,6 +487,10 @@ void draw_quick(Canvas& canvas, const View& view, Faces& faces) {
   cell(kButtons[1], kSun, std::to_string(s.brightness) + "%", kCream, kHairline);
   cell(kButtons[2], kChat, "New chat", kCream, kHairline);
   cell(kButtons[3], kClose, "Close", kCream, kHairline);
+  if (options.wifi) {
+    round_button(f, kWifiButton, kHairline);
+    icon(f, faces, kWifi, kWifiButton.cx, kWifiButton.cy + 1, 24, kCream);
+  }
 
   // Volume: − and + either side of the level.
   const Button& down = kButtons[4];
@@ -499,11 +506,15 @@ void draw_quick(Canvas& canvas, const View& view, Faces& faces) {
   canvas.text(f.x(left + 30), canvas.baseline(f.y(down.cy) - canvas.line_height(number) / 2, number), level.data(), level.size(), number, kCream);
 }
 
-QuickAction quick_hit(int x, int y, int width, int height) {
+QuickAction quick_hit(int x, int y, int width, int height, const QuickOptions& options) {
   const float s = (float)std::min(width, height) / kSize;
   if (s <= 0) return QuickAction::None;
   const float ox = (width - kSize * s) / 2, oy = (height - kSize * s) / 2;
   const float dx0 = ((float)x + 0.5f - ox) / s, dy0 = ((float)y + 0.5f - oy) / s;
+  if (options.wifi) {
+    const float dx = dx0 - kWifiButton.cx, dy = dy0 - kWifiButton.cy;
+    if (dx * dx + dy * dy <= kWifiButton.reach * kWifiButton.reach) return QuickAction::Wifi;
+  }
   for (const Button& b : kButtons) {
     const float dx = dx0 - b.cx, dy = dy0 - b.cy;
     const float reach = std::max(b.reach, 24 / s);  // never under 48 pixels across, on a small screen too

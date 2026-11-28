@@ -101,6 +101,13 @@ Rules the tools keep:
 - A website's address is checked before anything is kept: http or https, no user name or password in it, not on the local network (a name is looked up first). This computer's own addresses (localhost) are allowed, for a site the bot is building.
 - `screen` holds no setting. No tool reads or changes who may see or use the screen.
 
+## Secure form fill (`page_fill`)
+
+In a private owner chat, `request_secure_input` with `operation: "page_fill"` and `use_secure_input` can fill login forms without exposing secrets to the model, tool arguments, chat transcript, or logs:
+
+- **Connected browser extension tab:** pass optional `target: { browser, tabId }` (matching `browser_*` tools), or omit `target` when no screen browser is open and exactly one connected extension tab matches the requested URL's origin. Inspect visible input `name` (or `id` fallback, including dotted names such as `LoginModel.Email`) with `browser_snapshot`. The secure prompt shows the destination origin, browser label, and tab title so the person can pick a saved credential, a password-manager item, or type a value. `use_secure_input` resolves the values on the host, delivers them over the sealed Link channel as an internal `secure.fill` message (never via `browser_eval`, `browser_type`, or CDP), and returns only `{ applied: true, filled, missing }`. The extension re-checks the tab's current origin, restricts fills to top-level or same-origin frames, refuses password values into non-password inputs, supports optional `submit: true`, zeroes values after use, and marks the tab secret-bearing until navigation/reload/close (or SPA removal/clearing of filled secret inputs) so `browser_eval`, `browser_cdp`, and typing/selecting into filled secret inputs are refused while snapshots redact all `password`/`secret`/`code` fields.
+- **Screen browser / side pane:** when a screen browser (`browser_form`) is open for the chat, or on desktop with `side_pane_web`, omitting `target` fills that page as before.
+
 ## Not there
 
-The desktop app has no browser control (a bot driving a browser), so there is no panel for it and no tool pretends to offer one. The website viewer is for the person to look at a page; a bot can't read or click in it.
+The desktop app has no built-in browser automation panel; interactive browser automation runs through a connected Botkins Chromium browser extension (`browser_*` tools) or the Linux screen browser (`browser_form`). The website viewer (`side_pane_web`) is for the person to look at a page; a bot can't read or click in it.

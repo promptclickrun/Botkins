@@ -2,7 +2,7 @@
 // and the line for a turn that ended without finishing. Which rows there are, in which order, is turn.ts.
 import * as Clipboard from "expo-clipboard";
 import { router } from "expo-router";
-import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, FileText, FolderKanban, LayoutGrid, Square, TimerOff, Volume2 } from "lucide-react-native";
+import { BookOpen, ChevronRight, CircleAlert, CirclePause, CornerDownRight, ExternalLink, FileText, FolderKanban, LayoutGrid, Sparkles, Square, TimerOff, Volume2 } from "lucide-react-native";
 import { memo, type ComponentRef, type ReactNode, type RefObject } from "react";
 import { ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, useTapGesture } from "react-native-gesture-handler";
@@ -22,6 +22,9 @@ import { boardKindLabel, splitBoardQuote } from "./compose";
 import { AlertActions } from "@/features/bots/AlertActions";
 import { ConnectCard } from "./ConnectCard";
 import { McpAppCard } from "./McpAppCard";
+import { WorkflowActionCard } from "./WorkflowActionCard";
+import { IncomingAgentRail } from "./AgentMessageRail";
+import { answerReceiptLabel, isAgentMessage, isAnswerReceipt } from "./agentRailModel";
 import { useChatPeople } from "./ChatPeopleLook";
 import { authorOf, personTag, sideOf } from "./chatSides";
 import { myself } from "./people";
@@ -30,8 +33,8 @@ import { accentOf, type PersonLook } from "./personLook";
 import { DOUBLE_TAP_MS, select, selectionTouch, useSelecting } from "./selecting";
 import { answerText, type Ending, type Item } from "./turn";
 import { FACE_INDENT, mostIcon } from "./WorkRows";
+import { openLink } from "@/ui/LinkHold";
 import { Blocks, BotAvatar, Button, Chip, IconButton, Markdown, type PathLinks, radius, SelectableText, space, T, Tap, TextHoldMenu, useTheme } from "@/ui";
-
 export type { Item };
 
 /** What a message's menu can do beyond copying and selecting: quote it in a reply, and fork the chat from it. */
@@ -107,6 +110,36 @@ function Replies({ replies, onSend }: { replies: string[]; onSend: (text: string
 
 function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boolean; rich: boolean; onSend: (text: string) => void; onDraft?: (text: string) => void }) {
   const { colors } = useTheme();
+  // Published Claude artifact link cards show whether rich cards are on or off.
+  const claudeArtifacts = run.claudeArtifacts?.map((artifact) => (
+    <View
+      key={artifact.id}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.md,
+        backgroundColor: colors.surface,
+        borderRadius: radius.lg,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: colors.line,
+        padding: space.md,
+      }}
+    >
+      <View style={{ width: 36, height: 36, borderRadius: radius.sm, backgroundColor: colors.sunken, alignItems: "center", justifyContent: "center" }}>
+        <Sparkles size={18} color={colors.accent} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <T variant="callout" weight="600" numberOfLines={1}>
+          {artifact.title}
+        </T>
+        <T variant="footnote" color="muted" numberOfLines={1}>
+          {(artifact.action === "update" ? "Updated Claude artifact" : "Claude artifact") +
+            (artifact.private ? " · Private on claude.ai" : " · On claude.ai")}
+        </T>
+      </View>
+      <Button title="Open" icon={ExternalLink} variant="secondary" size="sm" onPress={() => openLink(artifact.url)} accessibilityLabel={"Open " + artifact.title + " on claude.ai"} />
+    </View>
+  ));
   // A Connect card is an action, not a picture: it shows with rich cards off too.
   const connects = run.connects?.map((card) => <ConnectCard key={card.id} chatId={run.chatId} card={card} />);
   // An MCP App's view; with rich cards off, its saved summary.
@@ -114,6 +147,7 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
   if (!rich)
     return (
       <>
+        {claudeArtifacts}
         {connects}
         {views}
         {run.cards?.map((card) => (
@@ -128,6 +162,7 @@ function Cards({ run, latest, rich, onSend, onDraft }: { run: Run; latest: boole
     );
   return (
     <>
+      {claudeArtifacts}
       {connects}
       {views}
       {run.cards?.map((card) => (
@@ -363,7 +398,7 @@ function Reply({ message, index, id, botId, markdown, actions, paths, parts }: {
   );
 }
 
-export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, actions, replyRef, continues = false }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; /** It follows a message by the same person: no name or badge again. */ continues?: boolean; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; actions?: MessageActions }) {
+export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, onSend, onDraft, onOpenChat, actions, replyRef, continues = false }: { replyRef?: RefObject<ComponentRef<typeof View> | null>; item: Extract<Item, { kind: "message" }>; chatId: string; group: boolean; bots: Map<string, Bot>; /** It follows a message by the same person: no name or badge again. */ continues?: boolean; onSend: (text: string) => void; /** Text a custom view hands over, for the message box. */ onDraft?: (text: string) => void; onOpenChat?: (chatId: string) => void; actions?: MessageActions }) {
   const rich = useChatPrefs((prefs) => prefs.richCards);
   const markdown = useChatPrefs((prefs) => prefs.markdown);
   const timestamps = useChatPrefs((prefs) => prefs.timestamps);
@@ -380,6 +415,19 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   // being written is left alone until it ends, so half a path is never asked about.
   const links = useMessageLinks(chatId, message.text ?? "", message.role !== "command" && !(latest && run?.status === "Working"));
   if (message.role === "user") {
+    if (isAgentMessage(message)) {
+      return <IncomingAgentRail message={message} bots={bots} onOpenChat={onOpenChat} />;
+    }
+    if (item.receipt || isAnswerReceipt(message)) {
+      const label = answerReceiptLabel(message);
+      return (
+        <View style={{ alignSelf: "flex-end", paddingVertical: 2, paddingHorizontal: 4 }} accessible accessibilityLabel={label}>
+          <T variant="caption" color="muted" numberOfLines={2} style={{ textAlign: "right" }}>
+            {label}
+          </T>
+        </View>
+      );
+    }
     const side = sideOf(message, me);
     const author = authorOf(message);
     const person = side === "left" ? (people.get(author) ?? { id: author, name: personTag(message, undefined, me, people) }) : undefined;
@@ -394,7 +442,9 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
   return (
     <View ref={replyRef} collapsable={replyRef ? false : undefined} style={{ gap: space.sm }}>
       {group && <Speaker bot={message.botId ? bots.get(message.botId) : undefined} />}
-      {message.voiceCaption ? (
+      {message.actionCard ? (
+        <WorkflowActionCard chatId={chatId} card={message.actionCard} rich={rich} onOpenChat={onOpenChat} />
+      ) : message.voiceCaption ? (
         <Reply message={{ ...message, text: message.voiceCaption }} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} />
       ) : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
@@ -402,13 +452,13 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
       <Reactions message={message} />
       {/* A proactive alert: what the bot offers to do, and "Not now". */}
       {!!message.alert && !!speaker && <AlertActions botId={speaker} alert={message.alert} chatId={chatId} />}
-      {!!message.text.trim() && (
+      {!message.actionCard && !!message.text.trim() && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           <ReadAloud id={chatId + ":" + item.key} text={message.text} botId={speaker} />
           {timestamps && <Stamp time={message.time} align="flex-start" />}
         </View>
       )}
-      {!message.text.trim() && timestamps && <Stamp time={message.time} align="flex-start" />}
+      {(message.actionCard || !message.text.trim()) && timestamps && <Stamp time={message.time} align="flex-start" />}
       {end && run && <Cards run={run} latest={latest} rich={rich} onSend={onSend} onDraft={onDraft} />}
     </View>
   );

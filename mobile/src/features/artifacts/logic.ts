@@ -98,7 +98,7 @@ export function sizeWords(bytes: number | null | undefined): string {
  * How an artifact came to be, in one word, as both apps say it. The same file can be listed twice
  * (a bot wrote it, and later sent it): the word tells the rows apart.
  */
-export const SOURCE_WORDS: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported" };
+export const SOURCE_WORDS: Record<Artifact["source"], string> = { tool: "Written", media: "Sent", upload: "Uploaded", export: "Exported", claude: "Claude artifact" };
 export const sourceWord = (source: Artifact["source"] | undefined): string => (source && Object.hasOwn(SOURCE_WORDS, source) ? SOURCE_WORDS[source] : "");
 
 /**
@@ -312,18 +312,31 @@ export class PathResolver {
     }
   }
 
-  /** The index changed: paths the computer had nothing for may have something now. */
+  /**
+   * The index changed: paths the computer had nothing for may have something now, so they are asked
+   * again. A message asks only when its paths change, so without this a picture recorded just after
+   * its reply arrived stayed a line of text until the app restarted.
+   */
   forgetMissing() {
+    let again = false;
     for (const [chatId, held] of this.chats) {
       const known: Record<string, Artifact | null> = {};
       let dropped = false;
       for (const [path, item] of Object.entries(held.known)) {
         if (item) known[path] = item;
-        else dropped = true;
+        else {
+          dropped = true;
+          held.pending.add(path);
+        }
       }
       if (!dropped) continue;
+      again = true;
       held.known = known;
       this.onKnown(chatId, known);
+    }
+    if (again && !this.scheduled) {
+      this.scheduled = true;
+      this.schedule(() => this.flush());
     }
   }
 

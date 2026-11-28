@@ -5,17 +5,19 @@
 // `prompt`): the bot then takes the run's turn with the script's output. A routine's own model is its
 // chat's (`chat.model`); without one it uses the Default routines model (`settings.routineModel`).
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { launcherOn } from "./terminal/reach.mjs";
 import { defineTool } from "./providers/provider.mjs";
-import { askToSchedule, scriptInvocation } from "./script-commands.mjs";
+import { askToSchedule, scriptInvocation, shownScript } from "./script-commands.mjs";
 import { shownText } from "./shown-text.mjs";
 import { validateSelection } from "./preferences.mjs";
-import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH } from "./routine-script.mjs";
+import { runScript, scriptEnding, sleepsAgent, SCRIPT_LENGTH, SCRIPT_OUTPUT, SCRIPT_TIMEOUT_MS } from "./routine-script.mjs";
 import { CronExpressionParser } from "cron-parser";
 import { nextTime, textField } from "./panels.mjs";
 import { BOARD_KINDS, GOAL_CATEGORIES } from "./board.mjs";
 import { spaceShare } from "./link/team.mjs";
+import { isRoutineChat } from "./link/routine-chat.mjs";
 import { isGroup } from "./groups.mjs";
 import {
   ROUTINE_NOTIFY_TARGETS,
@@ -175,6 +177,35 @@ export function scriptField(value) {
 
 /** Whether a routine is a script routine with a follow-up action that has its instructions. */
 export const followsUp = (entry) => !!entry?.script && entry.followUp === true && !!entry.prompt;
+
+/**
+ * The folder a routine's script keeps what it remembers between runs in ($BOTKINS_ROUTINE_STATE), such as what it
+ * already reported. It is the routine's own, outside the bot's folder, made when the script runs and removed with the routine.
+ */
+export const routineStateDir = (ws, chatId) => join(ws.dir, "routine-state", chatId);
+
+const shellQuoted = (text) => "'" + String(text).replaceAll("'", "'\\''") + "'";
+
+/** What a routine's script finds in its environment besides the person's own, and BOTKINS_ROUTINE=1 (routine-script.mjs). */
+export function routineScriptEnv(ws, chat, entry) {
+  const bot = ws.state.bots.find((b) => b.id === chat.botId);
+  return {
+    BOTKINS_ROUTINE_ID: chat.id,
+    BOTKINS_ROUTINE_NAME: entry.name,
+    BOTKINS_ROUTINE_STATE: routineStateDir(ws, chat.id),
+    BOTKINS_BOT_ID: chat.botId,
+    ...(bot?.name && { BOTKINS_BOT_NAME: bot.name }),
+  };
+}
+
+/** The contract a routine's script runs under, as a person and a bot are told it. */
+export const SCRIPT_CONTRACT =
+  "The script runs in the person's login shell (PowerShell on Windows) on this computer, in the bot's own folder, with no model, for up to " +
+  Math.round(SCRIPT_TIMEOUT_MS / 60000) + " minutes; its output (standard output and error, the last " + SCRIPT_OUTPUT.toLocaleString("en-US") + " characters) is kept. " +
+  "It gets BOTKINS_ROUTINE=1, BOTKINS_ROUTINE_ID, BOTKINS_ROUTINE_NAME, BOTKINS_BOT_ID and BOTKINS_ROUTINE_STATE (a folder of its own that is kept between runs, for what it already reported), " +
+  "and can read Botkins as JSON with `botkins tasks list --json`, `botkins routines runs <routine> --json` and `botkins chats messages <chat> --json`. " +
+  "When it exits 0 and its last line is {\"wakeAgent\": false}, the run ends there: no model turn, no message, no notification. " +
+  "Otherwise, with followUp, the bot takes a turn with the instructions and the script's whole output as its input; without followUp, the output is the result.";
 
 /** The person a routine belongs to: the team member who made it, else the computer's owner. */
 const personOf = (createdBy) => createdBy ?? "owner";
@@ -412,30 +443,38 @@ export class Routines {
    */
   create(data, now = Date.now(), createdBy, opts = {}) {
     this.ws.bot(data.botId);
+    const chat = this.buildChat(data, now, createdBy, opts);
+    this.ws.state.chats.unshift(chat);
+    this.ws.save();
+    return chat.id;
+  }
+  /** Prepare a routine with its private chat before either becomes visible to the scheduler. */
+  buildChat(data, now, createdBy, opts) {
     // A script runs on this computer, so only its owner writes one.
     if (createdBy && data.script != null) throw new Error("Only the computer's owner can add a script to a routine.");
+    if (createdBy && data.allowReadyTasks === true) throw new Error("Only the computer's owner can let a routine create Ready tasks.");
     const fields = this.fields(data, now);
     const deliver = deliveryField(data.deliver, this.ws, data.botId, personOf(createdBy));
     const notifyChange = this.notifyChange(data.botId, data, personOf(createdBy), opts);
-    const chatId = this.ws.createChat(data.botId, "Routine · " + fields.name, undefined, createdBy);
-    const chat = this.ws.chat(chatId);
-    const id = (chat.lastScheduleId ?? 0) + 1;
-    chat.lastScheduleId = id;
+    const chat = this.ws.buildChat(data.botId, "Routine · " + fields.name, undefined, createdBy);
+    chat.lastScheduleId = 1;
     chat.schedules = [
       {
-        id,
+        id: 1,
         routine: true,
-        enabled: true,
+        // A template's routine starts paused, unless the template marks it active and the person left it on.
+        enabled: !opts.fromTemplate || opts.active === true,
+        ...(opts.fromTemplate && { fromTemplate: true }),
         createdAt: now,
         ...fields,
         ...(createdBy && { createdBy }),
         ...(deliver && { deliver }),
         ...(notifyChange.notify === false && { notify: false }),
         ...(notifyChange.notifyTargets && { notifyTargets: notifyChange.notifyTargets }),
+        ...(data.allowReadyTasks === true && { allowReadyTasks: true }),
       },
     ];
-    this.ws.save();
-    return chatId;
+    return chat;
   }
   update(chatId, data, now = Date.now(), actor = "owner", opts = {}) {
     const { chat, entry } = this.find(chatId);
@@ -443,10 +482,12 @@ export class Routines {
     // Whoever changes it, the result may only go to a chat of the routine's creator.
     const deliver = data.deliver === undefined ? undefined : (deliveryField(data.deliver, this.ws, chat.botId, personOf(entry.createdBy)) ?? null);
     const notifyChange = this.notifyChange(chat.botId, data, actor, opts);
+    if (actor !== "owner" && data.allowReadyTasks === true) throw new Error("Only the computer's owner can let a routine create Ready tasks.");
     // A change of destination, of notifying or of the model alone leaves the schedule as it is, so a finished one-time routine can still take it.
     if (["name", "prompt", "cadence", "timezone", "script", "followUp"].every((k) => data[k] === undefined)) {
       this.setDeliver(entry, deliver);
       this.setNotifyTargets(entry, notifyChange);
+      this.setAllowReadyTasks(entry, data.allowReadyTasks);
       this.ws.save();
       return entry;
     }
@@ -469,6 +510,7 @@ export class Routines {
     Object.assign(entry, fields);
     this.setDeliver(entry, deliver);
     this.setNotifyTargets(entry, notifyChange);
+    this.setAllowReadyTasks(entry, data.allowReadyTasks);
     delete entry.finishedAt;
     chat.title = "Routine · " + entry.name;
     this.ws.save();
@@ -494,6 +536,12 @@ export class Routines {
     if (change.notifyTargets) entry.notifyTargets = change.notifyTargets;
     else delete entry.notifyTargets;
   }
+  /** Whether this routine is allowed to create Ready tasks for bots (owner-approved opt-in). */
+  setAllowReadyTasks(entry, allow) {
+    if (allow === undefined) return;
+    if (allow === true) entry.allowReadyTasks = true;
+    else delete entry.allowReadyTasks;
+  }
   /** Pauses or resumes a routine or any chat schedule. */
   setEnabled(chatId, id, enabled, now = Date.now()) {
     const { entry } = id == null ? this.find(chatId) : this.schedule(chatId, id);
@@ -516,6 +564,7 @@ export class Routines {
     // change. Before the chat goes: the scheduler may look while it is being deleted.
     if (entry.proactive) this.ws.proactive.routineRemoved(chat);
     await this.ws.agents.deleteChat(chatId);
+    rmSync(routineStateDir(this.ws, chatId), { recursive: true, force: true });
   }
   removeSchedule(chatId, id) {
     const { chat } = this.schedule(chatId, id);
@@ -560,6 +609,7 @@ export class Routines {
         ...(entry.notify === false && { notify: false }),
         ...(notifyTargets && { notifyTargets }),
         ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+        ...(entry.allowReadyTasks === true && !createdBy && { allowReadyTasks: true }),
       },
       now,
       createdBy,
@@ -598,6 +648,7 @@ export class Routines {
         notifySummary: summarizeNotifyTargets(entry.notifyTargets, this.ws.notifyTargetsContext(chat.botId)),
       }),
       ...(entry.script && { script: entry.script, followUp: entry.followUp === true }),
+      ...(entry.allowReadyTasks === true && { allowReadyTasks: true }),
       // Kept by Botkins for the bot's Proactive agent: changed on the bot's profile, not here.
       ...(entry.proactive && { proactive: true }),
       // The routine's own model; without one it uses the Default routines model.
@@ -685,9 +736,12 @@ export class Routines {
     // Panel refreshes stay limited to their panel.
     if (run?.panelId) return [];
     const ws = this.ws;
-    const owned = (id) => {
+    const people = ws.turnPeople(chat, task);
+    const owns = (entry) => people.people.every((id) => id === "owner" || id === personOf(entry.createdBy));
+    const owned = (id, action = "manage") => {
       const found = this.find(String(id ?? ""));
-      if (found.chat.botId !== bot.id) throw new Error("Unknown routine for this bot");
+      if (found.chat.botId !== bot.id || !owns(found.entry)) throw new Error("Unknown routine for this bot");
+      people.needs(action);
       return found;
     };
     const tool = (name, description, properties, required, handler) =>
@@ -720,7 +774,8 @@ export class Routines {
           "Where the result goes. Omit it, or use {\"to\":\"routine\"}, to keep it in the routine's own chat. " +
           "{\"to\":\"chat\"} sends your reply to the person as a message in your chat with them: use it when they ask to be reminded or told something in the chat, e.g. \"remind me in our chat every morning\". " +
           "{\"to\":\"feed\"}, {\"to\":\"idea\"} and {\"to\":\"goal\"} post your reply to Today's Feed, Ideas or Goals; a goal may take a category (" + GOAL_CATEGORIES.join(", ") + "). " +
-          "chatId picks a particular chat of yours; leave it out for this chat (or your latest chat with the person when this one can't take it).",
+          "chatId picks a particular chat of yours; leave it out for this chat (or your latest chat with the person when this one can't take it). " +
+          "For a script routine, what is delivered is your follow-up reply, or the script's output without followUp; a run the script ends with {\"wakeAgent\": false} delivers nothing.",
         properties: { to: { type: "string", enum: DELIVER_TARGETS }, chatId: str, category: { type: "string", enum: GOAL_CATEGORIES } },
         required: ["to"],
         additionalProperties: false,
@@ -751,7 +806,7 @@ export class Routines {
     };
     /** A routine that invokes a script command: a card read in the app, and a yes (desktop/script-commands.mjs). Throws when nobody is there. */
     const approved = async (invocation, about) => {
-      if (run?.scheduleId != null || run?.taskId || run?.panelId) throw new Error("A routine that runs a script command can only be made or changed with the person there. Ask them to.");
+      if (run?.scheduleId != null || run?.taskId || run?.panelId || run?.workflowRunId) throw new Error("A routine that runs a script command can only be made or changed with the person there. Ask them to.");
       const yes = await askToSchedule(ws, { bot, chat, task, invocation, what: "Let a routine run the script command /" + invocation.name + "?", about });
       stillActive();
       return yes;
@@ -759,10 +814,48 @@ export class Routines {
     const whenWords = (a) => [a.cadence, a.time, a.days?.join(", "), a.date, a.cron, a.timezone].filter(Boolean).map((word) => shownText(String(word))).join(" ") || "as it is";
     const cadenceOf = (a) =>
       a.cadence ? { kind: a.cadence, time: a.time, days: a.days, date: a.date, cron: a.cron } : undefined;
+    const scriptProps = {
+      script: {
+        type: "string",
+        description:
+          "A shell script that runs on schedule with no model: use it when the check is deterministic (a status, a file, an API, a count). " + SCRIPT_CONTRACT +
+          " The person sees the whole script in an approval card before it is saved. On routine_update, null removes the script.",
+      },
+      followUp: {
+        type: "boolean",
+        description: "With a script: true makes you take a turn after a run the script did not end with {\"wakeAgent\": false}, with `instructions` and the script's output as your input (gather the facts in the script, write the message in the follow-up). false or left out: the script's output is the result.",
+      },
+    };
+    /** A script a bot proposes for a routine: a card with the whole script, when it runs and what follows, read in the app. Resolves true on a yes. */
+    const approveScript = async (fields, about) => {
+      if (people.people.some((person) => person !== "owner")) throw new Error("Only the computer's owner can add a script to a routine.");
+      if (run?.scheduleId != null || run?.taskId || run?.panelId || run?.workflowRunId) throw new Error("A routine's script can only be added or changed with the person there. Ask them to.");
+      const decision = await ws.interactions.request(chat, task, {
+        botId: bot.id,
+        kind: "permission",
+        // The script is only in the detail: it is read in the app, never answered from a notification, a card or a gadget.
+        review: true,
+        title: about.title,
+        detail: [
+          "This script runs on this computer, with your account's access, on the routine's schedule, with nobody watching. No model reads it or runs it.",
+          "",
+          "Routine: " + shownText(fields.name),
+          "When: " + describeCadence(fields.cadence) + " (" + fields.timezone + ")",
+          "Follow-up: " + (fields.followUp ? "on. Unless the script's last line is {\"wakeAgent\": false}, " + shownText(bot.name) + " then takes a turn with the script's output and these instructions: " + JSON.stringify(shownText(fields.prompt)) : "off. The script's output is the result."),
+          ...(about.lines ?? []),
+          "Runs in: " + shownText(bot.name) + "'s own folder, for up to " + Math.round(SCRIPT_TIMEOUT_MS / 60000) + " minutes. It keeps what it remembers in $BOTKINS_ROUTINE_STATE.",
+          "",
+          "Script:",
+          shownScript(fields.script),
+        ].join("\n"),
+      });
+      stillActive();
+      return decision.action === "approve";
+    };
     const id = { id: { type: "string", description: "Routine id from routine_list" } };
     const tools = [
-      tool("routine_list", "List your routines: scheduled tasks that run your instructions in their own chat.", {}, [], () =>
-        this.list(bot.id).map(({ chat, entry }) => this.view(chat, entry)),
+      tool("routine_list", "List your routines with their schedule, instructions, where results go, and for a script routine its script and followUp. A script routine runs its script with no model and wakes you only when the script says so.", {}, [], () =>
+        people.sees() ? this.list(bot.id).filter(({ entry }) => owns(entry)).map(({ chat, entry }) => this.view(chat, entry)) : [],
       ),
       tool(
         "routine_notify_targets",
@@ -819,27 +912,35 @@ export class Routines {
       tools.push(
         tool(
           "routine_create",
-          "Create a scheduled routine that runs `instructions` in its own chat, sends results to `deliver` (routine chat, this/another chat, Feed, Ideas, Goals, or none), and notifies unless `notify: false` or `notifyTargets` is set (use today_routine instead to silently refresh one fixed Today/space panel with failure-only alerts). " +
-            "Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" " +
-            "Confirm only relevant settings the person has not already specified (cadence/timezone, delivery destination, notification preference). " +
+          "Create a scheduled routine. Use a script when the check is deterministic (status, file, API, count); the model runs only when the script wakes it (followUp). Results go to `deliver`; notifies unless `notify: false`. For one Today panel use today_routine. " +
+            "Use instructions alone only when each run needs judgment: every run is a model turn (*/15 is about 96 a day). " +
+            "`deliver` is the routine chat, this/another chat, Feed, Ideas, Goals, or none; `notifyTargets` picks who is alerted (today_routine refreshes one fixed Today/space panel silently with failure-only alerts). " +
+            "Write instructions as what you should do then, e.g. \"Remind the person to review their inbox.\" With a script and followUp, they are what you do with the script's output. " +
+            "Confirm only relevant settings the person has not already specified (cadence/timezone, delivery destination, notification preference). A script is shown to the person whole in an approval card and saved only on their yes. " +
             "Resolve relative dates from the current runtime date and the person's or routine's timezone.",
-          { name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
-          ["name", "instructions", "cadence"],
+          { name: str, instructions: str, ...scriptProps, ...cadenceProps, ...deliverProp, ...notifyProp },
+          ["name", "cadence"],
           async (a) => {
             if (this.list(bot.id).length >= 25) throw new Error("You already have 25 routines. Ask the person which to remove first.");
             const cadence = cadenceOf(a);
-            // A routine that runs a script command is not saved on a bot's word: the person sees what runs and when, and decides.
-            const invocation = scriptInvocation(ws, a.instructions);
-            if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name), "When: " + whenWords(a)]))) return "The person declined.";
-            if (cadence?.kind === "cron" && !slowEnough(cadence.cron))
+            if (cadence?.kind === "custom" && !slowEnough(cadence.cron))
               throw new Error("Bots can't create routines that run more often than every 15 minutes. The person can set that up under Routines.");
+            const hasScript = a.script !== undefined && a.script !== null;
+            if (!hasScript && !(typeof a.instructions === "string" && a.instructions.trim())) throw new Error("Give the routine instructions, or a script.");
+            if (!hasScript && a.followUp) throw new Error("followUp needs a script.");
+            const data = { botId: bot.id, name: a.name, prompt: a.instructions, ...(hasScript && { script: a.script, followUp: a.followUp === true }), cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets: a.notifyTargets };
+            if (hasScript) {
+              // Checked first, so the card shows what will be saved and a bad field asks nothing.
+              const fields = this.fields(data, Date.now());
+              deliveryField(data.deliver, ws, bot.id, actor);
+              if (!(await approveScript(fields, { title: "Add the routine " + shownText(fields.name) + " with a script?" }))) return "The person declined.";
+            } else {
+              // A routine that runs a script command is not saved on a bot's word: the person sees what runs and when, and decides.
+              const invocation = scriptInvocation(ws, a.instructions);
+              if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name), "When: " + whenWords(a)]))) return "The person declined.";
+            }
             const warnings = [];
-            const chatId = this.create(
-              { botId: bot.id, name: a.name, prompt: a.instructions, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets: a.notifyTargets },
-              undefined,
-              maker,
-              { resolveNames: true, warnings },
-            );
+            const chatId = this.create(data, undefined, maker, { resolveNames: true, warnings });
             const found = this.find(chatId);
             return { ...this.view(found.chat, found.entry), ...(warnings.length && { warnings }) };
           },
@@ -848,19 +949,37 @@ export class Routines {
     tools.push(
       tool(
         "routine_update",
-        "Change one of your routines: its name, instructions, schedule, where its result goes (deliver), or who it notifies (notify / notifyTargets). Supply only what changes; a new schedule needs cadence and its fields.",
-        { ...id, name: str, instructions: str, ...cadenceProps, ...deliverProp, ...notifyProp },
+        "Change one of your routines: its name, instructions, script and followUp (null script turns it back into instructions), schedule, where its result goes (deliver), or who it notifies (notify / notifyTargets). Supply only what changes; a new schedule needs cadence and its fields. " +
+          "Turn a polling routine that mostly finds nothing into a script with followUp: the script checks, and you run only when it wakes you. A change to a routine with a script shows the person the whole script, its schedule and follow-up for a yes.",
+        { ...id, name: str, instructions: str, ...scriptProps, ...cadenceProps, ...deliverProp, ...notifyProp },
         ["id"],
         async (a) => {
           const { entry: before } = owned(a.id);
-          // The routine as it will be: a change to a routine that runs a script command (or makes it run one) is the person's to see.
-          const invocation = !before.script && scriptInvocation(ws, a.instructions !== undefined ? a.instructions : before.prompt);
-          if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name ?? before.name), "Change: " + (Object.keys(a).filter((key) => key !== "id").join(", ") || "none"), ...(a.cadence ? ["When: " + whenWords(a)] : [])]))) return "The person declined.";
+          const cadence = cadenceOf(a);
+          if (cadence?.kind === "custom" && !slowEnough(cadence.cron))
+            throw new Error("Bots can't set routines to run more often than every 15 minutes. The person can set that up under Routines.");
+          const scriptAfter = a.script === undefined ? before.script : a.script;
+          const changes = ["name", "instructions", "script", "followUp", "cadence", "time", "days", "date", "cron", "timezone"].filter((key) => a[key] !== undefined);
+          if (scriptAfter && changes.length) {
+            // A routine with a script, after this change: the person sees the script, when it runs and what follows, and decides.
+            const fields = this.fields(
+              { name: a.name ?? before.name, prompt: a.instructions ?? before.prompt, cadence: cadence ?? before.cadence, timezone: a.timezone ?? before.timezone, script: scriptAfter, followUp: a.followUp ?? before.followUp },
+              Date.now(),
+            );
+            const verb = before.script ? "Change the script routine " : "Add a script to the routine ";
+            if (!(await approveScript(fields, { title: verb + shownText(fields.name) + "?", lines: ["Change: " + changes.join(", ")] }))) return "The person declined.";
+          } else if (a.script === null && before.script && people.people.some((person) => person !== "owner")) {
+            throw new Error("Only the computer's owner can change a routine's script.");
+          } else {
+            // The routine as it will be: a change to a routine that runs a script command (or makes it run one) is the person's to see.
+            const invocation = !scriptAfter && scriptInvocation(ws, a.instructions !== undefined ? a.instructions : before.prompt);
+            if (invocation && !(await approved(invocation, ["Routine: " + shownText(a.name ?? before.name), "Change: " + (Object.keys(a).filter((key) => key !== "id").join(", ") || "none"), ...(a.cadence ? ["When: " + whenWords(a)] : [])]))) return "The person declined.";
+          }
           const warnings = [];
           const notifyTargets = a.notify === true && a.notifyTargets === undefined ? null : a.notifyTargets;
           const entry = this.update(
             a.id,
-            { name: a.name, prompt: a.instructions, cadence: cadenceOf(a), timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets },
+            { name: a.name, prompt: a.instructions, script: a.script, followUp: a.followUp, cadence, timezone: a.timezone, deliver: here(a.deliver), notify: a.notify, notifyTargets },
             undefined,
             actor,
             { resolveNames: true, warnings },
@@ -877,7 +996,7 @@ export class Routines {
         return this.view(ws.chat(a.id), this.setEnabled(a.id, null, true));
       }),
       tool("routine_delete", "Delete one of your routines and its run history, when the person asks.", id, ["id"], async (a) => {
-        const { entry } = owned(a.id);
+        const { entry } = owned(a.id, "delete");
         await this.remove(a.id);
         return { deleted: entry.name };
       }),
@@ -964,7 +1083,13 @@ function runScriptRoutine(ws, chat, entry, trigger) {
   chat.time = time;
   const folder = join(ws.dir, "files", bot.id);
   mkdirSync(folder, { recursive: true });
-  const script = runScript(entry.script, { cwd: folder });
+  const env = routineScriptEnv(ws, chat, entry);
+  mkdirSync(env.BOTKINS_ROUTINE_STATE, { recursive: true, mode: 0o700 });
+  // A login shell's profile can put another `botkins` (an older install) first on PATH. This host's launcher goes first again
+  // after the profile, so `botkins … --json` in the script is this version's command, talking to this service.
+  const launcher = process.platform === "win32" ? null : launcherOn(process.env);
+  const text = launcher ? 'PATH=' + shellQuoted(dirname(launcher)) + ':"$PATH"; export PATH\n' + entry.script : entry.script;
+  const script = runScript(text, { cwd: folder, env: { ...process.env, ...env } });
   routines.scripts.add(script);
   // The chat is busy while the script runs, as for a turn: the window shows it working, a schedule
   // or Run now waits, a message is queued, and Stop ends the script (session.abort).
@@ -1011,7 +1136,7 @@ function runScriptRoutine(ws, chat, entry, trigger) {
     delete run.stopRequested;
     run.finished = Date.now();
     chat.time = run.finished;
-    if (run.status !== "Stopped") chat.unread = true;
+    if (run.status !== "Stopped" && !isRoutineChat(chat)) chat.unread = true;
     ws.events.emit("turn", { chat, run });
     ws.save();
     if (ws.queues.has(chat.id)) setImmediate(() => ws.drain(chat.id));

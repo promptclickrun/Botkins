@@ -1,10 +1,10 @@
 import { saveChatDisplay } from "./chatDisplay";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 import { Button, Slider } from "glisse";
-import type { Preferences as Values, Appearance, HarnessStatus } from "./types";
+import type { Preferences as Values, Appearance, HarnessStatus, TaskLimits } from "./types";
 import { BackdropPreview } from "./Backdrop";
-import { GlassSegmented } from "./GlisseUI";
+import { GlassSegmented, tabWidthFor } from "./GlisseUI";
 import { ProviderInstall } from "./ProviderSetup";
 import { Group, Row, SwitchRow, ValueRow } from "./SettingsRows";
 import { modeOf, previewContrast } from "./appearance";
@@ -112,6 +112,8 @@ export function Choices<T extends string>({ label, value, options, onChange }: {
     <GlassSegmented
       aria-label={label}
       value={value}
+      // A little tighter than the default, so three choices fit at the right of a Settings row.
+      style={{ "--lg-tab-width": tabWidthFor(options.map((option) => option.name), 64, 128) + "px" } as CSSProperties}
       items={options.map((option) => ({ value: option.id, label: option.name }))}
       onValueChange={(next) => onChange(next as T)}
     />
@@ -385,7 +387,7 @@ const approvalHelp: Record<Values["approval"], string> = {
   all: "Approves every request, commands and file changes too. Managed policies still apply.",
 };
 
-export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new" }) {
+export function ChatDisplaySettings({ settings, change, chatMode, mainChats = true, fail }: Pick<Props, "settings" | "change" | "fail"> & { chatMode?: "main" | "new"; mainChats?: boolean }) {
   // With Steps or Thinking Open, a finished turn always folds into the island's receipt.
   const island = settings.steps === "open" || settings.thinking === "open";
   return (
@@ -407,6 +409,12 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         checked={settings.showUpdates !== false}
         onChange={(on) => void change({ showUpdates: on }).catch(fail)}
       />
+      <SwitchRow
+        label="Show routine chats"
+        help="Include chats created and owned by routines in the chat list."
+        checked={!!settings.showRoutineChats}
+        onChange={(on) => void change({ showRoutineChats: on }).catch(fail)}
+      />
       <Row label="Position after response completes">
         {(id) => <select className="completion-position" id={id} value={settings.completionPosition ?? "latest"} onChange={e => saveChatDisplay({ completionPosition: e.target.value === "beginning" ? "beginning" : "latest" })}>
           <option value="latest">Keep at latest content</option>
@@ -414,8 +422,8 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
         </select>}
       </Row>
       <Row label="When you select a bot">
-        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !chatMode ? "latest" : settings.botTap ?? (chatMode ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
-          {chatMode && <option value="main">Open Main chat</option>}
+        {(id) => <select className="bot-tap" id={id} value={settings.botTap === "main" && !mainChats ? "latest" : settings.botTap ?? (mainChats ? "main" : "latest")} onChange={e => saveChatDisplay({ botTap: e.target.value as Values["botTap"] })}>
+          {mainChats && <option value="main">Open Main chat</option>}
           <option value="latest">Open the latest chat</option>
           <option value="new">Start a new chat</option>
         </select>}
@@ -426,6 +434,43 @@ export function ChatDisplaySettings({ settings, change, chatMode, fail }: Pick<P
           <option value="new">New chat every time</option>
         </select>}
       </Row>}
+    </Group>
+  );
+}
+
+/**
+ * Settings › General › Tasks: how many Task Board tasks run at once, on the computer and for each bot (desktop/task-limits.mjs).
+ * "Default" clears the setting, so the computer's environment (BOTKINS_TASKS_MAX, BOTKINS_TASKS_PER_BOT) or the built-in value decides. Hidden for an older computer.
+ */
+export function TaskSettings({ settings, limits, change, fail }: Props & { limits?: TaskLimits }) {
+  if (!limits) return null;
+  const pick = (key: "tasksMax" | "tasksPerBot", max: number, label: string) => (
+    <Row label={label}>
+      {(id) => (
+        <select id={id} value={settings[key] ?? ""} onChange={(e) => void change({ [key]: e.target.value === "" ? null : Number(e.target.value) }).catch(fail)}>
+          <option value="">Default ({limits.defaults[key]})</option>
+          {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+      )}
+    </Row>
+  );
+  return (
+    <Group title="Tasks" footer="Each running task uses its bot's model and plan. Existing bot-created tasks in Review stay yours unless you turn on creator review below.">
+      {pick("tasksMax", 16, "Tasks at once")}
+      {pick("tasksPerBot", 8, "Tasks at once per bot")}
+      <Row label="Route existing bot-created Review tasks to creator">
+        {(id) => (
+          <input
+            id={id}
+            type="checkbox"
+            role="switch"
+            checked={settings.tasksCreatorReviewExisting === true}
+            onChange={(e) => void change({ tasksCreatorReviewExisting: e.target.checked }).catch(fail)}
+          />
+        )}
+      </Row>
     </Group>
   );
 }

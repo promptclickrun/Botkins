@@ -1,11 +1,12 @@
 // Spaces in the window ("spaces-v1"): the side menu's Spaces, a space's page and All spaces. The
 // pure parts (names, tags, lines, lists) are in spaces.ts; the Share popover is in SpaceShare.tsx.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "glisse";
 import {
   ArrowDown,
   ArrowUp,
   Ellipsis,
+  Expand,
   LayoutGrid,
   LayoutList,
   Lightbulb,
@@ -13,6 +14,7 @@ import {
   MailOpen,
   Maximize2,
   MessageSquare,
+  Minimize2,
   Pencil,
   Pin,
   PinOff,
@@ -35,6 +37,8 @@ import OpenedPanel from "./SpacePanelOpen";
 import { usePanelDrag, usePanelResize, useSpaceDrag } from "./SpaceArrange";
 import { CadencePicker, ZoneInput, cronFromCadence } from "./Routines";
 import { memberTeam, teamCan } from "./teamAccess";
+import { SPACE_FULLSCREEN, spaceFullscreenKeyAction } from "./panelOpen";
+import { MOD } from "./places";
 import { changedSpaces } from "./unread";
 import {
   accessTag,
@@ -189,9 +193,9 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
   const { pinned, more, fromMembers } = spaceSections(spaces, isOwner(state) && state.adminMode !== false);
   const list = (title: string, items: SpaceSummary[]) =>
     items.length > 0 && (
-      <section className="space-group" aria-label={title} key={title}>
-        <h2>{title}</h2>
-        <ul>
+      <section className="page-section space-group" aria-label={title} key={title}>
+        <h2 className="group-label">{title}</h2>
+        <ul className="group">
           {items.map((s) => {
             const name = spaceName(s);
             const items = (): MenuItem[] => [
@@ -204,19 +208,19 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
               { label: s.pinned ? "Unpin" : "Pin", icon: s.pinned ? PinOff : Pin, run: () => void setPinned(spaces, s.id, !s.pinned).catch(fail) },
             ];
             return (
-              <li key={s.id} onContextMenu={(e) => menu.show(e, name, items())}>
+              <li key={s.id} className="group-row space-item" onContextMenu={(e) => menu.show(e, name, items())}>
                 <button className="space-row" onClick={() => openSpace(s.id)}>
-                  <span className="space-tile">
+                  <span className="icon-tile space-tile">
                     <SpaceIcon space={s} size={17} />
                   </span>
-                  <span className="space-row-text">
-                    <strong>{name}</strong>
-                    <small>{spaceLine(s)}</small>
+                  <span className="row-main space-row-text">
+                    <strong className="row-title">{name}</strong>
+                    <small className="row-sub">{spaceLine(s)}</small>
                   </span>
                   {s.changed > 0 && <i className="space-dot" aria-label="Changed" />}
                 </button>
-                <button className="menu-button" aria-label={"Options for " + name} aria-haspopup="menu" onClick={(e) => menu.show(e, name, items())}>
-                  <Ellipsis size={16} />
+                <button className="icon-btn menu-button" aria-label={"Options for " + name} aria-haspopup="menu" onClick={(e) => menu.show(e, name, items())}>
+                  <Ellipsis size={17} />
                 </button>
               </li>
             );
@@ -225,8 +229,12 @@ export function AllSpaces({ state, openSpace, fail }: { state: State; openSpace:
       </section>
     );
   return (
-    <div className="all-spaces">
-      <h1>All spaces</h1>
+    <div className="page all-spaces">
+      <div className="page-head">
+        <div className="page-heading">
+          <h1 className="page-title">All spaces</h1>
+        </div>
+      </div>
       {list("Pinned", pinned)}
       {list("More", more)}
       {list("From members", fromMembers)}
@@ -383,6 +391,82 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
   );
 }
 
+const FULLSCREEN_HINT = MOD === "⌘" ? "⇧⌘F" : "Ctrl+Shift+F";
+
+/**
+ * A space in full screen: the space alone fills the window. The root carries
+ * `data-fullscreen="space"` (the shell hides the side menu, the banners and its chrome by it), and
+ * the window asks the OS for real full screen when it can. Escape, Exit and the OS leaving full
+ * screen all end it; so does leaving the page. Nothing is saved: a space opens in the window.
+ */
+function useSpaceFullscreen(shell: RefObject<HTMLDivElement | null>) {
+  const [on, setOn] = useState(false);
+  const onRef = useRef(on);
+  onRef.current = on;
+  // Whether the OS full screen this page asked for is in effect, so its ending ends the space's.
+  const os = useRef(false);
+  const enter = () => {
+    setOn(true);
+    const root = document.documentElement;
+    if (root.requestFullscreen && !document.fullscreenElement) void root.requestFullscreen().catch(() => {});
+  };
+  const exit = () => {
+    setOn(false);
+    if (document.fullscreenElement && document.exitFullscreen) void document.exitFullscreen().catch(() => {});
+  };
+  const toggle = () => (onRef.current ? exit() : enter());
+  useEffect(() => {
+    const root = document.documentElement;
+    if (on) root.dataset.fullscreen = SPACE_FULLSCREEN;
+    else if (root.dataset.fullscreen === SPACE_FULLSCREEN) delete root.dataset.fullscreen;
+  }, [on]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = spaceFullscreenKeyAction(e, onRef.current, !!document.querySelector("dialog[open]"));
+      if (!action) return;
+      e.preventDefault();
+      if (action === "toggle") toggle();
+      else exit();
+    };
+    const onChange = () => {
+      const inOs = !!document.fullscreenElement;
+      if (os.current && !inOs && onRef.current) setOn(false);
+      os.current = inOs;
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onChange);
+      const root = document.documentElement;
+      if (root.dataset.fullscreen === SPACE_FULLSCREEN) delete root.dataset.fullscreen;
+      if (os.current && document.fullscreenElement && document.exitFullscreen) void document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+  // The top row fades once the pointer rests, and comes back when it moves or a key is pressed. The
+  // flag is set on the element itself, so a moving pointer costs no render.
+  useEffect(() => {
+    const el = shell.current;
+    if (!on || !el) return;
+    let timer = 0;
+    const wake = () => {
+      delete el.dataset.idle;
+      clearTimeout(timer);
+      timer = window.setTimeout(() => (el.dataset.idle = ""), 2500);
+    };
+    wake();
+    el.addEventListener("pointermove", wake);
+    window.addEventListener("keydown", wake);
+    return () => {
+      clearTimeout(timer);
+      delete el.dataset.idle;
+      el.removeEventListener("pointermove", wake);
+      window.removeEventListener("keydown", wake);
+    };
+  }, [on]);
+  return { on, toggle, exit };
+}
+
 /** A space's page: its header, its panels (and cards), and the bar that asks about it. */
 export function SpacePage({
   state,
@@ -444,25 +528,34 @@ export function SpacePage({
   const arrange = !view && teamCan(state, "today", "manage");
   const canNote = !view && teamCan(state, "today", "use");
   const grid = useRef<HTMLDivElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
+  const full = useSpaceFullscreen(shell);
   const manager = usePanelManager(panels, open, name, (shown, close) => {
     const panel = panels.find((p) => p.id === shown.id);
     if (!panel) return null;
     const targets = arrange ? moveTargets(state.spaces ?? [], space, panel, me) : [];
-    const isApp = panel.blocks.some((b) => b.type === "html");
     return (
       <>
-        {isApp && (
-          <button
-            onClick={() => {
-              close();
-              openedPanel(panel);
-              openPanel(panel.id, true);
-            }}
-          >
-            <Maximize2 size={16} />
-            Open full screen
-          </button>
-        )}
+        <button
+          onClick={() => {
+            close();
+            openedPanel(panel);
+            openPanel(panel.id, false);
+          }}
+        >
+          <Maximize2 size={16} />
+          Open
+        </button>
+        <button
+          onClick={() => {
+            close();
+            openedPanel(panel);
+            openPanel(panel.id, true);
+          }}
+        >
+          <Expand size={16} />
+          Open full screen
+        </button>
         {targets.length > 0 && (
           <label>
             Space
@@ -620,9 +713,12 @@ export function SpacePage({
   if (content && !shown.length && !board && !hidden)
     body = addAllowed ? (
       <div className="today-empty today-blank">
+        <span className="empty-icon">
+          <LayoutGrid size={30} aria-hidden="true" />
+        </span>
         <h2>Build your first panel</h2>
         <p>Ask a bot for a briefing, a table or a chart, kept fresh on a schedule.</p>
-        <button className="textbutton" onClick={() => setAdding(true)}>
+        <button className="btn primary" onClick={() => setAdding(true)}>
           New panel…
         </button>
       </div>
@@ -654,11 +750,9 @@ export function SpacePage({
                 </>
               }
               tools={
-                p.blocks.some((b) => b.type === "html") && (
-                  <button aria-label={"Open " + p.title} title="Open" onClick={() => openPanel(p.id)}>
-                    <Maximize2 size={16} />
-                  </button>
-                )
+                <button aria-label={"Open " + p.title} title="Open" onClick={() => openPanel(p.id)}>
+                  <Maximize2 size={16} />
+                </button>
               }
               foot={p.last && <small className="space-last">{lastLine(p.last)}</small>}
               side={
@@ -675,79 +769,102 @@ export function SpacePage({
       </div>
     );
 
+  const fullLabel = full.on ? "Exit full screen" : "Full screen";
   return (
-    <div className="space-shell">
+    <div ref={shell} className={"space-shell" + (full.on ? " fullscreen" : "")}>
       <div className="content space-page">
-        <div className="space-head">
-          <div className="space-title">
-            <h1>{name}</h1>
-            {space.can === "own" && !space.builtin && (
-              <button className="menu-button space-menu" aria-label={"Options for " + name} aria-haspopup="menu" onClick={(e) => menu.show(e, name, spaceMenu())}>
-                <Ellipsis size={18} />
+        <div className="page wide space-body">
+          {full.on ? (
+            // In full screen the space is alone: its name and the way out, in a row that fades when idle.
+            <div className="space-fullbar">
+              <span className="icon-tile">
+                <SpaceIcon space={space} size={16} />
+              </span>
+              <h1 className="space-fullbar-name">{name}</h1>
+              {line && <span className="space-changed">{line}</span>}
+              <button className="btn small soft space-fullscreen" aria-label="Exit full screen" title={"Exit full screen (" + FULLSCREEN_HINT + ")"} onClick={full.exit}>
+                <Minimize2 size={15} aria-hidden="true" />
+                Exit full screen
               </button>
-            )}
-            <span className="space-tag">
-              {space.access === "private" ? <Lock size={13} aria-hidden="true" /> : <Users size={13} aria-hidden="true" />}
-              {accessTag(space)}
-            </span>
-            {project && (
-              <button className="space-tag space-project" title="Open project" onClick={() => openProject(project.id)}>
-                <span className={"space-project-dot project-color " + (project.color ?? "")} aria-hidden="true" />
-                <span className="space-project-name">{project.name}</span>
-              </button>
-            )}
-          </div>
-          <div className="space-actions">
-            {space.here.length > 0 && (
-              <span className="space-here" role="group" aria-label="Here now">
-                {space.here.slice(0, 5).map((p) => (
-                  <span key={p.id} className="space-person" title={p.name} aria-label={p.name}>
-                    {initial(p.name)}
+            </div>
+          ) : (
+            <div className="page-head space-head">
+              <div className="page-heading">
+                <div className="space-title">
+                  <h1 className="page-title">{name}</h1>
+                  <span className="space-tag">
+                    {space.access === "private" ? <Lock size={12} aria-hidden="true" /> : <Users size={12} aria-hidden="true" />}
+                    {accessTag(space)}
                   </span>
-                ))}
-              </span>
-            )}
-            <button
-              className="space-button space-pin"
-              aria-label={space.pinned ? "Unpin" : "Pin"}
-              aria-pressed={space.pinned}
-              title={space.pinned ? "Unpin" : "Pin"}
-              onClick={() => void setPinned(state.spaces ?? [], space.id, !space.pinned).catch(fail)}
-            >
-              <Pin size={16} fill={space.pinned ? "currentColor" : "none"} />
-            </button>
-            {space.can === "own" && (
-              <span className="space-share-anchor">
-                <button className="space-button" aria-expanded={sharing} aria-haspopup="dialog" onClick={() => setSharing(!sharing)}>
-                  <Share size={16} />
-                  Share
+                  {project && (
+                    <button className="space-tag space-project" title="Open project" onClick={() => openProject(project.id)}>
+                      <span className={"space-project-dot project-color " + (project.color ?? "")} aria-hidden="true" />
+                      <span className="space-project-name">{project.name}</span>
+                    </button>
+                  )}
+                </div>
+                {line && <p className="page-sub space-changed">{line}</p>}
+              </div>
+              <div className="page-actions space-actions">
+                {space.here.length > 0 && (
+                  <span className="space-here" role="group" aria-label="Here now">
+                    {space.here.slice(0, 5).map((p) => (
+                      <span key={p.id} className="space-person" title={p.name} aria-label={p.name}>
+                        {initial(p.name)}
+                      </span>
+                    ))}
+                  </span>
+                )}
+                <button
+                  className="icon-btn space-pin"
+                  aria-label={space.pinned ? "Unpin" : "Pin"}
+                  aria-pressed={space.pinned}
+                  title={space.pinned ? "Unpin" : "Pin"}
+                  onClick={() => void setPinned(state.spaces ?? [], space.id, !space.pinned).catch(fail)}
+                >
+                  <Pin size={17} fill={space.pinned ? "currentColor" : "none"} />
                 </button>
-                {sharing && <SharePopover state={state} space={space} name={name} close={() => setSharing(false)} />}
-              </span>
-            )}
-            {addAllowed && (
-              <button className="primary space-add" onClick={() => setAdding(true)}>
-                <Plus size={16} />
-                Add panel
+                <button className="icon-btn space-fullscreen" aria-label={fullLabel} aria-pressed={full.on} title={fullLabel + " (" + FULLSCREEN_HINT + ")"} onClick={full.toggle}>
+                  <Maximize2 size={17} aria-hidden="true" />
+                </button>
+                {space.can === "own" && (
+                  <span className="space-share-anchor">
+                    <button className="btn space-button" aria-expanded={sharing} aria-haspopup="dialog" onClick={() => setSharing(!sharing)}>
+                      <Share size={15} />
+                      Share
+                    </button>
+                    {sharing && <SharePopover state={state} space={space} name={name} close={() => setSharing(false)} />}
+                  </span>
+                )}
+                {addAllowed && (
+                  <button className="btn primary space-add" onClick={() => setAdding(true)}>
+                    <Plus size={16} />
+                    Add panel
+                  </button>
+                )}
+                {space.can === "own" && !space.builtin && (
+                  <button className="icon-btn menu-button space-menu" aria-label={"Options for " + name} aria-haspopup="menu" onClick={(e) => menu.show(e, name, spaceMenu())}>
+                    <Ellipsis size={18} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {board && content && (
+            <BoardPanel state={state} cards={content.cards} only={board} fail={fail} startChat={boardChat} />
+          )}
+          {hiddenCount > 0 && (
+            <div className="chip-row space-filters">
+              <button className="chip" aria-pressed={!hidden} onClick={() => showHidden(false)}>
+                {name}
               </button>
-            )}
-          </div>
+              <button className="chip" aria-pressed={hidden} onClick={() => showHidden(true)}>
+                Hidden · {hiddenCount}
+              </button>
+            </div>
+          )}
+          {body}
         </div>
-        {line && <p className="space-changed">{line}</p>}
-        {board && content && (
-          <BoardPanel state={state} cards={content.cards} only={board} fail={fail} startChat={boardChat} />
-        )}
-        {hiddenCount > 0 && (
-          <div className="filters">
-            <button aria-pressed={!hidden} onClick={() => showHidden(false)}>
-              {name}
-            </button>
-            <button aria-pressed={hidden} onClick={() => showHidden(true)}>
-              Hidden · {hiddenCount}
-            </button>
-          </div>
-        )}
-        {body}
       </div>
       {askAllowed && bot && (
         <form
@@ -804,7 +921,7 @@ export function SpacePage({
             readOnly={view}
             store={{ state: opened.state ?? {}, rev: opened.stateRev ?? 0, ...(canNote && { set: (patch, label) => api["spaces.patchState"](opened.id, patch, label).then((answer) => answer.rev) }) }}
             when={(t) => spaceWhen(t)}
-            badges={<span className="space-app">App</span>}
+            badges={opened.blocks.some((b) => b.type === "html") && <span className="space-app">App</span>}
             foot={opened.last && <small className="space-last">{lastLine(opened.last)}</small>}
           />
         </OpenedPanel>

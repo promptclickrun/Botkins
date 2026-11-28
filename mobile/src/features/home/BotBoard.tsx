@@ -19,7 +19,7 @@ import { scheduleOnRN } from "react-native-worklets";
 import { plainPreview } from "@/features/chat/bits";
 import { markBotRead, newBotChat, openBotChat } from "@/features/chat/open";
 import { botUnreadChats } from "@/features/chat/unread";
-import { hideAction, moveToSection, runSectionAction, runSectionChoice, SECTION_ACTIONS, toggleHidden } from "@/features/bots/menus";
+import { hideAction, moveToSection, runSectionAction, runSectionChoice, sectionActions, toggleHidden } from "@/features/bots/menus";
 import type { Bot, ChatSummary, Section } from "@/link/types";
 import { activityLabel, useBotActivity, useBots, useCan, useChats, usePart, useCanArrange, useMember } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -144,8 +144,8 @@ export function BotRow({ bot, chat, unread, actions }: { bot: Bot; chat?: ChatSu
   );
 }
 
-/** A section's heading: its name and count fold it; its menu renames or deletes it. */
-function SectionHead({ section, count, open, onToggle, note }: { section: Section; count: number; open: boolean; onToggle: () => void; note?: string }) {
+/** A section's heading: its name and count fold it; its menu renames, moves or deletes it. */
+function SectionHead({ section, sections, count, open, onToggle, note }: { section: Section; sections: readonly Section[]; count: number; open: boolean; onToggle: () => void; note?: string }) {
   const { colors } = useTheme();
   const canManage = useCan("agents", "manage");
   const prompt = useTextPrompt();
@@ -169,7 +169,7 @@ function SectionHead({ section, count, open, onToggle, note }: { section: Sectio
           <Fold size={14} color={colors.faint} strokeWidth={2.4} />
         </Tap>
         {canManage && (
-          <MenuView title={section.name} actions={SECTION_ACTIONS} onPressAction={({ nativeEvent }) => runSectionAction(section, nativeEvent.event, prompt.ask)}>
+          <MenuView title={section.name} actions={sectionActions(sections, section)} onPressAction={({ nativeEvent }) => runSectionAction(sections, section, nativeEvent.event, prompt.ask)}>
             <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
               <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
             </View>
@@ -517,7 +517,7 @@ export function BotBoard({ bots, sections, latest, folded, onFold, scroll, onDro
             const note = !section || !open || !empty || dragging ? undefined : bots.some((bot) => bot.sectionId === section.id && !bot.hidden) ? "Its bots are pinned above." : "No bots here yet.";
             return (
               <Cell key={item.key} item={item} line={false}>
-                {section ? <SectionHead section={section} count={count(item.zone)} open={open} onToggle={() => onFold(section.id)} note={note} /> : <ListHead title={item.zone === "pinned" ? "Pinned" : "Other bots"} />}
+                {section ? <SectionHead section={section} sections={sections ?? []} count={count(item.zone)} open={open} onToggle={() => onFold(section.id)} note={note} /> : <ListHead title={item.zone === "pinned" ? "Pinned" : "Other bots"} />}
               </Cell>
             );
           }

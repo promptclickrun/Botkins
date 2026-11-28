@@ -31,8 +31,6 @@ test("migration gives each bot's creator a private Main chat and preserves every
   const newId = ws.createChat("pip");
   assert.equal(new Set([id, newId, other, "before"]).size, 4);
   assert.equal(ws.chat(other).createdBy, "member");
-  assert.throws(() => ws.agents.setChatFlags(id, { archived: true }), /Main chat/);
-  await assert.rejects(ws.agents.deleteChat(id), /Main chat/);
   assert.throws(() => ws.agents.renameChat(id, "Something else"), /Main chat/);
   const reopened = open();
   assert.equal(reopened.mainChat("pip"), id);
@@ -87,20 +85,23 @@ test("Main chat keeps its address through compact, provider changes, fork switch
   // The fork's conversation comes with the new session's first message, never in its system prompt.
   assert.doesNotMatch(opened.at(-1).spec.instructions, /earlier-conversation|fork only/);
   assert.match(prompts.at(-1), /<earlier-conversation>[\s\S]*fork only[\s\S]*<\/earlier-conversation>\n\ncontinue$/);
+  // Reset clears the bot's context and keeps the conversation on screen, in the same fork.
+  const forks = chat.forks.length;
   await ws.changeMainFork(id, "reset");
-  assert.equal(chat.messages.length, 0);
+  assert.equal(chat.activeFork, fork);
+  assert.equal(chat.forks.length, forks, "reset adds no fork");
+  assert.ok(chat.messages.some(m => m.text === "fork only"), "earlier messages stay visible");
+  assert.equal(chat.messages.at(-1).role, "command");
   await ws.send(id, "after reset");
   assert.doesNotMatch(opened.at(-1).spec.instructions, /earlier-conversation|fork only/);
   assert.doesNotMatch(prompts.at(-1), /earlier-conversation|fork only/);
-  assert.notEqual(opened.at(-1).spec.sessionId, forkSession);
   ws = load();
   assert.equal(ws.mainChat("pip"), id);
-  assert.ok(!JSON.stringify(ws.snapshot().chats.find(c => c.id === id)).includes("fork only"), "inactive histories are kept off the wire");
-  await ws.changeMainFork(id, "switch", fork);
-  assert.equal(chatPart(ws.snapshot(), id).messages.at(-1).text, "reply to continue");
+  assert.equal(chatPart(ws.snapshot(), id).messages.at(-1).text, "reply to after reset");
   await ws.send(id, "still on fork");
-  assert.equal(opened.at(-1).spec.sessionId, forkSession);
+  assert.doesNotMatch(prompts.at(-1), /fork only/, "the cleared context stays cleared after a restart");
   await ws.changeMainFork(id, "switch", original);
+  assert.ok(!JSON.stringify(ws.snapshot().chats.find(c => c.id === id)).includes("fork only"), "inactive histories are kept off the wire");
   await ws.send(id, "Answer that signal");
   assert.match(prompts.at(-1), /Since your last turn[\s\S]*Signal waiting for a reply/);
   assert.equal(ws.chat(id).posted, undefined);
@@ -110,4 +111,88 @@ test("Main chat keeps its address through compact, provider changes, fork switch
   const ordinary = await ws.forkChat(id, 1);
   assert.notEqual(ordinary, id);
   assert.ok(!ws.chat(ordinary).main);
+});
+
+test("a Main chat is only replaced when its person archives or deletes it; /new and /clear clear its context in place", async t => {
+  const dir = folder(t);
+  const prompts = [];
+  const registry = new Providers([new class extends ModelProvider {
+    id = "copilot";
+    name = "copilot";
+    async status() { return { connected: true }; }
+    async models() { return [{ id: "model", name: "Model", available: true }]; }
+    async openSession() {
+      return new class extends ProviderSession {
+        async inventory() { return buildInventory({ name: "copilot" }); }
+        resolvePrompt(...args) { return resolvePrompt(this, ...args); }
+        async send({ prompt }) { prompts.push(prompt); return { text: "ok" }; }
+      }();
+    }
+  }()]);
+  const ws = new Workspace(dir, registry, () => {});
+  const id = ws.mainChat("pip");
+  const member = ws.mainChat("pip", "m_1");
+  await ws.send(id, "remember the plan");
+  for (const typed of ["/new", "/clear"]) {
+    await ws.submit(id, typed);
+    assert.equal(ws.mainChat("pip"), id, typed + " keeps the same Main chat");
+    assert.ok(ws.chat(id).messages.some(m => m.text === "remember the plan"), typed + " keeps the messages on screen");
+    assert.equal(ws.chat(id).forks.length, 1, typed + " adds no fork");
+  }
+  await ws.send(id, "what plan?");
+  assert.doesNotMatch(prompts.at(-1), /remember the plan/, "the bot starts fresh after /new");
+  assert.equal(ws.state.chats.filter(c => c.main && c.botId === "pip" && !c.createdBy).length, 1);
+  // A task notice goes to the owner's Main chat, never to a member's.
+  const target = ws.state.chats.find(c => c.botId === "pip" && c.main && !c.createdBy);
+  assert.equal(target.id, id);
+  // Archiving retires it: it stays as an ordinary chat, and the next visit makes a new Main chat.
+  ws.agents.setChatFlags(id, { archived: true });
+  const retired = ws.chat(id);
+  assert.ok(!retired.main && retired.archived);
+  assert.ok(retired.messages.some(m => m.text === "remember the plan"));
+  const next = ws.mainChat("pip");
+  assert.notEqual(next, id);
+  ws.agents.setChatFlags(id, { archived: false });
+  assert.equal(ws.mainChat("pip"), next, "restoring the old one never makes two Main chats");
+  assert.equal(ws.mainChat("pip", "m_1"), member, "another person's Main chat is untouched");
+  // Deleting is allowed too.
+  await ws.agents.deleteChat(next);
+  const third = ws.mainChat("pip");
+  assert.ok(![id, next].includes(third));
+  assert.equal(ws.state.chats.filter(c => c.main && c.botId === "pip" && !c.createdBy).length, 1);
+});
+
+test("/reload-tools reconnects a chat's tools: its harness starts afresh at the next turn, and the conversation stays", async t => {
+  const dir = folder(t);
+  const opened = [], released = [];
+  const registry = new Providers([new class extends ModelProvider {
+    id = "copilot";
+    name = "copilot";
+    async status() { return { connected: true }; }
+    async models() { return [{ id: "model", name: "Model", available: true }]; }
+    async releaseSession(id) { released.push(id); }
+    async openSession(spec) {
+      opened.push(spec.sessionId);
+      return new class extends ProviderSession {
+        async inventory() { return buildInventory({ name: "copilot" }); }
+        resolvePrompt(...args) { return resolvePrompt(this, ...args); }
+        async send() { return { text: "ok" }; }
+      }();
+    }
+  }()]);
+  const ws = new Workspace(dir, registry, () => {});
+  const id = ws.mainChat("pip");
+  await ws.send(id, "first");
+  const before = ws.chat(id).messages.length;
+  await ws.submit(id, "/reload-tools");
+  assert.ok(released.length >= 1, "the chat's session was let go");
+  assert.equal(ws.mainChat("pip"), id);
+  assert.equal(ws.chat(id).messages.length, before + 1, "one line says the tools were reloaded");
+  assert.match(ws.chat(id).messages.at(-1).text, /Tools reloaded/);
+  assert.ok(!ws.state.runs.some(r => r.chatId === id && r.title === "/reload-tools"), "no turn of the model ran for it");
+  await ws.send(id, "after");
+  assert.equal(ws.chat(id).messages.at(-1).text, "ok");
+  // Every chat of a bot, from the command line's `bots reload-tools`.
+  ws.reloadBotTools("pip");
+  assert.throws(() => ws.reloadBotTools("nobody"));
 });
