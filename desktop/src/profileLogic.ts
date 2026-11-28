@@ -81,9 +81,9 @@ export function desktopProfileSummary(options: {
   if (devicesCount === 0) {
     devicesSubtitle = "No trusted devices";
   } else if (current && more === 0) {
-    devicesSubtitle = `This ${label}`;
+    devicesSubtitle = label;
   } else if (current) {
-    devicesSubtitle = `This ${label} and ${more} more`;
+    devicesSubtitle = `${label} and ${more} more`;
   } else {
     devicesSubtitle = `${devicesCount} trusted ${devicesCount === 1 ? "device" : "devices"}`;
   }

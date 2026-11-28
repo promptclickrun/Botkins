@@ -408,7 +408,7 @@ test("profileIndexSummary computes counts and subtitles for Computers and Truste
   assert.equal(summary.computersReadyCount, 3);
   assert.equal(summary.computersSubtitle, "3 ready on this phone");
   assert.equal(summary.devicesCount, 3);
-  assert.equal(summary.devicesSubtitle, "This iPhone and 2 more");
+  assert.equal(summary.devicesSubtitle, "iPhone and 2 more");
 
   // Single current device only
   const solo = profileIndexSummary({
@@ -419,7 +419,15 @@ test("profileIndexSummary computes counts and subtitles for Computers and Truste
   assert.equal(solo.computersCount, 0);
   assert.equal(solo.computersSubtitle, "No computers yet");
   assert.equal(solo.devicesCount, 1);
-  assert.equal(solo.devicesSubtitle, "This iPhone");
+  assert.equal(solo.devicesSubtitle, "iPhone");
+
+  // A device's own name is used as it is, never as "This Colt's iPhone".
+  const named = profileIndexSummary({
+    hosts: [],
+    devices: [{ id: "d1", label: "Colt's iPhone", current: true }, { id: "d2", label: "Pixel 9" }],
+    enrolledServerIds: new Set(),
+  });
+  assert.equal(named.devicesSubtitle, "Colt's iPhone and 1 more");
 });
 
 test("profileCodeDisplay, profileInitials, and pendingBannerCopy format hero and banner text", () => {

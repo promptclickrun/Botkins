@@ -179,9 +179,9 @@ export function profileIndexSummary(options: {
   if (devicesCount === 0) {
     devicesSubtitle = "No trusted devices";
   } else if (current && more === 0) {
-    devicesSubtitle = `This ${shortDevice}`;
+    devicesSubtitle = shortDevice;
   } else if (current) {
-    devicesSubtitle = `This ${shortDevice} and ${more} more`;
+    devicesSubtitle = `${shortDevice} and ${more} more`;
   } else {
     devicesSubtitle = `${devicesCount} trusted ${devicesCount === 1 ? "device" : "devices"}`;
   }

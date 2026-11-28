@@ -64,7 +64,7 @@ test("orderDesktopDevices puts current device first and desktopProfileSummary co
   assert.equal(summary.computersReadyCount, 2);
   assert.equal(summary.computersSubtitle, "2 ready on this computer");
   assert.equal(summary.devicesCount, 3);
-  assert.equal(summary.devicesSubtitle, "This Mac Studio and 2 more");
+  assert.equal(summary.devicesSubtitle, "Mac Studio and 2 more");
 });
 
 test("desktopPendingBanner formats single and multiple pending approvals", () => {
