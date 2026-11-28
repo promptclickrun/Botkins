@@ -155,8 +155,8 @@ export function PillBadge({
   tone?: Tone;
   icon?: LucideIcon;
 }) {
-  if (icon) return <Badge label={label} tone={tone} icon={icon} />;
   const { colors } = useTheme();
+  if (icon) return <Badge label={label} tone={tone} icon={icon} />;
   const [bg, fg] = {
     neutral: [colors.sunken, colors.ink2],
     accent: [colors.accentSoft, colors.accentText],

@@ -442,11 +442,15 @@ export default function Home() {
   const unifiedHosts = useApp((state) => state.unifiedHosts);
   const includedHosts = unifiedHosts.filter((h) => h.included);
   const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
+  // Read on every render, whichever way the name below goes. Read only with unified mode off, as it
+  // was, the number of hooks changed when the mode did, and React threw: the app closed the moment
+  // "Operate all bots in one view" was switched while this page was mounted.
+  const pairingName = useApp((state) => state.pairing?.name);
   const computer = unified
     ? onlineHosts === includedHosts.length
       ? "All computers"
       : onlineHosts + "/" + includedHosts.length + " computers"
-    : (useApp((state) => state.pairing?.name) ?? "Computer");
+    : (pairingName ?? "Computer");
   const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computerOrder = usePrefs(prefs => prefs.computerOrder);

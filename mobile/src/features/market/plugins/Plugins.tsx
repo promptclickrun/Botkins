@@ -30,7 +30,9 @@ export function PluginsPage() {
 function Plugins() {
   const online = useOnline();
   const member = useMember();
-  const folders = !member && useCapability("folders-v1");
+  // Asked on every render: a hook that runs only for some people changes the hook order when the computer does.
+  const foldersOn = useCapability("folders-v1");
+  const folders = !member && foldersOn;
   const canManage = useCan("plugins", "manage");
   const canRefresh = useCanRefresh();
   const markets = usePluginMarketplaces();
