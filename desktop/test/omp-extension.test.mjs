@@ -44,6 +44,7 @@ test("OMP's extension registers plans, inventory hooks, and leaves MCP registrat
   assert.deepEqual(Object.keys(handlers).sort(), [
     "agent_end",
     "before_agent_start",
+    "context",
     "session_shutdown",
     "session_start",
     "tool_call",
