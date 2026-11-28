@@ -203,6 +203,8 @@ export type Message = {
   clientMessageId?: string;
   voiceId?: string;
   voiceCaption?: string;
+  /** The text only repeats this message's A2UI cards (for notifications and search): show just the cards. */
+  textFromCards?: boolean;
   role: "assistant" | "user" | "command";
   text: string;
   interim?: boolean;

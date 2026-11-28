@@ -773,6 +773,8 @@ export function attachRunA2uiSurfaces(chat, run, botId) {
     target = {
       role: "assistant",
       text: fallback || "Interactive UI",
+      // The text only repeats the card, for notifications and search: the chat shows just the card.
+      textFromCards: true,
       time: Date.now(),
       runId: run.id,
       ...(botId ? { botId } : {}),

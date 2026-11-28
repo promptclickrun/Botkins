@@ -849,7 +849,7 @@ function ChatViewBody({
         />
       ) : m.role === "command" && m.plain ? (
         <pre className="command-output">{m.text}</pre>
-      ) : (
+      ) : m.textFromCards && m.a2uiSurfaces?.length ? null : (
         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
       )}
       {!!m.a2uiSurfaces?.length &&
@@ -1302,7 +1302,7 @@ function ChatViewBody({
                   readOnly={!!(state.team && "me" in state.team)}
                   openChat={openChat}
                 />
-              ) : (
+              ) : message.textFromCards && message.a2uiSurfaces?.length ? null : (
                 <RichText text={message.text} files={files} mentions={mentions} />
               )}
               {!!message.a2uiSurfaces?.length &&
@@ -1386,7 +1386,7 @@ function ChatViewBody({
                         />
                       ) : m.role === "command" && m.plain ? (
                         <pre className="command-output">{m.text}</pre>
-                      ) : (
+                      ) : m.textFromCards && m.a2uiSurfaces?.length ? null : (
                         <RichText text={m.voiceCaption ?? m.text} files={files} mentions={mentions} />
                       )}
                       {!!m.a2uiSurfaces?.length &&
