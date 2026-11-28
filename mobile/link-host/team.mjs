@@ -1133,6 +1133,8 @@ export function authorize(principal, team, method, args = [], lookups = {}) {
     return "Only the owner can remove, turn off, replace or edit a script command.";
   // A routine's script runs on the owner's computer, so only the owner writes or changes one ("routine-scripts-v1").
   if ((method === "createRoutine" && args[0]?.script != null) || (method === "updateRoutine" && args[1]?.script !== undefined)) return "Only the owner can add or change a routine's script.";
+  // Overriding an uncertain GitHub write (githubUncertain) can double-post on GitHub, so only the owner may force it.
+  if (method === "workflowRetryRun" && args[2]?.allowUncertainRetry === true) return "Only the owner can retry an uncertain GitHub action.";
   if (((method === "skills.upload" && args[0]?.replace?.length) || (method === "skillsCatalog.install" && args[1]?.length)) && !hasAction(role.perms, "skills", "manage")) return "Your team role cannot replace skills.";
   if (method === "setPreferences") {
     const patch = args[0];

@@ -1,9 +1,9 @@
 // Edits one trigger or step of a workflow draft. Changes stay in the draft until the designer saves it.
 import * as Clipboard from "expo-clipboard";
-import { CheckCircle2, Copy, ExternalLink, KeyRound, Plus, RefreshCw, Trash2, X } from "lucide-react-native";
+import { CheckCircle2, Copy, ExternalLink, KeyRound, Plus, RefreshCw, Trash2, TriangleAlert, X } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Linking, Modal, View } from "react-native";
-import type { WorkflowGithubCatalog, WorkflowGithubDelivery, WorkflowGithubStatus, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
+import type { WorkflowGithubCatalog, WorkflowGithubDelivery, WorkflowGithubStatus, WorkflowNode, WorkflowRun, WorkflowTriggerKind } from "@/link/types";
 import { useBots, useChats, useModels, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
@@ -13,7 +13,9 @@ import {
   deriveGithubAccessAlerts,
   extractCanonicalEvents,
   extractConfiguredRepos,
+  GITHUB_UNCERTAIN_WARNING,
   isIssueOnlyGithubTrigger,
+  latestGithubUncertainRunForNode,
   normalizeLabelColor,
   PR_ONLY_ACTIONS,
   resolveOutputTargetRepos,
@@ -37,6 +39,8 @@ import { Choice, TemplateField } from "./parts";
 type Props = {
   workflowId: string;
   triggerNodes: WorkflowNode[];
+  runs?: WorkflowRun[];
+  isOwner?: boolean;
   node: WorkflowNode | null;
   analysis?: NodeFieldAnalysis;
   canRemove: boolean;
@@ -49,13 +53,15 @@ type Props = {
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
 const problemsFor = (analysis: NodeFieldAnalysis | undefined, prop: string) => analysis?.problems.filter((p) => p.prop === prop && p.kind === "missing").map((p) => p.field);
 
-export function StepSheet({ workflowId, triggerNodes, node, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props) {
+export function StepSheet({ workflowId, triggerNodes, runs, isOwner = true, node, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props) {
   return (
     <Modal visible={!!node} animationType="slide" presentationStyle="pageSheet" supportedOrientations={["portrait", "landscape", "landscape-left", "landscape-right"]} onRequestClose={onClose}>
       {node && (
         <StepBody
           workflowId={workflowId}
           triggerNodes={triggerNodes}
+          runs={runs}
+          isOwner={isOwner}
           node={node}
           analysis={analysis}
           canRemove={canRemove}
@@ -69,7 +75,7 @@ export function StepSheet({ workflowId, triggerNodes, node, analysis, canRemove,
   );
 }
 
-function StepBody({ workflowId, triggerNodes, node: given, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props & { node: WorkflowNode }) {
+function StepBody({ workflowId, triggerNodes, runs, isOwner = true, node: given, analysis, canRemove, onChange, onRemove, onClose, onReplayed }: Props & { node: WorkflowNode }) {
   const [node, setNode] = useState(given);
   useEffect(() => setNode(given), [given.id]);
   const set = (patch: Partial<WorkflowNode>) => setNode((n) => ({ ...n, ...patch }));
@@ -111,7 +117,19 @@ function StepBody({ workflowId, triggerNodes, node: given, analysis, canRemove, 
             </T>
           </>
         )}
-        {node.kind === "output" && <OutputEditor nodeId={node.id} triggerNodes={triggerNodes} cfg={cfg} setConfig={setConfig} fields={fields} analysis={analysis} />}
+        {node.kind === "output" && (
+          <OutputEditor
+            nodeId={node.id}
+            triggerNodes={triggerNodes}
+            runs={runs}
+            isOwner={isOwner}
+            onRetried={onReplayed}
+            cfg={cfg}
+            setConfig={setConfig}
+            fields={fields}
+            analysis={analysis}
+          />
+        )}
         {canRemove && <Button title={node.kind === "trigger" ? "Remove trigger" : "Remove step"} variant="danger" icon={Trash2} onPress={() => { onRemove(); onClose(); }} />}
       </View>
     </Sheet>
@@ -586,6 +604,9 @@ function GithubTriggerEditor({
 function GithubOutputEditor({
   nodeId,
   triggerNodes,
+  runs,
+  isOwner = true,
+  onRetried,
   cfg,
   setConfig,
   fields,
@@ -593,17 +614,23 @@ function GithubOutputEditor({
 }: {
   nodeId: string;
   triggerNodes: WorkflowNode[];
+  runs?: WorkflowRun[];
+  isOwner?: boolean;
+  onRetried?: () => void;
   cfg: Record<string, any>;
   setConfig: (patch: Record<string, unknown>) => void;
   fields: NodeFieldAnalysis["available"];
   analysis?: NodeFieldAnalysis;
 }) {
+  const { colors } = useTheme();
   const { status, startSignIn } = useMobileGithubStatus(`out:${nodeId}`);
   const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [repoModal, setRepoModal] = useState(false);
   const [labelModal, setLabelModal] = useState(false);
   const [peopleModal, setPeopleModal] = useState(false);
+  const [retryingUncertain, setRetryingUncertain] = useState(false);
+  const uncertainRun = useMemo(() => latestGithubUncertainRunForNode(runs, nodeId), [runs, nodeId]);
 
   const issueOnly = useMemo(() => isIssueOnlyGithubTrigger(triggerNodes), [triggerNodes]);
   const targetRepos = useMemo(() => resolveOutputTargetRepos(cfg, triggerNodes), [cfg, triggerNodes]);
@@ -662,6 +689,35 @@ function GithubOutputEditor({
 
   return (
     <View style={{ gap: space.lg }}>
+      {uncertainRun && (
+        <View style={{ padding: space.md, borderRadius: radius.md, backgroundColor: colors.warningSoft, gap: space.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xs }}>
+            <TriangleAlert size={16} color={colors.warning} />
+            <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="600">
+              {GITHUB_UNCERTAIN_WARNING}
+            </T>
+          </View>
+          {isOwner && (
+            <View style={{ flexDirection: "row" }}>
+              <Button
+                title="Retry anyway"
+                variant="secondary"
+                size="sm"
+                loading={retryingUncertain}
+                onPress={() => {
+                  setRetryingUncertain(true);
+                  void attempt(api.workflowRetryRun(uncertainRun.id, null, { allowUncertainRetry: true }), "Retrying")
+                    .then((r) => {
+                      if (r) onRetried?.();
+                    })
+                    .finally(() => setRetryingUncertain(false));
+                }}
+              />
+            </View>
+          )}
+        </View>
+      )}
+
       <GithubAccessAlertsMobile
         alerts={accessAlerts}
         onConnect={() => void startSignIn()}
@@ -907,6 +963,9 @@ function ConditionEditor({ cfg, setConfig, fields }: { cfg: Record<string, any>;
 function OutputEditor({
   nodeId,
   triggerNodes,
+  runs,
+  isOwner = true,
+  onRetried,
   cfg,
   setConfig,
   fields,
@@ -914,6 +973,9 @@ function OutputEditor({
 }: {
   nodeId: string;
   triggerNodes: WorkflowNode[];
+  runs?: WorkflowRun[];
+  isOwner?: boolean;
+  onRetried?: () => void;
   cfg: Record<string, any>;
   setConfig: (patch: Record<string, unknown>) => void;
   fields: NodeFieldAnalysis["available"];
@@ -974,7 +1036,17 @@ function OutputEditor({
         }}
       />
       {dest === "github" ? (
-        <GithubOutputEditor nodeId={nodeId} triggerNodes={triggerNodes} cfg={cfg} setConfig={setConfig} fields={fields} analysis={analysis} />
+        <GithubOutputEditor
+          nodeId={nodeId}
+          triggerNodes={triggerNodes}
+          runs={runs}
+          isOwner={isOwner}
+          onRetried={onRetried}
+          cfg={cfg}
+          setConfig={setConfig}
+          fields={fields}
+          analysis={analysis}
+        />
       ) : (
         <>
           <Choice label="As" options={[{ value: "", label: "First bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]} value={cfg.botName ?? ""} onChange={(botName: string) => setConfig({ botName: botName || undefined, botId: undefined })} />

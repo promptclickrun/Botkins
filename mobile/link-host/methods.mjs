@@ -562,6 +562,17 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
       : action === "switch" && clean(value);
     if (!clean(id) || !valid || args.length > 4 || (expected != null && !clean(expected))) throw new Error("Choose a Main chat and a fork or reset.");
   }
+  if (method === "workflowRetryRun") {
+    const [runId, nodeId, options] = args;
+    if (!clean(runId) || (nodeId != null && !clean(nodeId))) {
+      throw new Error("Choose a workflow run to retry.");
+    }
+    const opts = options && typeof options === "object" && !Array.isArray(options) ? options : null;
+    if (opts && opts.allowUncertainRetry === true) {
+      return [runId, nodeId ?? null, { allowUncertainRetry: true }];
+    }
+    return nodeId != null ? [runId, nodeId] : [runId];
+  }
   if (method === "workflowGithubStatus") {
     const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
     return [{ includeRepos: opts.includeRepos === true }];

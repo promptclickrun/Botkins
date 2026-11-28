@@ -17,6 +17,7 @@ import {
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowInspector } from "./WorkflowInspector";
 import { analyzeWorkflowFields } from "./workflowAnalysis";
+import { memberTeam } from "./teamAccess";
 import type {
   Bot,
   ModelInfo,
@@ -700,6 +701,7 @@ export function WorkflowsView({
           models={models}
           runs={runs}
           selectedRunId={activeRun?.id ?? null}
+          isOwner={!memberTeam(state) && state.remote?.using?.member !== true}
           tab={inspectorTab}
           onTab={setInspectorTab}
           onSelectRun={setSelectedRunId}
@@ -709,9 +711,11 @@ export function WorkflowsView({
               nodes: draft.nodes.map((n) => (n.id === nodeId ? updater(n) : n)),
             });
           }}
-          onRetryRun={async (runId, nodeId) => {
+          onRetryRun={async (runId, nodeId, options) => {
             try {
-              const r = await api.workflowRetryRun(runId, nodeId);
+              const r = options?.allowUncertainRetry
+                ? await api.workflowRetryRun(runId, nodeId ?? null, { allowUncertainRetry: true })
+                : await api.workflowRetryRun(runId, nodeId);
               setSelectedRunId(r.id);
             } catch (err) {
               fail(err);

@@ -5,6 +5,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { EventEmitter } from "node:events";
 import { Workflows } from "../desktop/workflows.mjs";
+import { remoteArgs } from "../desktop/link/methods.mjs";
+import { authorize, defaultTeam } from "../desktop/link/team.mjs";
+import { main as cliMain } from "../cli/main.mjs";
+import { CHANGES } from "../desktop/terminal/coverage.mjs";
 
 // Load TypeScript helper module via Vite/Node-compatible transpile? Node 24+ runs TS directly with strip-types.
 const gh = await import("../src/workflowGithub.ts");
@@ -405,4 +409,185 @@ test("Workflows.tsx starter template uses valid {{state}} field (not broken {{st
   const src = readFileSync(new URL("../src/Workflows.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(src, /\{\{status\}\}/);
   assert.match(src, /destination:\s*"chat"/);
+});
+
+test("desktop workflowGithub.ts detects githubUncertain on runs and steps", () => {
+  const uncertainByCode = {
+    id: "run-1",
+    status: "failed",
+    error: "Post comment: Previous attempt did not finish cleanly",
+    errorCode: "githubUncertain",
+    steps: {
+      t1: { nodeId: "t1", kind: "trigger", label: "GH", status: "completed" },
+      o1: { nodeId: "o1", kind: "output", label: "Post comment", status: "failed", error: "Previous attempt did not finish cleanly", errorCode: "githubUncertain" },
+    },
+  };
+  assert.equal(gh.hasGithubUncertainFailure(uncertainByCode), true);
+  assert.equal(gh.findGithubUncertainStep(uncertainByCode)?.nodeId, "o1");
+  assert.equal(gh.isGithubUncertainStep(uncertainByCode.steps.o1), true);
+  assert.equal(gh.latestGithubUncertainRunForNode([uncertainByCode], "o1")?.id, "run-1");
+  assert.equal(gh.latestGithubUncertainRunForNode([uncertainByCode], "t1"), null);
+
+  // Also detects legacy runs where githubUncertain only appears in the error message string
+  const uncertainByMessage = {
+    id: "run-2",
+    status: "failed",
+    error: 'Post comment: Previous attempt for non-repeatable GitHub action "comment" did not finish cleanly; refusing to double-post (githubUncertain).',
+    steps: {
+      o1: { nodeId: "o1", kind: "output", label: "Post comment", status: "failed", error: "refusing to double-post (githubUncertain)." },
+    },
+  };
+  assert.equal(gh.hasGithubUncertainFailure(uncertainByMessage), true);
+  assert.equal(gh.findGithubUncertainStep(uncertainByMessage)?.nodeId, "o1");
+
+  // Ordinary failures and completed runs are not flagged
+  const ordinaryFail = {
+    id: "run-3",
+    status: "failed",
+    error: "Post comment: 422 Unprocessable Entity",
+    errorCode: "invalid",
+    steps: {
+      o1: { nodeId: "o1", kind: "output", label: "Post comment", status: "failed", error: "422 Unprocessable Entity", errorCode: "invalid" },
+    },
+  };
+  assert.equal(gh.hasGithubUncertainFailure(ordinaryFail), false);
+  assert.equal(gh.findGithubUncertainStep(ordinaryFail), null);
+  assert.equal(gh.GITHUB_UNCERTAIN_WARNING, "GitHub may already have this. Retrying could post twice.");
+});
+
+test("Link remoteArgs & team.mjs enforce owner-only allowUncertainRetry while keeping normal workflowRetryRun for today:use members", () => {
+  // remoteArgs passes through { allowUncertainRetry: true } and strips unknown keys
+  assert.deepEqual(remoteArgs("workflowRetryRun", ["run-1"]), ["run-1"]);
+  assert.deepEqual(remoteArgs("workflowRetryRun", ["run-1", "o1"]), ["run-1", "o1"]);
+  assert.deepEqual(remoteArgs("workflowRetryRun", ["run-1", null, { allowUncertainRetry: true, extra: "nope" }]), [
+    "run-1",
+    null,
+    { allowUncertainRetry: true },
+  ]);
+  assert.deepEqual(remoteArgs("workflowRetryRun", ["run-1", "o1", { allowUncertainRetry: false }]), ["run-1", "o1"]);
+  assert.throws(() => remoteArgs("workflowRetryRun", [""]), /Choose a workflow run/);
+
+  const team = defaultTeam();
+  team.groups.push({ id: "g_ops", name: "Ops", roleId: "r_collab" });
+  team.members.push({ id: "m_alice", name: "Alice", groupId: "g_ops" });
+  const member = { kind: "member", memberId: "m_alice", groupId: "g_ops" };
+  const owner = { kind: "owner" };
+
+  // Normal retry is allowed for a member with today:use (Collaborator)
+  assert.equal(authorize(member, team, "workflowRetryRun", ["run-1", "o1"]), "");
+  assert.equal(authorize(member, team, "workflowRetryRun", ["run-1", null, { allowUncertainRetry: false }]), "");
+
+  // allowUncertainRetry: true is refused for any member (even Admin with all role perms)
+  team.groups.push({ id: "g_admins", name: "Admins", roleId: "r_admin" });
+  team.members.push({ id: "m_admin", name: "Bob", groupId: "g_admins" });
+  const adminMember = { kind: "member", memberId: "m_admin", groupId: "g_admins" };
+  assert.match(
+    authorize(member, team, "workflowRetryRun", ["run-1", null, { allowUncertainRetry: true }]),
+    /Only the owner/,
+  );
+  assert.match(
+    authorize(adminMember, team, "workflowRetryRun", ["run-1", null, { allowUncertainRetry: true }]),
+    /Only the owner/,
+  );
+
+  // Owner is allowed
+  assert.equal(authorize(owner, team, "workflowRetryRun", ["run-1", null, { allowUncertainRetry: true }]), "");
+});
+
+test("owner workflowRetryRun with allowUncertainRetry clears sending ledger row and posts once", async () => {
+  const ws = makeFakeWorkspace();
+  let calls = 0;
+  let failOnce = true;
+  const workflows = new Workflows(ws, {
+    githubOutputClient: {
+      async executeAction() {
+        calls++;
+        if (failOnce) throw new Error("network drop mid-POST");
+        return { objectIds: ["comment:501"] };
+      },
+    },
+  });
+
+  const wf = workflows.create({
+    name: "Owner uncertain retry",
+    enabled: true,
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GitHub", config: { repos: ["org/a"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Post comment", config: { destination: "github", action: "comment", sameRepository: true, sameItem: true, body: "Thanks!" } },
+    ],
+    edges: [{ from: "t1", to: "o1", branch: "default" }],
+  });
+
+  workflows.fireGithubEvent(
+    wf,
+    wf.nodes[0],
+    "org/a",
+    "issue.opened",
+    { number: 12, title: "Need help", author: { login: "alice", type: "User" }, state: "open" },
+    { itemType: "issue", pullRequest: false, deliveryId: "del-uncertain" },
+  );
+  const run = workflows.listRuns(wf.id)[0];
+  await workflows.waitForRun(run.id);
+  assert.equal(workflows.getRun(run.id).status, "failed");
+  assert.equal(calls, 1);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
+
+  // Plain retry fails closed with githubUncertain without posting
+  failOnce = false;
+  workflows.retryRun(run.id, null);
+  await workflows.waitForRun(run.id);
+  const uncertain = workflows.getRun(run.id);
+  assert.equal(uncertain.status, "failed");
+  assert.equal(uncertain.errorCode, "githubUncertain");
+  assert.equal(uncertain.steps.o1.errorCode, "githubUncertain");
+  assert.equal(gh.hasGithubUncertainFailure(uncertain), true);
+  assert.equal(calls, 1);
+
+  // Owner retry with allowUncertainRetry: true clears the sending row and posts once
+  const validatedArgs = remoteArgs("workflowRetryRun", [run.id, null, { allowUncertainRetry: true }]);
+  assert.equal(authorize({ kind: "owner" }, defaultTeam(), "workflowRetryRun", validatedArgs), "");
+  workflows.retryRun(...validatedArgs);
+  await workflows.waitForRun(run.id);
+  const done = workflows.getRun(run.id);
+  assert.equal(done.status, "completed");
+  assert.equal(done.errorCode, null);
+  assert.equal(calls, 2);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`], undefined);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:2`]?.status, "done");
+});
+
+test("CLI `botkins workflows retry` supports --allow-uncertain and logs it in terminal coverage", async () => {
+  const calls = [];
+  let out = "";
+  const io = {
+    stdout: { write: (t) => void (out += t), isTTY: false },
+    stderr: { write: () => {}, isTTY: false },
+    env: {},
+    client: {
+      async call(method, ...args) {
+        calls.push([method, ...args]);
+        return { id: args[0], status: "running" };
+      },
+    },
+  };
+
+  assert.equal(await cliMain(["workflows", "retry", "run-10"], io), 0);
+  assert.deepEqual(calls[0], ["workflows.retry", "run-10"]);
+  assert.match(out, /Retrying run run-10\./);
+
+  out = "";
+  assert.equal(await cliMain(["workflows", "retry", "run-10", "--allow-uncertain"], io), 0);
+  assert.deepEqual(calls[1], ["workflows.retry", "run-10", null, { allowUncertainRetry: true }]);
+  assert.match(out, /allowing uncertain GitHub retry/);
+
+  assert.equal(CHANGES["workflows.retry"](["run-10"], { id: "run-10" }), "run-10");
+  assert.equal(CHANGES["workflows.retry"](["run-10", null, { allowUncertainRetry: true }], { id: "run-10" }), "run-10 (allow-uncertain)");
+});
+
+test("Desktop WorkflowInspector renders githubUncertain warning and owner-only Retry anyway parity", () => {
+  const inspector = readFileSync(new URL("../src/WorkflowInspector.tsx", import.meta.url), "utf8");
+  assert.match(inspector, /GITHUB_UNCERTAIN_WARNING/);
+  assert.match(inspector, /Retry anyway/);
+  assert.match(inspector, /allowUncertainRetry:\s*true/);
+  assert.match(inspector, /isOwner/);
 });

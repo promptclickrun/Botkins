@@ -53,9 +53,14 @@ import {
   extractCanonicalEvents,
   extractConfiguredRepos,
   filterLabelOptions,
+  findGithubUncertainStep,
+  GITHUB_UNCERTAIN_WARNING,
   groupDeliveriesByOutcome,
   groupReposByOwner,
+  hasGithubUncertainFailure,
+  isGithubUncertainStep,
   isIssueOnlyGithubTrigger,
+  latestGithubUncertainRunForNode,
   latestReplayableDelivery,
   normalizeLabelColor,
   PR_ONLY_ACTIONS,
@@ -895,18 +900,25 @@ function GithubOutputSettings({
   config,
   analysis,
   setConfig,
+  uncertainRun,
+  isOwner,
+  onRetryUncertain,
 }: {
   nodeId: string;
   workflow: Workflow;
   config: Record<string, any>;
   analysis?: NodeFieldAnalysis;
   setConfig: (patch: Record<string, any>) => void;
+  uncertainRun?: WorkflowRun | null;
+  isOwner?: boolean;
+  onRetryUncertain?: (runId: string) => Promise<void>;
 }) {
   const { status, handleStartSignIn } = useGithubStatus(`out:${nodeId}`);
   const [catalog, setCatalog] = useState<WorkflowGithubCatalog>({ repos: [], labels: [], assignees: [] });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [personQuery, setPersonQuery] = useState("");
   const [customPerson, setCustomPerson] = useState("");
+  const [retryingUncertain, setRetryingUncertain] = useState(false);
 
   const triggers = useMemo(() => workflow.nodes.filter((n) => n.kind === "trigger"), [workflow.nodes]);
   const issueOnly = useMemo(() => isIssueOnlyGithubTrigger(triggers), [triggers]);
@@ -1003,6 +1015,34 @@ function GithubOutputSettings({
 
   return (
     <>
+      {uncertainRun && (
+        <div className="wf-uncertain-box" role="alert">
+          <div className="wf-uncertain-head">
+            <AlertTriangle size={13} aria-hidden="true" />
+            <span>{GITHUB_UNCERTAIN_WARNING}</span>
+          </div>
+          {isOwner && onRetryUncertain && (
+            <div className="wf-uncertain-actions">
+              <button
+                type="button"
+                className="wf-mini-btn wf-uncertain-btn"
+                disabled={retryingUncertain}
+                onClick={async () => {
+                  setRetryingUncertain(true);
+                  try {
+                    await onRetryUncertain(uncertainRun.id);
+                  } finally {
+                    setRetryingUncertain(false);
+                  }
+                }}
+              >
+                <RotateCcw size={11} aria-hidden="true" /> Retry anyway
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <GithubAccessAlertsBar
         alerts={accessAlerts}
         onConnect={() => void handleStartSignIn()}
@@ -1242,11 +1282,12 @@ interface Props {
   models: ModelInfo[];
   runs: WorkflowRun[];
   selectedRunId: string | null;
+  isOwner?: boolean;
   tab: "step" | "runs";
   onTab: (t: "step" | "runs") => void;
   onSelectRun: (runId: string | null) => void;
   onChangeNode: (nodeId: string, updater: (prev: WorkflowNode) => WorkflowNode) => void;
-  onRetryRun: (runId: string, nodeId?: string) => Promise<void>;
+  onRetryRun: (runId: string, nodeId?: string | null, options?: { allowUncertainRetry?: boolean }) => Promise<void>;
   onRespondApproval: (runId: string, nodeId: string, decision: "approved" | "rejected", note: string) => Promise<void>;
   onCancelRun: (runId: string) => Promise<void>;
   onReplayLastGithubEvent?: (nodeId: string) => Promise<void>;
@@ -1357,6 +1398,7 @@ export function WorkflowInspector({
   models,
   runs,
   selectedRunId,
+  isOwner = true,
   tab,
   onTab,
   onSelectRun,
@@ -2292,6 +2334,12 @@ export function WorkflowInspector({
                       config={node.config}
                       analysis={analysis}
                       setConfig={setConfig}
+                      uncertainRun={latestGithubUncertainRunForNode(runs, node.id)}
+                      isOwner={isOwner}
+                      onRetryUncertain={async (runId) => {
+                        await onRetryRun(runId, null, { allowUncertainRetry: true });
+                        onTab("runs");
+                      }}
                     />
                   )}
                   {node.config.destination === "goal" && (
@@ -2369,7 +2417,7 @@ export function WorkflowInspector({
                       </div>
                     </div>
                     <div className="wf-run-actions">
-                      {selectedRun.status === "failed" && (
+                      {selectedRun.status === "failed" && !hasGithubUncertainFailure(selectedRun) && (
                         <button
                           type="button"
                           className="btn primary small"
@@ -2384,6 +2432,23 @@ export function WorkflowInspector({
                           }}
                         >
                           <RotateCcw size={12} aria-hidden="true" /> Retry failed step
+                        </button>
+                      )}
+                      {selectedRun.status === "failed" && hasGithubUncertainFailure(selectedRun) && isOwner && (
+                        <button
+                          type="button"
+                          className="btn soft small wf-uncertain-btn"
+                          disabled={busyAction === "retry-uncertain"}
+                          onClick={async () => {
+                            setBusyAction("retry-uncertain");
+                            try {
+                              await onRetryRun(selectedRun.id, null, { allowUncertainRetry: true });
+                            } finally {
+                              setBusyAction(null);
+                            }
+                          }}
+                        >
+                          <RotateCcw size={12} aria-hidden="true" /> Retry anyway
                         </button>
                       )}
                       {(selectedRun.status === "running" || selectedRun.status === "waiting_approval") && (
@@ -2455,35 +2520,68 @@ export function WorkflowInspector({
                   )}
 
                   <div className="wf-step-list">
-                    {Object.values(selectedRun.steps).map((st) => (
-                      <div key={st.nodeId} className={`wf-step-card wf-status-${st.status}`}>
-                        <div className="wf-step-card-head">
-                          <span className="wf-step-card-name">
-                            {st.status === "completed" && <CheckCircle2 size={13} />}
-                            {st.status === "failed" && <XCircle size={13} />}
-                            {st.status === "running" && <LoaderCircle size={13} className="wf-spin" />}
-                            {st.status === "waiting_approval" && <ShieldCheck size={13} />}
-                            {st.status === "pending" && <Clock size={13} />}
-                            <span>{st.label}</span>
-                          </span>
-                          <span className="wf-step-card-meta">
-                            {st.status}
-                            {st.startedAt ? ` · ${durText(st.startedAt, st.finishedAt)}` : ""}
-                          </span>
-                        </div>
-                        {st.summary && <div className="wf-step-summary">{st.summary}</div>}
-                        {st.error && <div className="wf-step-err">{st.error}</div>}
-                        {st.status === "failed" && (
-                          <button
-                            type="button"
-                            className="wf-mini-btn"
-                            onClick={() => onRetryRun(selectedRun.id, st.nodeId)}
-                          >
-                            <RotateCcw size={11} /> Retry from here (with current settings)
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                    {(() => {
+                      const uncertainStep = findGithubUncertainStep(selectedRun);
+                      return Object.values(selectedRun.steps).map((st) => {
+                        const isUncertain = isGithubUncertainStep(st) || uncertainStep?.nodeId === st.nodeId;
+                        return (
+                          <div key={st.nodeId} className={`wf-step-card wf-status-${st.status}`}>
+                            <div className="wf-step-card-head">
+                              <span className="wf-step-card-name">
+                                {st.status === "completed" && <CheckCircle2 size={13} />}
+                                {st.status === "failed" && <XCircle size={13} />}
+                                {st.status === "running" && <LoaderCircle size={13} className="wf-spin" />}
+                                {st.status === "waiting_approval" && <ShieldCheck size={13} />}
+                                {st.status === "pending" && <Clock size={13} />}
+                                <span>{st.label}</span>
+                              </span>
+                              <span className="wf-step-card-meta">
+                                {st.status}
+                                {st.startedAt ? ` · ${durText(st.startedAt, st.finishedAt)}` : ""}
+                              </span>
+                            </div>
+                            {st.summary && <div className="wf-step-summary">{st.summary}</div>}
+                            {st.error && <div className="wf-step-err">{st.error}</div>}
+                            {isUncertain && (
+                              <div className="wf-uncertain-box" role="alert">
+                                <div className="wf-uncertain-head">
+                                  <AlertTriangle size={13} aria-hidden="true" />
+                                  <span>{GITHUB_UNCERTAIN_WARNING}</span>
+                                </div>
+                                {isOwner && (
+                                  <div className="wf-uncertain-actions">
+                                    <button
+                                      type="button"
+                                      className="wf-mini-btn wf-uncertain-btn"
+                                      disabled={busyAction === `retry-uncertain:${st.nodeId}`}
+                                      onClick={async () => {
+                                        setBusyAction(`retry-uncertain:${st.nodeId}`);
+                                        try {
+                                          await onRetryRun(selectedRun.id, null, { allowUncertainRetry: true });
+                                        } finally {
+                                          setBusyAction(null);
+                                        }
+                                      }}
+                                    >
+                                      <RotateCcw size={11} aria-hidden="true" /> Retry anyway
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {st.status === "failed" && !isUncertain && (
+                              <button
+                                type="button"
+                                className="wf-mini-btn"
+                                onClick={() => onRetryRun(selectedRun.id, st.nodeId)}
+                              >
+                                <RotateCcw size={11} /> Retry from here (with current settings)
+                              </button>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               )}

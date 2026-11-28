@@ -7,7 +7,7 @@ import { mount, phoneModule } from "./render-phone";
 
 function loadRuns(apiCalls: { approve: unknown[][]; retry: unknown[][]; cancel: unknown[][] }) {
   return phoneModule("../src/features/workflows/Runs", {
-    "lucide-react-native": { ChevronDown: "ChevronDown", ChevronRight: "ChevronRight", ShieldCheck: "ShieldCheck" },
+    "lucide-react-native": { ChevronDown: "ChevronDown", ChevronRight: "ChevronRight", ShieldCheck: "ShieldCheck", TriangleAlert: "TriangleAlert" },
     "react-native": { ScrollView: "ScrollView", View: "View" },
     "@/state/link": {
       api: {
@@ -40,7 +40,7 @@ function loadRuns(apiCalls: { approve: unknown[][]; retry: unknown[][]; cancel: 
       useShape: () => ({ wide: false }),
       useTheme: () => ({ colors: { muted: "#888", warningSoft: "#320", warning: "#fa0", dangerSoft: "#300", line: "#444" } }),
     },
-  }) as { RunsView: (props: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean }) => ReturnType<typeof el> };
+  }) as { RunsView: (props: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean; isOwner?: boolean }) => ReturnType<typeof el> };
 }
 
 const nodes: WorkflowNode[] = [
@@ -149,4 +149,50 @@ test("RunsView caps rendered cards at 30 and renders EmptyState when runs is emp
   const filled = await mount(el(RunsView, { workflow, runs: manyRuns, nodes, canUse: true }));
   t.after(filled.unmount);
   assert.equal(filled.root.root.findAllByType("Group" as never).length, 30);
+});
+
+test("RunsView shows githubUncertain warning and owner-only Retry anyway button", async (t) => {
+  const apiCalls = { approve: [] as unknown[][], retry: [] as unknown[][], cancel: [] as unknown[][] };
+  const { RunsView } = loadRuns(apiCalls);
+
+  const uncertainRun = makeRun({
+    id: "run-uncertain",
+    status: "failed",
+    error: "Post summary: Previous attempt did not finish cleanly (githubUncertain).",
+    errorCode: "githubUncertain",
+    steps: {
+      t1: { nodeId: "t1", kind: "trigger", label: "Task enters review", status: "completed", startedAt: 1_700_000_050_000, finishedAt: 1_700_000_050_200 },
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Post summary",
+        status: "failed",
+        startedAt: 1_700_000_050_300,
+        finishedAt: 1_700_000_060_000,
+        error: "Previous attempt did not finish cleanly (githubUncertain).",
+        errorCode: "githubUncertain",
+      },
+    },
+  });
+
+  // Owner sees the warning AND the "Retry anyway" button
+  const ownerScreen = await mount(el(RunsView, { workflow, runs: [uncertainRun], nodes, canUse: true, isOwner: true }));
+  t.after(ownerScreen.unmount);
+  const ownerTexts = ownerScreen.root.root.findAllByType("T" as never).map((n) => String(n.props.children));
+  assert.ok(ownerTexts.includes("GitHub may already have this. Retrying could post twice."));
+  const retryAnyway = ownerScreen.root.root.findAllByType("Button" as never).find((b) => b.props.title === "Retry anyway");
+  assert.ok(retryAnyway, "Owner sees Retry anyway button");
+  await act(async () => retryAnyway.props.onPress());
+  assert.deepEqual(apiCalls.retry, [["run-uncertain", null, { allowUncertainRetry: true }]]);
+
+  // Member sees the warning, but NOT "Retry anyway" (and not a normal retry button that would just fail closed)
+  const memberScreen = await mount(el(RunsView, { workflow, runs: [uncertainRun], nodes, canUse: true, isOwner: false }));
+  t.after(memberScreen.unmount);
+  const memberTexts = memberScreen.root.root.findAllByType("T" as never).map((n) => String(n.props.children));
+  assert.ok(memberTexts.includes("GitHub may already have this. Retrying could post twice."));
+  assert.equal(
+    memberScreen.root.root.findAllByType("Button" as never).some((b) => b.props.title === "Retry anyway"),
+    false,
+    "Member must not see Retry anyway button",
+  );
 });

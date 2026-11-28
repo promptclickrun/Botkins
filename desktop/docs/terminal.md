@@ -441,7 +441,7 @@ botkins workflows edit <id> patch.json
 botkins workflows pause <id>
 botkins workflows resume <id>
 botkins workflows run <id>
-botkins workflows retry <runId>
+botkins workflows retry <runId> [--allow-uncertain]
 botkins workflows approve <runId> approved --note "Looks good"
 botkins workflows cancel <runId>
 botkins workflows export <id>
@@ -449,7 +449,7 @@ botkins workflows import workflow.botkins-workflow.json
 ```
 
 - **GitHub triggers** accept `repos[]` (migrating legacy single `repo`), 12 canonical events (`issue.opened`, `issue.closed`, `issue.labeled`, `pr.opened`, `pr.updated`, `pr.reviewRequested`, `pr.reviewSubmitted`, `pr.checksFailed`, `pr.merged`, `comment`, `mention`, `assigned`; legacy names are migrated automatically), filters (`labels`, `notBot` on by default, `firstTime`, `titleContains`, `baseBranch`), and expose 24 typed `{{field}}` values (`event`, `repository`, `number`, `pull_request`, `title`, `body`, `url`, `state`, `author`, `sender`, `author_association`, `labels`, `added_label`, `assignees`, `base_branch`, `head_branch`, `head_sha`, `merged`, `review_state`, `review_body`, `comment_body`, `comment_url`, `check_conclusion`, `mention`) with context-aware escaping (`model`, `person`, `lines`).
-- **Native GitHub output steps** (`destination: "github"`) run only inside a workflow run and respect unattended workflow gates. They support 10 actions (`comment`, `label.add`, `label.remove`, `assign`, `review.request`, `review.approve`, `review.changes`, `close`, `reopen`, `issue.create`), default to `sameRepository` + `sameItem`, restrict PR-only actions to PRs, validate agent-selected labels/reviewers against the repository catalog, prefer GitHub App installation tokens with local `gh` CLI fallback, strip/refuse raw external-event echoes (`githubEventText`), and write a `sending` ledger record (`${runId}:${nodeId}:${pass}`) before each API call so crash restarts never double-post non-repeatable actions (`githubUncertain`).
+- **Native GitHub output steps** (`destination: "github"`) run only inside a workflow run and respect unattended workflow gates. They support 10 actions (`comment`, `label.add`, `label.remove`, `assign`, `review.request`, `review.approve`, `review.changes`, `close`, `reopen`, `issue.create`), default to `sameRepository` + `sameItem`, restrict PR-only actions to PRs, validate agent-selected labels/reviewers against the repository catalog, prefer GitHub App installation tokens with local `gh` CLI fallback, strip/refuse raw external-event echoes (`githubEventText`), and write a `sending` ledger record (`${runId}:${nodeId}:${pass}`) before each API call so crash restarts never double-post non-repeatable actions (`githubUncertain`). When a run fails with `githubUncertain`, pass `--allow-uncertain` to `botkins workflows retry <runId>` (owner-only) to clear the `sending` record and retry anyway if you have checked GitHub and want to proceed (retrying could post twice).
 
 ### Projects, to-dos, tasks and artifacts
 

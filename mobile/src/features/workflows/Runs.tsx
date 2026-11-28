@@ -1,10 +1,11 @@
 // A workflow's recent runs: each one's steps in order, with approve or reject, retry and cancel where they apply.
-import { ChevronDown, ChevronRight, ShieldCheck } from "lucide-react-native";
+import { ChevronDown, ChevronRight, ShieldCheck, TriangleAlert } from "lucide-react-native";
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
 import type { Workflow, WorkflowNode, WorkflowRun, WorkflowStepRun } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { Button, Dot, EmptyState, Field, Group, radius, Row, space, T, Tap, useShape, useTheme } from "@/ui";
+import { findGithubUncertainStep, GITHUB_UNCERTAIN_WARNING, hasGithubUncertainFailure, isGithubUncertainStep } from "./github";
 
 export function durLabel(start?: number | null, end?: number | null) {
   if (!start) return "";
@@ -30,7 +31,7 @@ function ordered(run: WorkflowRun, nodes: WorkflowNode[]): WorkflowStepRun[] {
   return Object.values(run.steps).sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (order.get(a.nodeId) ?? 99) - (order.get(b.nodeId) ?? 99));
 }
 
-export function RunsView({ workflow, runs, nodes, canUse }: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean }) {
+export function RunsView({ workflow, runs, nodes, canUse, isOwner = true }: { workflow: Workflow; runs: WorkflowRun[]; nodes: WorkflowNode[]; canUse: boolean; isOwner?: boolean }) {
   const shape = useShape();
   const [open, setOpen] = useState<string | null>(runs[0]?.id ?? null);
   if (!runs.length)
@@ -42,18 +43,20 @@ export function RunsView({ workflow, runs, nodes, canUse }: { workflow: Workflow
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: space.lg, gap: space.md, maxWidth: shape.wide ? 760 : undefined, width: "100%", alignSelf: "center" }}>
       {runs.slice(0, 30).map((run) => (
-        <RunCard key={run.id} run={run} nodes={nodes} canUse={canUse} open={open === run.id} onToggle={() => setOpen(open === run.id ? null : run.id)} />
+        <RunCard key={run.id} run={run} nodes={nodes} canUse={canUse} isOwner={isOwner} open={open === run.id} onToggle={() => setOpen(open === run.id ? null : run.id)} />
       ))}
     </ScrollView>
   );
 }
 
-function RunCard({ run, nodes, canUse, open, onToggle }: { run: WorkflowRun; nodes: WorkflowNode[]; canUse: boolean; open: boolean; onToggle: () => void }) {
+function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: WorkflowRun; nodes: WorkflowNode[]; canUse: boolean; isOwner: boolean; open: boolean; onToggle: () => void }) {
   const { colors } = useTheme();
   const [note, setNote] = useState("");
   const Chevron = open ? ChevronDown : ChevronRight;
   const steps = ordered(run, nodes);
   const failed = steps.find((s) => s.status === "failed");
+  const uncertain = hasGithubUncertainFailure(run);
+  const uncertainStep = findGithubUncertainStep(run);
   const pendingApproval = run.pendingApproval;
   const respond = (decision: "approved" | "rejected") => {
     if (!pendingApproval) return;
@@ -100,32 +103,58 @@ function RunCard({ run, nodes, canUse, open, onToggle }: { run: WorkflowRun; nod
               </T>
             </View>
           )}
-          {steps.map((step, i) => (
-            <View key={step.nodeId} style={{ flexDirection: "row", gap: space.md }}>
-              <View style={{ alignItems: "center", width: 12 }}>
-                <View style={{ marginTop: 6 }}>
-                  <Dot tone={statusTone(step.status)} />
+          {steps.map((step, i) => {
+            const stepUncertain = isGithubUncertainStep(step) || uncertainStep?.nodeId === step.nodeId;
+            return (
+              <View key={step.nodeId} style={{ flexDirection: "row", gap: space.md }}>
+                <View style={{ alignItems: "center", width: 12 }}>
+                  <View style={{ marginTop: 6 }}>
+                    <Dot tone={statusTone(step.status)} />
+                  </View>
+                  {i < steps.length - 1 && <View style={{ flex: 1, width: 2, backgroundColor: colors.line, marginTop: 4 }} />}
                 </View>
-                {i < steps.length - 1 && <View style={{ flex: 1, width: 2, backgroundColor: colors.line, marginTop: 4 }} />}
-              </View>
-              <View style={{ flex: 1, paddingBottom: space.md }}>
-                <T variant="footnote" weight="700">
-                  {step.label}
-                </T>
-                <T variant="caption" color="muted">
-                  {[statusWord(step.status), step.branch ? `took ${step.branch}` : "", durLabel(step.startedAt, step.finishedAt)].filter(Boolean).join(" · ")}
-                </T>
-                {!!(step.error || step.summary) && (
-                  <T variant="footnote" color={step.error ? "danger" : "ink2"} numberOfLines={6} selectable>
-                    {step.error || step.summary}
+                <View style={{ flex: 1, paddingBottom: space.md, gap: space.xs }}>
+                  <T variant="footnote" weight="700">
+                    {step.label}
                   </T>
-                )}
+                  <T variant="caption" color="muted">
+                    {[statusWord(step.status), step.branch ? `took ${step.branch}` : "", durLabel(step.startedAt, step.finishedAt)].filter(Boolean).join(" · ")}
+                  </T>
+                  {!!(step.error || step.summary) && (
+                    <T variant="footnote" color={step.error ? "danger" : "ink2"} numberOfLines={6} selectable>
+                      {step.error || step.summary}
+                    </T>
+                  )}
+                  {stepUncertain && (
+                    <View style={{ padding: space.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, gap: space.xs }}>
+                      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xs }}>
+                        <TriangleAlert size={14} color={colors.warning} />
+                        <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="600">
+                          {GITHUB_UNCERTAIN_WARNING}
+                        </T>
+                      </View>
+                      {isOwner && canUse && (
+                        <View style={{ flexDirection: "row" }}>
+                          <Button
+                            title="Retry anyway"
+                            variant="secondary"
+                            size="sm"
+                            onPress={() => void attempt(api.workflowRetryRun(run.id, null, { allowUncertainRetry: true }), "Retrying")}
+                          />
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           {canUse && (
             <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
-              {run.status === "failed" && <Button title={failed ? `Retry ${failed.label}` : "Retry"} size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, failed?.nodeId), "Retrying")} />}
+              {run.status === "failed" && !uncertain && <Button title={failed ? `Retry ${failed.label}` : "Retry"} size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, failed?.nodeId), "Retrying")} />}
+              {run.status === "failed" && uncertain && !uncertainStep && isOwner && (
+                <Button title="Retry anyway" variant="secondary" size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, null, { allowUncertainRetry: true }), "Retrying")} />
+              )}
               {(run.status === "running" || run.status === "waiting_approval") && <Button title="Cancel run" variant="danger" size="sm" onPress={() => void attempt(api.workflowCancelRun(run.id), "Run cancelled")} />}
             </View>
           )}

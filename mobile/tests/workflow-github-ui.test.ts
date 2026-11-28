@@ -7,15 +7,22 @@ import {
   extractCanonicalEvents,
   extractConfiguredRepos,
   filterLabelOptions,
+  findGithubUncertainStep,
+  GITHUB_UNCERTAIN_WARNING,
   groupDeliveriesByOutcome,
   groupReposByOwner,
+  hasGithubUncertainFailure,
+  isGithubUncertainStep,
   isIssueOnlyGithubTrigger,
+  latestGithubUncertainRunForNode,
   latestReplayableDelivery,
   normalizeLabelColor,
   resolveOutputTargetRepos,
   shouldClearLabelsOnRepoChange,
   type WorkflowGithubDelivery,
 } from "../src/features/workflows/github";
+import { remoteArgs } from "../link-host/methods.mjs";
+import { authorize, defaultTeam } from "../link-host/team.mjs";
 
 test("mobile github helpers stay in exact parity with desktop/src/workflowGithub.ts", () => {
   const mobile = readFileSync(new URL("../src/features/workflows/github.ts", import.meta.url), "utf8");
@@ -244,4 +251,58 @@ test("GithubPickers.tsx virtualizes repo, label, people, and delivery lists with
   const src = readFileSync(new URL("../src/features/workflows/GithubPickers.tsx", import.meta.url), "utf8");
   assert.match(src, /<SectionList\b/);
   assert.match(src, /<FlatList\b/);
+});
+
+test("mobile github helpers detect githubUncertain runs/steps and link-host enforces owner-only allowUncertainRetry", () => {
+  const run = {
+    id: "run-gh-1",
+    status: "failed",
+    error: "Post comment: refusing to double-post",
+    errorCode: "githubUncertain",
+    steps: {
+      t1: { nodeId: "t1", kind: "trigger", label: "GitHub", status: "completed" },
+      o1: { nodeId: "o1", kind: "output", label: "Post comment", status: "failed", error: "refusing to double-post", errorCode: "githubUncertain" },
+    },
+  };
+  assert.equal(GITHUB_UNCERTAIN_WARNING, "GitHub may already have this. Retrying could post twice.");
+  assert.equal(hasGithubUncertainFailure(run), true);
+  assert.equal(findGithubUncertainStep(run)?.nodeId, "o1");
+  assert.equal(isGithubUncertainStep(run.steps.o1), true);
+  assert.equal(latestGithubUncertainRunForNode([run], "o1")?.id, "run-gh-1");
+  assert.equal(latestGithubUncertainRunForNode([run], "other"), null);
+
+  // Mobile link-host mirrors desktop/desktop/link/{methods,team}.mjs exactly
+  assert.equal(
+    readFileSync(new URL("../link-host/methods.mjs", import.meta.url), "utf8"),
+    readFileSync(new URL("../../desktop/desktop/link/methods.mjs", import.meta.url), "utf8"),
+  );
+  assert.equal(
+    readFileSync(new URL("../link-host/team.mjs", import.meta.url), "utf8"),
+    readFileSync(new URL("../../desktop/desktop/link/team.mjs", import.meta.url), "utf8"),
+  );
+
+  assert.deepEqual(remoteArgs("workflowRetryRun", ["run-gh-1", null, { allowUncertainRetry: true }]), [
+    "run-gh-1",
+    null,
+    { allowUncertainRetry: true },
+  ]);
+  const team = defaultTeam();
+  team.groups.push({ id: "g_ops", name: "Ops", roleId: "r_collab" });
+  team.members.push({ id: "m_1", name: "Alex", groupId: "g_ops" });
+  const member = { kind: "member", memberId: "m_1", groupId: "g_ops" };
+  assert.equal(authorize(member, team, "workflowRetryRun", ["run-gh-1", "o1"]), "");
+  assert.match(authorize(member, team, "workflowRetryRun", ["run-gh-1", null, { allowUncertainRetry: true }]), /Only the owner/);
+  assert.equal(authorize({ kind: "owner" }, team, "workflowRetryRun", ["run-gh-1", null, { allowUncertainRetry: true }]), "");
+});
+
+test("mobile StepSheet and Runs have desktop parity for githubUncertain warning and owner-only Retry anyway", () => {
+  const runsSrc = readFileSync(new URL("../src/features/workflows/Runs.tsx", import.meta.url), "utf8");
+  const sheetSrc = readFileSync(new URL("../src/features/workflows/StepSheet.tsx", import.meta.url), "utf8");
+  const desktopInspector = readFileSync(new URL("../../desktop/src/WorkflowInspector.tsx", import.meta.url), "utf8");
+  for (const src of [runsSrc, sheetSrc, desktopInspector]) {
+    assert.match(src, /GITHUB_UNCERTAIN_WARNING/);
+    assert.match(src, /Retry anyway/);
+    assert.match(src, /allowUncertainRetry:\s*true/);
+    assert.match(src, /isOwner/);
+  }
 });

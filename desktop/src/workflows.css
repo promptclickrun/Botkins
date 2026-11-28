@@ -1179,6 +1179,37 @@
   color: var(--danger);
   font-size: 12px;
 }
+.wf-uncertain-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: var(--ink);
+  font-size: 12px;
+}
+.wf-uncertain-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--warning);
+  font-weight: 600;
+}
+.wf-uncertain-head svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.wf-uncertain-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.wf-uncertain-btn {
+  border-color: var(--warning);
+  color: var(--warning);
+}
 .wf-step-list {
   display: flex;
   flex-direction: column;
