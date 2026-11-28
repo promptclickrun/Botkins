@@ -596,3 +596,56 @@ test("every command of the four groups is described by `botkins help --json`, wi
   assert.deepEqual(asks, ["artifacts read", "projects chat", "projects commit", "projects remove", "tasks add", "tasks edit", "tasks move", "tasks remove", "tasks start", "todos remove"]);
   assert.ok(COMMANDS.projects.commands.commit.run);
 });
+
+test("tasks are tied from the command line, and a bot's working notes are read and deleted there", { skip }, async (t) => {
+  const { botkins, client, changes, everything, workspace } = await service(t);
+  await botkins(["bots", "add", "Nova"]);
+  await botkins(["projects", "add", "--name", "Launch"]);
+  // A task in a project, and one that waits on it and is a part of it.
+  const first = (await botkins(["tasks", "add", "Gather", "the", "numbers", "--bot", "Nova", "--project", "Launch", "--json"])).json();
+  assert.deepEqual(first.project.name, "Launch");
+  const waiting = await botkins(["tasks", "add", "Write it up", "--bot", "Nova", "--status", "ready", "--after", "Gather", "--parent", "Gather"]);
+  assert.equal(waiting.exit, 0, waiting.err);
+  assert.match(waiting.out, /^Added the task Write it up \(ready, for Nova\)\. It waits on Gather the numbers, and starts once it is Done\.\n?$/);
+  assert.match((await botkins(["tasks", "show", "Write it up"])).out, /\nPart of: Gather the numbers \(later\)\nWaits on: Gather the numbers \(later\)\n/);
+  assert.match((await botkins(["tasks", "show", "Gather"])).out, /\nProject: Launch\nParts: Write it up \(ready\)\n/);
+  const shown = (await botkins(["tasks", "show", "Write it up", "--json"])).json();
+  assert.deepEqual([shown.dependsOn.map((task) => task.title), shown.waitingOn.map((task) => task.title), shown.parent.title], [["Gather the numbers"], ["Gather the numbers"], "Gather the numbers"]);
+  // What the app refuses, the command line refuses in the app's words.
+  assert.match((await botkins(["tasks", "edit", "Gather", "--after", "Write it up"])).err, /would wait on each other/);
+  assert.match((await botkins(["tasks", "add", "Lost", "--project", "Nowhere"])).err, /There is no project called Nowhere\./);
+  assert.match((await botkins(["tasks", "add", "Lost", "--after", "Nothing"])).err, /There is no task called Nothing\./);
+  assert.equal((await botkins(["tasks", "edit", "Write it up", "--after", "Gather", "--no-after"])).exit, 2);
+  // Only what is named changes: a new title keeps the ties, and each tie is taken away by its own flag.
+  assert.deepEqual((await botkins(["tasks", "edit", "Write it up", "--title", "Write the report", "--json"])).json().dependsOn.map((task) => task.title), ["Gather the numbers"]);
+  const freed = (await botkins(["tasks", "edit", "Write the report", "--no-after", "--no-parent", "--project", "Launch", "--json"])).json();
+  assert.deepEqual(["dependsOn" in freed, "parent" in freed, freed.project.name], [false, false, "Launch"]);
+  assert.equal("project" in (await botkins(["tasks", "edit", "Write the report", "--no-project", "--json"])).json(), false);
+
+  // A bot's notes (here written as a bot's tool would write them).
+  assert.match((await botkins(["notes", "list"])).out, /^No notes\. Bots leave them with note_add/);
+  const nova = workspace.state.bots.find((bot) => bot.name === "Nova");
+  const task = workspace.tasks.get(first.id);
+  const project = workspace.state.projects[0];
+  const { note } = workspace.notes.add({ kind: "blocker", text: "The \x1b[31mAPI key\x1b[0m for the numbers is missing." }, { bot: nova, chat: null, run: { id: "r", taskId: task.id }, task, project });
+  workspace.notes.add({ kind: "finding", text: "Last year's numbers are in the wiki." }, { bot: nova, chat: null, run: { id: "r2" }, project });
+  const list = await botkins(["notes", "list"]);
+  assert.equal(list.out.includes("\x1b"), false, "a bot's words are made safe at a terminal");
+  assert.match(list.out, /^\[blocker\] The .*API key.* for the numbers is missing\.\n {4}Nova, \d+ seconds? ago, with nobody watching, on Gather the numbers, in Launch {3}n_[0-9a-f]{10}\n\[finding\] Last year's numbers are in the wiki\.\n {4}Nova, \d+ seconds? ago, in Launch {3}n_[0-9a-f]{10}\n?$/);
+  assert.deepEqual((await botkins(["notes", "list", "--task", "Gather", "--json"])).json().map((entry) => entry.id), [note.id]);
+  assert.deepEqual((await botkins(["notes", "list", "--kind", "finding", "--json"])).json().map((entry) => entry.kind), ["finding"]);
+  assert.equal((await botkins(["notes", "list", "--project", "Launch", "--bot", "Nova", "--json"])).json().length, 2);
+  assert.match((await botkins(["notes", "list", "--kind", "rumor"])).err, /A kind is one of finding, decision, blocker, handoff\./);
+  assert.match((await botkins(["notes", "show", note.id])).out, /^\[blocker\] /);
+  assert.match((await botkins(["notes", "show", "n_0000000000"])).err, /There is no note with the id n_0000000000\. See `botkins notes list`\./);
+  // Delete asks first, and shows the words that go.
+  const asked = await botkins(["notes", "remove", note.id]);
+  assert.equal(asked.exit, 2);
+  assert.match(asked.err, /^This deletes the note n_[0-9a-f]{10} that Nova wrote:\n {2}The .*API key.* for the numbers is missing\.\nbotkins: This needs a yes\. Run it again with --yes\./);
+  assert.match((await botkins(["notes", "remove", note.id, "--yes"])).out, /^Deleted the note n_[0-9a-f]{10}\.\n?$/);
+  assert.equal((await client.call("notes.list", {})).length, 1);
+  // The log names a note by its id: never a bot's words.
+  const lines = (await changes()).filter((line) => /^notes\./.test(line));
+  assert.deepEqual(lines, ["notes.remove " + note.id]);
+  assert.equal(everything().split("\n").filter((line) => line.includes("Changed from the command line")).join("\n").includes("API key"), false);
+});

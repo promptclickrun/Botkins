@@ -843,6 +843,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     moveTask: (id, status, options) => workspace.tasks.move(id, status, options),
     startTask: (id) => workspace.tasks.start(id),
     deleteTask: (id) => workspace.tasks.remove(id),
+    // A working note that bots left on a task or in a project (desktop/notes.mjs): the person's own delete.
+    deleteNote: (id) => workspace.notes.remove(id).id,
     // Event-based Workflows (desktop/workflows.mjs)
     workflowsList: () => ({ workflows: workspace.workflows.list(), runs: workspace.workflows.listRuns(null, 100) }),
     workflowCreate: (data) => workspace.workflows.create(data),

@@ -28,6 +28,7 @@ export const LIVE_PARTS = {
   team: "Your team",
   subagents: "Subagents",
   wiki: "Wiki",
+  notes: "Working notes",
   memory: "Your memory",
 };
 
@@ -73,6 +74,45 @@ export function contextNote(told, now) {
     if (removed.length) sections.push(label + ", no longer:\n" + removed.map((line) => "- " + line).join("\n"));
   }
   return sections.length ? NOTE_HEAD + " These replace what your instructions said above where they differ.\n" + sections.join("\n") : "";
+}
+
+/** The start of the line that tells a session which of its tools came and went (toolChanges). */
+export const TOOLS_HEAD = "[Botkins: your tools changed]";
+const NAMED = 40; // tool names in one line of that note
+
+/**
+ * What a turn tells its session about its tools, with its message. A session's tool list stays as
+ * it began (stableTools): a tool that is new is added without a word, and one the turn hasn't
+ * stays listed and only says so when it is called. So the model is told here, by name. Nothing is
+ * kept by hand: the names are the turn's own tools, whatever made them (Botkins, a server, a plugin).
+ *   - A tool the session lists for the first time is told once ("Now yours to use"). That is the
+ *     turn in which the tool list changes anyway.
+ *   - The tools a turn hasn't are told when they are not the ones last told ("Not in this turn").
+ *     So a session whose turns take turns (a person's and a routine's, an owner's and a member's)
+ *     is told once what the other kind of turn lacks, not with every message.
+ *   known    the names the session listed before this turn (none for a session that begins: its
+ *            tool list says it all)
+ *   current  the names this turn has
+ *   told     { untold?, missing? } of the session's record: the new names it was not told yet (a
+ *            turn that was stopped before its message was sent), and the missing ones last told
+ * Returns { note, added, missing }: `added` are the names to keep as untold until the message is
+ * answered, `missing` the ones to keep as told then (null when nothing was said of them).
+ */
+export function toolChanges(known, current, { untold = [], missing: told = [] } = {}) {
+  if (!known.length) return { note: "", added: [], missing: null };
+  const before = new Set(known);
+  const now = new Set(current);
+  const added = [...new Set([...untold, ...current.filter((name) => !before.has(name))])].filter((name) => now.has(name)).sort();
+  const gone = [...new Set(known)].filter((name) => !now.has(name)).sort();
+  const said = gone.length > 0 && (gone.length !== told.length || gone.some((name, index) => name !== told[index]));
+  const names = (list) => list.slice(0, NAMED).join(", ") + (list.length > NAMED ? " and " + (list.length - NAMED) + " more" : "");
+  const note =
+    added.length || said
+      ? TOOLS_HEAD +
+        (added.length ? "\nNow yours to use: " + names(added) + "." : "") +
+        (said ? "\nNot in this turn (still listed, but they answer that they aren't available): " + names(gone) + "." : "")
+      : "";
+  return { note, added, missing: said ? gone : null };
 }
 
 /** A digest of anything, for comparing what a session began with to what it would begin with now. */
@@ -132,12 +172,14 @@ export const RECORD_DAYS = 30;
 /**
  * Each session's record, kept in a file of its own in Botkins' data folder (or in memory without
  * one, and for a temporary session), so it outlives a restart of Botkins or of the harness:
- *   { key, chatId, botId, basis, parts, told, tools, routes, stale? }
+ *   { key, chatId, botId, basis, parts, told, tools, untold?, missing?, routes, stale? }
  *   chatId, botId  whose session it is (forget)
  *   basis   digest of what starts a new record when it changes
  *   parts   the live parts as the system prompt has them
  *   told    the live parts as the session knows them now (parts, then each context note)
  *   tools   the tools the session lists, without handlers
+ *   untold  the names of tools that are new to the session and that it was not told of yet (toolChanges)
+ *   missing the names of the tools that the session was last told a turn hadn't
  *   routes  { [server name]: "botkins" | "harness" }
  *   stale   set after a compaction: the next turn starts a new record
  */

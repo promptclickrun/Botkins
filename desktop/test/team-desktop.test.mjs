@@ -128,7 +128,8 @@ test("an invited member's turn in the owner's chat is opened without the owner's
   assert.deepEqual(second.mcp.servers, {}, "the session is opened again for the member's turn, without it");
   assert.deepEqual(second.skills.directories, []);
   // The owner's chat now has two people, so the text starts with its speaker.
-  assert.match(fake.log.sent.at(-1)[1], /^\[Botkins: this chat has several people: .*the latest is from Avery\.\]\n\[Avery\] A member continues it$/);
+  // And it ends with which of the session's tools this turn hasn't: they stay listed, so the model is told (desktop/session-prompts.mjs toolChanges).
+  assert.match(fake.log.sent.at(-1)[1], /^\[Botkins: this chat has several people: .*the latest is from Avery\.\]\n\[Avery\] A member continues it\n\n\[Botkins: your tools changed\]\nNot in this turn \(still listed, but they answer that they aren't available\): [^\n]*\bscript_command_create\b[^\n]*\.$/);
 });
 
 test("a chat's people are its creator and whom the link says were invited", (t) => {
