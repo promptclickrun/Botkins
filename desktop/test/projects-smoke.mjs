@@ -101,6 +101,7 @@ try {
     await expect(page.getByLabel("New to-do")).toHaveValue("");
   }
   await page.getByLabel("Check off Inventory mailboxes").click();
+  await page.getByRole("button", { name: "1 done" }).click();
   await expect(page.getByLabel("Reopen Inventory mailboxes")).toBeChecked();
   await button("Move Schedule cutover up").click();
   await expect(page.getByRole("list", { name: "Open to-dos" }).getByRole("listitem")).toHaveText([/Schedule cutover/, /Pilot with IT/]);

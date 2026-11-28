@@ -13,9 +13,9 @@ export function FolderChoice({ project, value, change }: { project?: Project; va
   </View>;
 }
 
-export function CloneForm({ id, name, done }: { id?: string; name?: string; done?: (id: string) => void }) {
+export function CloneForm({ id, name, done, defaultOpen = false }: { id?: string; name?: string; done?: (id: string) => void; defaultOpen?: boolean }) {
   const enabled = useCapability("project-clone-v1");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [repo, setRepo] = useState("");
   const [parent, setParent] = useState("");
   const [busy, setBusy] = useState(false);

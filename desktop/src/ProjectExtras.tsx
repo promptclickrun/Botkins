@@ -2,9 +2,11 @@
 // artifacts a person attached to the project (the computer's calls addProjectArtifact,
 // removeProjectArtifact and projectArtifacts; capability "project-artifacts-v1").
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchField } from "glisse";
 import { File, FileAudio, FileImage, FileText, FileVideo, Folder, FolderGit2, FolderKanban, MessageCircle, Paperclip, Plus, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { dateLabel } from "./Pages";
+import { filterProjectArtifacts, pageItems, PROJECT_PAGE_SIZE } from "./projectLogic";
 import { memberTeam } from "./teamAccess";
 import type { Artifact, Chat, Project, State } from "./types";
 
@@ -125,9 +127,11 @@ function ArtifactLine({ state, item }: { state: State; item: Artifact }) {
   );
 }
 
-/** A project's Artifacts section: what is attached, newest first, and "Attach an artifact…". */
+/** A project's Artifacts section: what is attached, newest first, search + 20-item paging, and "Attach an artifact…". */
 export function ProjectArtifacts({ state, project, openChat }: { state: State; project: Project; openChat: (id: string, messageIndex?: number) => void }) {
   const [items, setItems] = useState<Artifact[]>();
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PROJECT_PAGE_SIZE);
   const [error, setError] = useState("");
   const [picking, setPicking] = useState(false);
   const ids = (project.artifacts ?? []).join("\n");
@@ -141,6 +145,12 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
       live = false;
     };
   }, [project.id, ids, state.artifacts?.revision]);
+  const botNames = useMemo(() => new Map(state.bots.map((b) => [b.id, b.name])), [state.bots]);
+  const filtered = useMemo(() => {
+    const sorted = [...(items ?? [])].sort((a, b) => b.time - a.time);
+    return filterProjectArtifacts(sorted, query, (id) => botNames.get(id));
+  }, [items, query, botNames]);
+  const paged = useMemo(() => pageItems(filtered, limit), [filtered, limit]);
   const remote = !!state.remote?.using;
   const act = (work: Promise<unknown>) => void work.then(() => setError(""), (e) => setError(clean(e)));
   const count = items?.length ?? project.artifacts?.length ?? 0;
@@ -165,26 +175,49 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
         )}
         {!!items?.length && (
           <div className="group rows">
-            <ul className="edit-list artifact-pick-list" aria-label="Attached artifacts">
-              {items.map((item) => (
-                <li key={item.id}>
-                  <ArtifactLine state={state} item={item} />
-                  {(!remote || item.url) && (
-                    <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(item.url ? api.openLink(item.url) : api.openChatPath(item.path, "open"))}>
-                      {item.url ? "Open on claude.ai" : "Open"}
+            <div className="project-list-tools">
+              <SearchField
+                className="lg-search-compact project-search-field"
+                aria-label="Search artifacts"
+                placeholder="Search artifacts"
+                value={query}
+                onValueChange={(next) => {
+                  setQuery(next);
+                  setLimit(PROJECT_PAGE_SIZE);
+                }}
+              />
+            </div>
+            {paged.visible.length === 0 ? (
+              <p className="muted project-list-empty">No artifacts match.</p>
+            ) : (
+              <ul className="edit-list artifact-pick-list" aria-label="Attached artifacts">
+                {paged.visible.map((item) => (
+                  <li key={item.id}>
+                    <ArtifactLine state={state} item={item} />
+                    {(!remote || item.url) && (
+                      <button type="button" className="secondary" aria-label={"Open " + item.name} onClick={() => act(item.url ? api.openLink(item.url) : api.openChatPath(item.path, "open"))}>
+                        {item.url ? "Open on claude.ai" : "Open"}
+                      </button>
+                    )}
+                    {item.chatId && state.chats.some((c) => c.id === item.chatId) && (
+                      <button type="button" className="icon-button" aria-label={"Go to the chat of " + item.name} title="Go to chat" onClick={() => openChat(item.chatId!, item.messageIndex)}>
+                        <MessageCircle size={16} />
+                      </button>
+                    )}
+                    <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
+                      <X size={16} />
                     </button>
-                  )}
-                  {item.chatId && state.chats.some((c) => c.id === item.chatId) && (
-                    <button type="button" className="icon-button" aria-label={"Go to the chat of " + item.name} title="Go to chat" onClick={() => openChat(item.chatId!, item.messageIndex)}>
-                      <MessageCircle size={16} />
-                    </button>
-                  )}
-                  <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
-                    <X size={16} />
-                  </button>
-                </li>
-              ))}
-            </ul>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {paged.older > 0 && (
+              <div className="project-list-more">
+                <button type="button" className="textbutton" onClick={() => setLimit((n) => n + PROJECT_PAGE_SIZE)}>
+                  Show {paged.older} older
+                </button>
+              </div>
+            )}
           </div>
         )}
         <p className="group-foot">{count ? plural(count, "artifact") : "Nothing attached yet."}</p>
