@@ -659,11 +659,15 @@ export class Workflows {
       .slice(0, 50)
       .map(({ payloadJson, ...rest }) => ({
         ...rest,
-        replayable: rest.reason !== "offline" && Boolean(payloadJson),
+        replayable: rest.outcome === "started" && rest.reason !== "offline" && Boolean(payloadJson),
       }));
   }
 
-  /** Persists a GitHub delivery record (keeping up to 50 per trigger, never pruning `waiting`). */
+  /**
+   * Persists a GitHub delivery record (keeping up to 50 non-waiting rows per trigger, never pruning `waiting`).
+   * To keep workspace state compact, `payloadJson` is retained ONLY on `waiting` rows (needed for dequeue)
+   * and on the single newest `outcome === "started"` row per trigger (for "Run last event").
+   */
   recordGithubDelivery(record) {
     this.ensureState();
     const list = this.ws.state.workflowGithubDeliveries;
@@ -693,18 +697,36 @@ export class Workflows {
         .filter((e) => e.outcome !== "waiting")
         .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""))
         .slice(0, 50);
+
+      // Retain payloadJson only on the newest replayable (`outcome === "started"`) row per trigger.
+      let keptStartedPayload = false;
+      for (const entry of rest) {
+        if (entry.outcome === "started" && entry.reason !== "offline" && entry.payloadJson && !keptStartedPayload) {
+          keptStartedPayload = true;
+        } else if (entry.payloadJson !== undefined && entry.payloadJson !== null) {
+          entry.payloadJson = null;
+        }
+      }
       kept.push(...waiting, ...rest);
     }
     this.ws.state.workflowGithubDeliveries = kept;
     this.ws.save();
   }
 
-  /** Replays the most recent replayable GitHub delivery payload for a trigger node. */
+  /** Replays the most recent started GitHub delivery payload for a trigger node. */
   replayLastGithubEvent(workflowId, nodeId = null) {
     this.ensureState();
     const wf = this.get(workflowId);
     const list = (this.ws.state.workflowGithubDeliveries ?? [])
-      .filter((d) => d && d.workflowId === workflowId && (!nodeId || d.nodeId === nodeId) && d.reason !== "offline" && d.payloadJson)
+      .filter(
+        (d) =>
+          d &&
+          d.workflowId === workflowId &&
+          (!nodeId || d.nodeId === nodeId) &&
+          d.outcome === "started" &&
+          d.reason !== "offline" &&
+          d.payloadJson,
+      )
       .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""));
     const latest = list[0];
     if (!latest) {
@@ -720,7 +742,17 @@ export class Workflows {
     } catch {
       throw new Error("Stored GitHub event payload could not be parsed.");
     }
-    const run = this.startRun(wf, triggerNode, payload, { manual: true });
+    // Re-evaluate current trigger filters so edits to filters (e.g. notBot/baseBranch/labels) are respected on replay.
+    const filterResult = evaluateGithubTriggerFilters(triggerNode.config, payload, {
+      sender: payload.sender ?? payload.author,
+      author: payload.author,
+    });
+    if (!filterResult.pass) {
+      throw new Error(`Last GitHub event no longer matches this trigger's filters (${filterResult.reason || "filter"}).`);
+    }
+    // Keep `manual: false` so untrusted external-event framing, model escaping, and echo guards remain enforced;
+    // mark `replay: true` for audit and display only.
+    const run = this.startRun(wf, triggerNode, payload, { manual: false, replay: true });
     this.recordGithubDelivery({
       workflowId: wf.id,
       nodeId: triggerNode.id,
@@ -1540,7 +1572,7 @@ export class Workflows {
         reason: "filter",
         reasonDetail: filterResult.reason || null,
         runId: null,
-        payloadJson,
+        payloadJson: null,
       });
       return;
     }
@@ -1805,7 +1837,7 @@ export class Workflows {
   }
 
   /** Creates a run record and begins executing the workflow graph asynchronously. */
-  startRun(wf, triggerNode, triggerPayload, { manual = false } = {}) {
+  startRun(wf, triggerNode, triggerPayload, { manual = false, replay = false } = {}) {
     const now = Date.now();
     const steps = {};
     for (const node of wf.nodes) {
@@ -1825,6 +1857,7 @@ export class Workflows {
       triggerNodeId: triggerNode.id,
       triggerKind: triggerNode.triggerKind,
       manual,
+      ...(replay ? { replay: true } : {}),
       status: "running",
       startedAt: now,
       finishedAt: null,

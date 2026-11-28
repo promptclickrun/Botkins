@@ -662,6 +662,7 @@ export interface WorkflowRun {
   triggerNodeId: string;
   triggerKind?: WorkflowTriggerKind;
   manual?: boolean;
+  replay?: boolean;
   status: WorkflowRunStatus;
   startedAt: number;
   finishedAt?: number | null;

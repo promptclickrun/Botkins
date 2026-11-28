@@ -2351,7 +2351,7 @@ export function WorkflowInspector({
                     <span className="wf-run-row-main">
                       <strong>{r.status === "waiting_approval" ? "Waiting approval" : r.status}</strong>
                       <span>
-                        {r.manual ? "Manual" : r.triggerKind || "Event"} · {relTime(r.startedAt)}
+                        {r.replay ? "Replay" : r.manual ? "Manual" : r.triggerKind || "Event"} · {relTime(r.startedAt)}
                       </span>
                     </span>
                     <span className="wf-run-dur">{durText(r.startedAt, r.finishedAt)}</span>

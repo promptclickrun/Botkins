@@ -1802,6 +1802,7 @@ export type WorkflowRun = {
   triggerNodeId?: string | null;
   triggerKind?: string | null;
   manual?: boolean;
+  replay?: boolean;
   startedAt: number;
   finishedAt?: number | null;
   error?: string | null;

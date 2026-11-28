@@ -488,10 +488,10 @@ export function groupDeliveriesByOutcome(deliveries: readonly WorkflowGithubDeli
   return groups;
 }
 
-/** Returns the newest replayable delivery (excluding synthetic offline markers), or null if none exist. */
+/** Returns the newest replayable (`outcome === "started"`, non-offline) delivery, or null if none exist. */
 export function latestReplayableDelivery(deliveries: readonly WorkflowGithubDelivery[]): WorkflowGithubDelivery | null {
   const sorted = [...deliveries]
-    .filter((d) => d && d.reason !== "offline" && d.replayable !== false)
+    .filter((d) => d && d.outcome === "started" && d.reason !== "offline" && d.replayable !== false)
     .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""));
   return sorted[0] ?? null;
 }

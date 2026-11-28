@@ -68,7 +68,7 @@ function RunCard({ run, nodes, canUse, open, onToggle }: { run: WorkflowRun; nod
             {statusWord(run.status)}
           </T>
           <T variant="footnote" color="muted" numberOfLines={1}>
-            {[run.manual ? "Run by hand" : run.triggerKind || "Event", new Date(run.startedAt).toLocaleString(), durLabel(run.startedAt, run.finishedAt)].filter(Boolean).join(" · ")}
+            {[run.replay ? "Replayed event" : run.manual ? "Run by hand" : run.triggerKind || "Event", new Date(run.startedAt).toLocaleString(), durLabel(run.startedAt, run.finishedAt)].filter(Boolean).join(" · ")}
           </T>
         </View>
         <Chevron size={18} color={colors.muted} />

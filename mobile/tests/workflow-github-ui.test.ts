@@ -205,9 +205,9 @@ test("groupDeliveriesByOutcome orders waiting -> started -> skipped, newest-firs
     ],
   );
 
-  // Offline gap is newest by timestamp, so latestReplayableDelivery must skip it and pick d-wait.
+  // Only started, non-offline deliveries are replayable (skips offline, waiting, and filter/self skipped rows).
   const latest = latestReplayableDelivery(deliveries);
-  assert.equal(latest?.deliveryId, "d-wait");
+  assert.equal(latest?.deliveryId, "d-start-old");
 });
 
 test("extractConfiguredRepos, extractCanonicalEvents, issue-only check, and output target repo resolution", () => {
