@@ -53,19 +53,23 @@ test("desktop LoadingGrid defaults to 120ms delay and hides initial markup befor
   assert.equal(initial, "", "default 120ms delay renders nothing synchronously so fast switches never flash");
 });
 
-test("desktop LoadingGrid renders accessible Loading region and 9 aria-hidden cells when delay=0", () => {
+test("desktop LoadingGrid renders accessible Loading region and 9 aria-hidden bot tiles with eyes when delay=0", () => {
   const html = renderToStaticMarkup(React.createElement(LoadingGrid, { delay: 0 }));
   assert.match(html, /role="status"/);
   assert.match(html, /aria-label="Loading"/);
   assert.match(html, /class="loading-grid" aria-hidden="true"/);
   const cells = html.match(/class="loading-grid-cell"/g) ?? [];
-  assert.equal(cells.length, 9, "3×3 grid renders 9 animated squares");
+  const eyes = html.match(/class="loading-grid-eye /g) ?? [];
+  assert.equal(cells.length, 9, "3×3 grid renders 9 bot tiles");
+  assert.equal(eyes.length, 18, "each bot tile renders two eyes");
 });
 
 test("desktop loading-grid.css uses theme colors for light, dark, glass backdrops and reduced motion", () => {
   const css = readFileSync(new URL("../src/loading-grid.css", import.meta.url), "utf8");
-  assert.match(css, /@keyframes loading-grid-wave/);
+  assert.match(css, /@keyframes lg-hero-hop/);
+  assert.match(css, /@keyframes lg-wink-slow/);
   assert.match(css, /var\(--accent\)/);
-  assert.match(css, /:root:not\(\[data-backdrop="clean"\]\)\s+\.loading-grid-cell/);
+  assert.match(css, /var\(--on-accent\)/);
+  assert.match(css, /:root:not\(\[data-backdrop="clean"\]\)\s+\.loading-grid/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });

@@ -1,17 +1,22 @@
-// A quiet 3×3 CSS-animated grid of rounded squares that pulses in a diagonal wave on the
-// compositor thread, so it keeps moving while React commits deferred content. Shown only after
-// `delay` ms (default 120ms) so fast clicks never flash a loader.
+// A 3×3 Brady Bunch grid of tiny CSS-animated Botkin faces that glance, blink, wink, tilt, and
+// bounce on independent rhythms on the compositor thread, so it keeps moving while React commits
+// deferred content. Shown only after `delay` ms (default 120ms) so fast clicks never flash a loader.
 import { useEffect, useState, type CSSProperties } from "react";
 import "./loading-grid.css";
 
 export const LOADING_GRID_DELAY_MS = 120;
 
-const CELLS = Array.from({ length: 9 }, (_, index) => {
-  const row = Math.floor(index / 3);
-  const col = index % 3;
-  // Diagonal phase in 0..1 from top-left to bottom-right.
-  return { key: index, phase: (row + col) / 5 };
-});
+const TILES = [
+  { key: 0, l: "oval", r: "oval" },
+  { key: 1, l: "round", r: "round" },
+  { key: 2, l: "oval", r: "oval" },
+  { key: 3, l: "oval", r: "oval" },
+  { key: 4, l: "oval", r: "oval" },
+  { key: 5, l: "oval", r: "oval" },
+  { key: 6, l: "arc", r: "arc" },
+  { key: 7, l: "round", r: "round" },
+  { key: 8, l: "sleepy", r: "sleepy" },
+] as const;
 
 export type LoadingGridProps = {
   /** Milliseconds to wait before showing the grid. Set to 0 to show immediately. Defaults to 120ms. */
@@ -22,9 +27,9 @@ export type LoadingGridProps = {
   caption?: string;
   /** Tighter vertical padding for side columns / inline sections. */
   compact?: boolean;
-  /** Cell size in px (defaults to 7). */
+  /** Tile size in px (defaults to 15). */
   cellSize?: number;
-  /** Gap between cells in px (defaults to 4). */
+  /** Gap between tiles in px (defaults to 4). */
   gap?: number;
   className?: string;
 };
@@ -55,7 +60,12 @@ export function LoadingGrid({
   const gridStyle: CSSProperties | undefined =
     cellSize || gap
       ? ({
-          ...(cellSize ? { "--loading-grid-cell": `${cellSize}px` } : {}),
+          ...(cellSize
+            ? {
+                "--loading-grid-cell": `${cellSize}px`,
+                "--loading-grid-radius": `${Math.max(3, +(cellSize * 0.3).toFixed(1))}px`,
+              }
+            : {}),
           ...(gap ? { "--loading-grid-gap": `${gap}px` } : {}),
         } as CSSProperties)
       : undefined;
@@ -68,12 +78,13 @@ export function LoadingGrid({
       aria-live="polite"
     >
       <div className="loading-grid" aria-hidden="true" style={gridStyle}>
-        {CELLS.map((cell) => (
-          <span
-            key={cell.key}
-            className="loading-grid-cell"
-            style={{ "--cell-phase": cell.phase } as CSSProperties}
-          />
+        {TILES.map((tile) => (
+          <span key={tile.key} className="loading-grid-cell" data-i={tile.key}>
+            <span className="loading-grid-eyes">
+              <span className={"loading-grid-eye l " + tile.l} />
+              <span className={"loading-grid-eye r " + tile.r} />
+            </span>
+          </span>
         ))}
       </div>
       {caption && <span className="loading-grid-label">{caption}</span>}

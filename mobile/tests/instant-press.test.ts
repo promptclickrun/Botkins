@@ -90,7 +90,8 @@ test("LoadingGrid stays hidden below 120ms and renders after 120ms with accessib
   assert.equal(hiddenWrappers[0]!.props.importantForAccessibility, "no-hide-descendants");
 
   const cells = screen.root.root.findAllByType("AnimatedView" as never);
-  assert.equal(cells.length, 9, "3×3 grid renders 9 animated cells");
+  // Each of the 9 bot tiles renders 4 AnimatedViews: tile + eyes wrapper + left eye + right eye.
+  assert.equal(cells.length, 36, "3×3 Brady Bunch grid renders 9 bot tiles with eyes");
   assert.ok(animatedStarted >= 1, "Reanimated loop started");
 
   await screen.unmount();

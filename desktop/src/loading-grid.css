@@ -1,4 +1,6 @@
-/* A quiet 3×3 grid of rounded squares pulsing in a diagonal wave on the compositor thread. */
+/* A 3×3 Brady Bunch grid of tiny Botkin faces pulsing, glancing, winking and blinking on the
+ * compositor thread. Monochrome theme accent on clean surfaces; crisp ink + contrasting eyes on
+ * glass backdrops. */
 .loading-grid-region {
   display: flex;
   flex-direction: column;
@@ -13,52 +15,232 @@
 }
 
 .loading-grid {
+  --loading-grid-cell: 15px;
+  --loading-grid-gap: 4px;
+  --loading-grid-radius: 4.5px;
+  --loading-tile-bg: var(--accent);
+  --loading-eye-fg: var(--on-accent);
   display: grid;
-  grid-template-columns: repeat(3, var(--loading-grid-cell, 7px));
-  grid-template-rows: repeat(3, var(--loading-grid-cell, 7px));
-  gap: var(--loading-grid-gap, 4px);
+  grid-template-columns: repeat(3, var(--loading-grid-cell));
+  grid-template-rows: repeat(3, var(--loading-grid-cell));
+  gap: var(--loading-grid-gap);
+}
+
+/* Glass backdrop variant: high-contrast ink tiles with sharp light/dark eyes over blurred color. */
+:root:not([data-backdrop="clean"]) .loading-grid {
+  --loading-tile-bg: color-mix(in srgb, var(--ink) 78%, transparent);
+  --loading-eye-fg: #ffffff;
+}
+
+:root[data-mode="dark"]:not([data-backdrop="clean"]) .loading-grid {
+  --loading-tile-bg: color-mix(in srgb, var(--ink) 86%, transparent);
+  --loading-eye-fg: #1b1714;
 }
 
 .loading-grid-cell {
-  width: var(--loading-grid-cell, 7px);
-  height: var(--loading-grid-cell, 7px);
-  border-radius: 2.5px;
-  background: color-mix(in srgb, var(--accent) 84%, transparent);
-  opacity: 0.24;
-  transform: scale(0.78);
-  animation: loading-grid-wave 1.1s ease-in-out infinite;
-  animation-delay: calc(var(--cell-phase, 0) * -1.1s);
-  will-change: opacity, transform;
+  position: relative;
+  width: var(--loading-grid-cell);
+  height: var(--loading-grid-cell);
+  border-radius: var(--loading-grid-radius);
+  background: var(--loading-tile-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform, opacity;
 }
 
-:root:not([data-backdrop="clean"]) .loading-grid-cell {
-  background: color-mix(in srgb, var(--ink) 74%, transparent);
+.loading-grid-cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22);
+  pointer-events: none;
 }
 
-:root[data-mode="dark"]:not([data-backdrop="clean"]) .loading-grid-cell {
-  background: color-mix(in srgb, var(--ink) 84%, transparent);
+.loading-grid-eyes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--loading-grid-cell) * 0.16);
+  will-change: transform;
 }
+
+.loading-grid-eye {
+  width: calc(var(--loading-grid-cell) * 0.16);
+  height: calc(var(--loading-grid-cell) * 0.28);
+  border-radius: 99px;
+  background: var(--loading-eye-fg);
+  transform-origin: center;
+  will-change: transform;
+}
+
+.loading-grid-eye.round {
+  height: calc(var(--loading-grid-cell) * 0.19);
+}
+
+.loading-grid-eye.arc {
+  width: calc(var(--loading-grid-cell) * 0.22);
+  height: calc(var(--loading-grid-cell) * 0.13);
+  background: transparent;
+  border-top: max(1.4px, calc(var(--loading-grid-cell) * 0.095)) solid var(--loading-eye-fg);
+  border-radius: 99px 99px 0 0;
+  transform: translateY(calc(var(--loading-grid-cell) * 0.03));
+}
+
+.loading-grid-eye.sleepy {
+  width: calc(var(--loading-grid-cell) * 0.21);
+  height: calc(var(--loading-grid-cell) * 0.11);
+  background: transparent;
+  border-bottom: max(1.4px, calc(var(--loading-grid-cell) * 0.095)) solid var(--loading-eye-fg);
+  border-radius: 0 0 99px 99px;
+}
+
+/* ---- Independent Brady Bunch tile animations (prime-ish periods so they never march in lockstep) ---- */
+
+/* 0: Top-left — glances down-right at center, double-blink */
+.loading-grid-cell[data-i="0"] { animation: lg-bob-a 2.3s ease-in-out infinite; }
+.loading-grid-cell[data-i="0"] .loading-grid-eyes { animation: lg-look-br 3.1s ease-in-out infinite; }
+.loading-grid-cell[data-i="0"] .loading-grid-eye { animation: lg-blink-double 3.7s ease-in-out infinite; }
+
+/* 1: Top-center — curious head tilt + peeks left & right */
+.loading-grid-cell[data-i="1"] { animation: lg-tilt-curious 2.9s ease-in-out infinite; }
+.loading-grid-cell[data-i="1"] .loading-grid-eyes { animation: lg-look-lr 2.7s ease-in-out infinite; }
+.loading-grid-cell[data-i="1"] .loading-grid-eye { animation: lg-blink-quick 4.3s ease-in-out infinite 0.4s; }
+
+/* 2: Top-right — glances down-left, cheeky wink */
+.loading-grid-cell[data-i="2"] { animation: lg-bob-b 2.6s ease-in-out infinite 0.3s; }
+.loading-grid-cell[data-i="2"] .loading-grid-eyes { animation: lg-look-bl 3.5s ease-in-out infinite; }
+.loading-grid-cell[data-i="2"] .loading-grid-eye.r { animation: lg-wink-slow 3.4s ease-in-out infinite; }
+
+/* 3: Mid-left — looks right at center with bouncy nod */
+.loading-grid-cell[data-i="3"] { animation: lg-nod-right 2.1s ease-in-out infinite 0.2s; }
+.loading-grid-cell[data-i="3"] .loading-grid-eyes { animation: lg-look-r 2.9s ease-in-out infinite; }
+.loading-grid-cell[data-i="3"] .loading-grid-eye { animation: lg-blink-quick 3.9s ease-in-out infinite 1.1s; }
+
+/* 4: Center hero — happy hop + glances around the grid */
+.loading-grid-cell[data-i="4"] { animation: lg-hero-hop 1.9s ease-in-out infinite; }
+.loading-grid-cell[data-i="4"] .loading-grid-eyes { animation: lg-look-around 4.2s ease-in-out infinite; }
+.loading-grid-cell[data-i="4"] .loading-grid-eye { animation: lg-blink-quick 3.1s ease-in-out infinite 0.7s; }
+
+/* 5: Mid-right — looks left at center, curious brow squint */
+.loading-grid-cell[data-i="5"] { animation: lg-tilt-left 2.5s ease-in-out infinite 0.5s; }
+.loading-grid-cell[data-i="5"] .loading-grid-eyes { animation: lg-look-l 3.3s ease-in-out infinite; }
+.loading-grid-cell[data-i="5"] .loading-grid-eye.l { animation: lg-curious-brow 2.5s ease-in-out infinite; }
+
+/* 6: Bottom-left — peeks up-right, happy smile eyes */
+.loading-grid-cell[data-i="6"] { animation: lg-bob-a 2.7s ease-in-out infinite 0.9s; }
+.loading-grid-cell[data-i="6"] .loading-grid-eyes { animation: lg-look-tr 3.4s ease-in-out infinite; }
+
+/* 7: Bottom-center — looks straight up at center, slow blink */
+.loading-grid-cell[data-i="7"] { animation: lg-bob-b 2.2s ease-in-out infinite 0.6s; }
+.loading-grid-cell[data-i="7"] .loading-grid-eyes { animation: lg-look-u 2.8s ease-in-out infinite; }
+.loading-grid-cell[data-i="7"] .loading-grid-eye { animation: lg-blink-quick 4.7s ease-in-out infinite 1.6s; }
+
+/* 8: Bottom-right — looks up-left, sleepy/cozy pulse */
+.loading-grid-cell[data-i="8"] { animation: lg-cozy-breathe 3.2s ease-in-out infinite 0.4s; }
+.loading-grid-cell[data-i="8"] .loading-grid-eyes { animation: lg-look-tl 3.8s ease-in-out infinite; }
 
 .loading-grid-label {
   font-size: calc(12.5px * var(--text-scale));
   color: var(--muted);
 }
 
-@keyframes loading-grid-wave {
-  0%, 100% {
-    opacity: 0.22;
-    transform: scale(0.76);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1);
-  }
+/* ---- Keyframes ---- */
+@keyframes lg-bob-a {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.9; }
+  50% { transform: translateY(-1.5px) scale(1.04); opacity: 1; }
+}
+@keyframes lg-bob-b {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.88; }
+  45% { transform: translateY(-1.6px) rotate(3deg); opacity: 1; }
+  80% { transform: translateY(0.5px) rotate(-2deg); opacity: 0.94; }
+}
+@keyframes lg-tilt-curious {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  35% { transform: rotate(-7deg) translateY(-1px); }
+  70% { transform: rotate(5deg) translateY(-0.5px); }
+}
+@keyframes lg-tilt-left {
+  0%, 100% { transform: rotate(0deg); }
+  40% { transform: rotate(-6deg) translateX(-0.8px); }
+  75% { transform: rotate(2deg); }
+}
+@keyframes lg-nod-right {
+  0%, 100% { transform: rotate(0deg) translateX(0); }
+  45% { transform: rotate(5deg) translateX(0.9px); }
+}
+@keyframes lg-hero-hop {
+  0%, 100% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-2px) scale(1.07); }
+  65% { transform: translateY(0.4px) scale(0.97); }
+}
+@keyframes lg-cozy-breathe {
+  0%, 100% { transform: scale(0.95); opacity: 0.72; }
+  50% { transform: scale(1.02); opacity: 0.95; }
+}
+
+@keyframes lg-blink-quick {
+  0%, 88%, 100% { transform: scaleY(1); }
+  93% { transform: scaleY(0.12); }
+}
+@keyframes lg-blink-double {
+  0%, 76%, 86%, 96%, 100% { transform: scaleY(1); }
+  81%, 91% { transform: scaleY(0.12); }
+}
+@keyframes lg-wink-slow {
+  0%, 62%, 86%, 100% { transform: scaleY(1); }
+  70%, 78% { transform: scaleY(0.14); }
+}
+@keyframes lg-curious-brow {
+  0%, 100% { transform: scaleY(1); }
+  45% { transform: scaleY(0.62) translateY(0.5px); }
+}
+
+@keyframes lg-look-br {
+  0%, 20%, 100% { transform: translate(0, 0); }
+  45%, 75% { transform: translate(1.2px, 1px); }
+}
+@keyframes lg-look-bl {
+  0%, 15%, 100% { transform: translate(0, 0); }
+  40%, 72% { transform: translate(-1.2px, 1px); }
+}
+@keyframes lg-look-tr {
+  0%, 22%, 100% { transform: translate(0, 0); }
+  48%, 78% { transform: translate(1.2px, -1px); }
+}
+@keyframes lg-look-tl {
+  0%, 25%, 100% { transform: translate(0, 0); }
+  55%, 80% { transform: translate(-1.1px, -0.9px); }
+}
+@keyframes lg-look-lr {
+  0%, 100% { transform: translate(0, 0); }
+  30% { transform: translate(-1.3px, 0.3px); }
+  65% { transform: translate(1.3px, 0.3px); }
+}
+@keyframes lg-look-r {
+  0%, 25%, 100% { transform: translate(0, 0); }
+  50%, 78% { transform: translate(1.4px, 0); }
+}
+@keyframes lg-look-l {
+  0%, 20%, 100% { transform: translate(0, 0); }
+  48%, 75% { transform: translate(-1.4px, 0); }
+}
+@keyframes lg-look-u {
+  0%, 20%, 100% { transform: translate(0, 0); }
+  50%, 78% { transform: translate(0, -1.2px); }
+}
+@keyframes lg-look-around {
+  0%, 100% { transform: translate(0, 0); }
+  22% { transform: translate(-1.1px, -0.8px); }
+  48% { transform: translate(1.2px, -0.6px); }
+  72% { transform: translate(0.9px, 0.9px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .loading-grid-cell {
-    animation: none;
-    opacity: calc(0.35 + (1 - var(--cell-phase, 0)) * 0.45);
-    transform: scale(0.92);
+  .loading-grid-cell,
+  .loading-grid-eyes,
+  .loading-grid-eye {
+    animation: none !important;
   }
 }
