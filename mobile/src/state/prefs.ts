@@ -5,7 +5,7 @@ import { type BackdropId, DEFAULT_BACKDROP, isBackdrop } from "@/ui/backdrops";
 import { DEFAULT_FONT, FONT_IDS, type FontId } from "@/ui/fonts";
 import { DEFAULT_THEME, THEMES } from "@/ui/themes";
 import { DEFAULT_AVATAR_ANIMATIONS, readAvatarAnimations } from "./avatarPrefs";
-import { type TabId, tabOrder, USUAL_TABS } from "./tabs";
+import { barFromOrder, barOf, type PinId, USUAL_BAR } from "./tabs";
 
 const KEY = "botkins.prefs.v1";
 
@@ -37,8 +37,14 @@ export type Prefs = {
   /** What the Marketplace tab showed last: apps (Composio) or plugins. */
   /** Notices shown one time and closed (a plugin the computer switched off): one key for each computer, plugin and place. */
   toldNotices: string[];
-  /** The order of the tabs in the bar (Settings › Appearance › Tabs). */
-  tabOrder: TabId[];
+  /** The tabs a person keeps on the bar between their bot and All, in order (All, and Settings › Tabs). Three at most. */
+  bar: PinId[];
+  /** The order of All's tiles, by a place's id. A place it doesn't name follows in the usual order. */
+  allOrder: string[];
+  /** The tiles a person put under Hidden in All. */
+  allHidden: string[];
+  /** The bot the first tab shows: the one the person was last with there. None, or one that is gone: the primary bot. */
+  homeBot: string | null;
   /** The spaces whose panels show open on the space's page. Every other space shows them as cards. */
   openSpaces: string[];
   /** The panels pinned to Home, in the order they were pinned. A panel of another computer is kept and not shown. */
@@ -55,7 +61,7 @@ export type Prefs = {
   settingsHost: string | null;
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], tabOrder: USUAL_TABS, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null, chatChipOrder: [], unifiedHosts: false, excludedUnifiedHosts: [], settingsHost: null };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], bar: USUAL_BAR, allOrder: [], allHidden: [], homeBot: null, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null, chatChipOrder: [], unifiedHosts: false, excludedUnifiedHosts: [], settingsHost: null };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -91,7 +97,11 @@ function read(saved: Record<string, unknown>): Prefs {
     avatarAnimations: readAvatarAnimations(saved.avatarAnimations),
     todayOpen: typeof saved.todayOpen === "boolean" ? saved.todayOpen : defaults.todayOpen,
     toldNotices: Array.isArray(saved.toldNotices) ? saved.toldNotices.filter((key): key is string => typeof key === "string" && key.length <= 700).slice(-400) : defaults.toldNotices,
-    tabOrder: tabOrder(saved.tabOrder),
+    // A phone from before the bar could be changed saved the order of its five tabs.
+    bar: Array.isArray(saved.bar) ? barOf(saved.bar) : barFromOrder(saved.tabOrder),
+    allOrder: ids(saved.allOrder).slice(0, 60),
+    allHidden: ids(saved.allHidden).slice(0, 60),
+    homeBot: isId(saved.homeBot) ? saved.homeBot : null,
     openSpaces: ids(saved.openSpaces),
     computerOrder: ids(saved.computerOrder),
     chatChipOrder: ids(saved.chatChipOrder),

@@ -649,7 +649,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
  * `pane` shows the chat beside the Chats list (two panes, see split.ts) instead of on its own page:
  * it draws its own bar, and `onLeave` takes the place of going back.
  */
-function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?: string; onLeave?: () => void; onList?: () => void }) {
+function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onOpen }: ChatScreenProps) {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
   // `at` lands on one message (its place in the whole chat, from 0): Open chat on an artifact.
@@ -658,7 +658,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   const { draft, board, at } = paneId ? { draft: undefined, board: undefined, at: undefined } : params;
   const shape = useShape();
   const leave = () => (leavePane ? leavePane() : router.back());
-  const openChat = (id: string) => (paneId ? useChatSplit.setState({ id }) : openChatRoute(id));
+  const openChat = (id: string) => (onOpen ? onOpen(id) : paneId ? useChatSplit.setState({ id }) : openChatRoute(id));
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   // A bot's request leaves room for the bar above it and the composer below it, also over the keyboard.
@@ -1019,12 +1019,15 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList }: { pane?:
   );
   const header = paneId ? (
     // Beside the list there is no navigation bar: the pane draws its own opaque bar with a hairline edge.
-    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, backgroundColor: colors.canvas, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
-      {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
-      <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
-        <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
+    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, backgroundColor: colors.canvas, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
+      {above}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm }}>
+        {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
+        <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
+          <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
+        </View>
+        {barEnd}
       </View>
-      {barEnd}
     </View>
   ) : (
     <Stack.Screen
@@ -1216,8 +1219,18 @@ function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
   );
 }
 
+type ChatScreenProps = {
+  pane?: string;
+  onLeave?: () => void;
+  onList?: () => void;
+  /** Drawn in the pane's own bar, over the chat's title: the first tab's row of bots. */
+  above?: ReactNode;
+  /** Where another chat opens from a pane; without it, in the pane's place beside the Chats list. */
+  onOpen?: (id: string) => void;
+};
+
 /** In a chat only the header face, the working capsule's face and the live voice dock move; message and reply rows hold still. */
-export default function ChatScreen(props: { pane?: string; onLeave?: () => void; onList?: () => void }) {
+export default function ChatScreen(props: ChatScreenProps) {
   return (
     <AvatarMotion on={false}>
       <ChatScreenScreen {...props} />
@@ -1226,6 +1239,6 @@ export default function ChatScreen(props: { pane?: string; onLeave?: () => void;
 }
 
 /** A chat beside the Chats list, when there is room for two panes (see split.ts). */
-export function ChatPane({ id, onLeave, onList }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void }) {
-  return <ChatScreen key={id} pane={id} onLeave={onLeave} onList={onList} />;
+export function ChatPane({ id, onLeave, onList, above, onOpen }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void } & Pick<ChatScreenProps, "above" | "onOpen">) {
+  return <ChatScreen key={id} pane={id} onLeave={onLeave} onList={onList} above={above} onOpen={onOpen} />;
 }

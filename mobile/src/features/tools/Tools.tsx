@@ -1,4 +1,5 @@
 import { type Href, router, Stack } from "expo-router";
+import { openPlace } from "@/features/all/open";
 import { Globe, Import, LayoutGrid, Plus, Smartphone, Store, Terminal, Wrench } from "lucide-react-native";
 import { useState } from "react";
 import { View } from "react-native";
@@ -73,7 +74,7 @@ export default function Tools() {
       {(canView || canPlugins) && <View style={{ marginTop: servers?.length === 0 ? -space.lg : 0 }}>
         <Group>
           {canView && <Row leading={<IconTile icon={LayoutGrid} color={colors.ink2} />} title="Browse apps" chevron onPress={() => router.push("/market/apps" as Href)} />}
-          {canPlugins && <Row leading={<IconTile icon={Store} color={colors.ink2} />} title="Add from the Marketplace" chevron onPress={() => router.push("/market")} />}
+          {canPlugins && <Row leading={<IconTile icon={Store} color={colors.ink2} />} title="Add from the Marketplace" chevron onPress={() => openPlace("market")} />}
         </Group>
       </View>}
     </Page>

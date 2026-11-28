@@ -234,7 +234,7 @@ export default function Settings() {
       label: "This phone",
       rows: [
         row("appearance", "Appearance", <Row leading={<IconTile icon={SunMoon} color={brand.rose} />} title="Appearance" value={themeById(lightTheme).name + " · " + backdropById(backdrop).name} chevron onPress={go("/settings/appearance")} />, { words: "theme dark light mode color backdrop grid font text size" }),
-        row("tabs", "Tabs", <Row leading={<IconTile icon={PanelBottom} color={brand.rose} />} title="Tabs" chevron onPress={go("/settings/tabs")} />, { words: "tab bar order" }),
+        row("tabs", "Tabs", <Row leading={<IconTile icon={PanelBottom} color={brand.rose} />} title="Tabs" chevron onPress={go("/settings/tabs")} />, { words: "tab bar order pin all" }),
         row("device", "Device access", <Row leading={<IconTile icon={Smartphone} color={brand.rose} />} title="Device access" chevron onPress={go("/tools/device")} />, { words: "calendar contacts health location photos music mail" }),
       ],
     },

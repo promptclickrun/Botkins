@@ -1,7 +1,8 @@
 // "People in this chat" ("team-people-v1"), opened by "Invite" in a chat's menu. A chat's replies
 // and questions go only to its people: who started it, and who was invited here. The chat's starter
 // and the owner invite and remove; someone invited can leave. The words are the desktop app's.
-import { router, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
+import { backToChats } from "@/features/all/open";
 import { LogOut, User, UserCheck } from "lucide-react-native";
 import { useState } from "react";
 import { useCapability, useChat, useOnline, usePart } from "@/state/hooks";
@@ -38,7 +39,7 @@ export default function People() {
   // Leaving asks nothing first, as on the desktop: the chat's starter can invite the person again.
   const leave = async () => {
     const left = await attempt(api["link.team.removeFromChat"](chat.id, me).then(() => true));
-    if (left) router.dismissTo("/chats");
+    if (left) backToChats();
   };
   return (
     <Sheet title="People in this chat">
