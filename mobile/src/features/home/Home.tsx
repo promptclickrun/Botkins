@@ -6,7 +6,7 @@
 import { type Href, router, useScrollToTop } from "expo-router";
 import { MenuView } from "@react-native-menu/menu";
 import { ChevronDown, ChevronUp, Plus, Settings, Sunrise } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 import Animated, { FadeIn, useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,7 +27,7 @@ import { setPrefs, usePrefs } from "@/state/prefs";
 import { isNodeJobRequest, routeForPendingRequest } from "@/state/pushRouting";
 import { useApp } from "@/state/store";
 import { useProfileHosts } from "@/state/profile";
-import { BackdropLayer, badgeColors, BotAvatar, Button, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, Label, LinkBanner, Mascot, Row, space, T, Tap, useShape, useTheme } from "@/ui";
+import { BackdropLayer, badgeColors, BotAvatar, Button, Dot, EmptyState, Group, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Mascot, Row, space, T, Tap, useFrozenWhenHidden, useShape, useTheme } from "@/ui";
 import { computerActions } from "@/state/computers";
 import { answerInline, arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
@@ -114,22 +114,8 @@ function NeedsYou({ request, bot }: { request: AgentRequest; bot?: Bot }) {
   );
 }
 
-/** Gray rows while the first state is on its way. */
 function Placeholder() {
-  const { colors } = useTheme();
-  return (
-    <View style={{ gap: space.xl, paddingTop: space.sm }} accessibilityLabel="Loading">
-      {[0, 1, 2, 3].map((index) => (
-        <View key={index} style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
-          <View style={{ width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: colors.sunken }} />
-          <View style={{ flex: 1, gap: 8 }}>
-            <View style={{ width: "40%", height: 12, borderRadius: 6, backgroundColor: colors.sunken }} />
-            <View style={{ width: "75%", height: 10, borderRadius: 5, backgroundColor: colors.sunken }} />
-          </View>
-        </View>
-      ))}
-    </View>
-  );
+  return <Loading />;
 }
 
 /**
@@ -308,38 +294,35 @@ function useDropOrder(bots: Bot[]) {
   return { shown: pending && !stale ? pending.bots : bots, drop };
 }
 
-export default function Home() {
+const HomeBody = memo(function HomeBody({
+  bots,
+  chats,
+  synced,
+  requests,
+  board,
+  panels,
+  sections,
+  onDrop,
+  scroll,
+  setDragging,
+  seen,
+}: {
+  bots: Bot[];
+  chats: ChatSummary[];
+  synced: boolean;
+  requests: AgentRequest[] | undefined;
+  board: ReturnType<typeof usePart<"board">>;
+  panels: ReturnType<typeof usePart<"panels">>;
+  sections: ReturnType<typeof usePart<"sections">>;
+  onDrop: (id: string, zone: Zone, index: number) => void;
+  scroll: BoardScroll;
+  setDragging: (on: boolean) => void;
+  seen: ReturnType<typeof makeSeenSignal>;
+}) {
   const { colors } = useTheme();
-  // The computer's bots, or a drop's new order while the computer catches up.
-  const order = useDropOrder(useBots());
-  const bots = order.shown;
-  const chats = useChats();
-  const synced = useApp((state) => state.synced);
-  const link = useApp((state) => state.link);
-  const online = link === "online";
-  const unified = useApp((state) => state.unified);
-  const unifiedHosts = useApp((state) => state.unifiedHosts);
-  const includedHosts = unifiedHosts.filter((h) => h.included);
-  const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
-  const computer = unified
-    ? onlineHosts === includedHosts.length
-      ? "All computers"
-      : onlineHosts + "/" + includedHosts.length + " computers"
-    : (useApp((state) => state.pairing?.name) ?? "Computer");
-  const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
-  const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
-  const computerOrder = usePrefs(prefs => prefs.computerOrder);
-  const computers = useApp((state) => state.pairings);
-  const directoryHosts = useProfileHosts();
-  const inUse = useApp((state) => state.pairing?.serverId);
-  const requests = useApp((state) => state.parts.live?.requests);
-  const board = usePart("board");
-  const panels = usePart("panels");
-  const canChat = useCan("agents", "chat");
   const canCreate = useCan("agents", "create");
   const canArrange = useCanArrange();
   const canSeeToday = useCan("today", "view");
-
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)), [bots]);
   // Every pinned bot sits up top (the list below leaves them out); with none pinned, the first three.
   const top = useMemo(() => {
@@ -362,7 +345,6 @@ export default function Home() {
     return out;
   }, [chats]);
   // The list: in the computer's order, or one filter's bots. Sections fold while the app is open.
-  const sections = usePart("sections");
   const arranged = useMemo(() => arrangeBots(bots, sections), [bots, sections]);
   const [filter, setFilter] = useState<BotFilter>("All");
   const filtered = useMemo(() => filterBots(bots, filter), [bots, filter]);
@@ -376,50 +358,15 @@ export default function Home() {
       })}
     </Group>
   );
-  // The page, for scrolling it under a dragged bot; and whether a drag is under way, which stops its own scrolling.
-  const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
-  const [dragging, setDragging] = useState(false);
   const today = (board?.filter((item) => item.status === "open").length ?? 0) + (panels?.filter((panel) => !panel.hidden).length ?? 0);
   // Today sits open under the bots until the person folds it; the choice is kept.
   const todayOpen = usePrefs((prefs) => prefs.todayOpen);
   const spacesOn = useSpacesOn();
-  const [seen] = useState(makeSeenSignal);
   const Fold = todayOpen ? ChevronUp : ChevronDown;
   const waiting = requests ?? [];
 
   return (
-    <HomeFrame scroll={scroll} scrollEnabled={!dragging} onScrolled={seen.scrolled} quietLink={link !== "revoked"}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
-        <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {/* A tap opens the computer's page; a hold opens the switcher. */}
-          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts, computerOrder, unified)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
-            <Tap
-              onPress={() => router.push(unified ? "/settings/computers" : "/settings/desktop")}
-              feel="select"
-              accessibilityLabel={computer + (pillOnline ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
-              accessibilityHint="Hold to switch computers"
-              style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
-            >
-              <Dot tone={pillOnline ? "success" : "warning"} size={7} />
-              <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
-                {computer}
-              </T>
-              {/* While Admin mode is on, the lists hold every member's things: the tag says so. */}
-              {adminOn && (
-                <T variant="caption" weight="600" color="accentText" numberOfLines={1}>
-                  Admin mode
-                </T>
-              )}
-            </Tap>
-          </HoldMenu>
-          <ServerLinkStatus />
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
-          <SettingsButton />
-        </View>
-      </View>
-
+    <>
       {waiting.length > 0 && (
         <View>
           <Label>{"Needs you · " + waiting.length}</Label>
@@ -476,7 +423,7 @@ export default function Home() {
               folded={folded}
               onFold={(id) => setFolded(folded.includes(id) ? folded.filter((entry) => entry !== id) : [...folded, id])}
               scroll={scroll}
-              onDrop={order.drop}
+              onDrop={onDrop}
               onDragging={setDragging}
               manageable={canArrange}
             />
@@ -500,6 +447,108 @@ export default function Home() {
           )}
         </Animated.View>
       )}
+    </>
+  );
+});
+
+export default function Home() {
+  const { colors } = useTheme();
+  // The computer's bots, or a drop's new order while the computer catches up.
+  const order = useDropOrder(useBots());
+  const rawChats = useChats();
+  const rawSynced = useApp((state) => state.synced);
+  const link = useApp((state) => state.link);
+  const online = link === "online";
+  const unified = useApp((state) => state.unified);
+  const unifiedHosts = useApp((state) => state.unifiedHosts);
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
+  const computer = unified
+    ? onlineHosts === includedHosts.length
+      ? "All computers"
+      : onlineHosts + "/" + includedHosts.length + " computers"
+    : (useApp((state) => state.pairing?.name) ?? "Computer");
+  const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
+  const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
+  const computerOrder = usePrefs(prefs => prefs.computerOrder);
+  const computers = useApp((state) => state.pairings);
+  const directoryHosts = useProfileHosts();
+  const inUse = useApp((state) => state.pairing?.serverId);
+  const rawRequests = useApp((state) => state.parts.live?.requests);
+  const rawBoard = usePart("board");
+  const rawPanels = usePart("panels");
+  const rawSections = usePart("sections");
+  const canCreate = useCan("agents", "create");
+  // Freeze heavy body inputs while another tab is active so background chat/board updates don't
+  // re-render the hidden Home tab.
+  const frozen = useFrozenWhenHidden({
+    bots: order.shown,
+    chats: rawChats,
+    synced: rawSynced,
+    requests: rawRequests,
+    board: rawBoard,
+    panels: rawPanels,
+    sections: rawSections,
+  });
+
+  // The page, for scrolling it under a dragged bot; and whether a drag is under way, which stops its own scrolling.
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const scrollOffset = useSharedValue(0);
+  const scrollMax = useSharedValue(0);
+  const scrollEdges = useSharedValue({ top: 0, bottom: 0 });
+  const scroll = useMemo<BoardScroll>(
+    () => ({ ref: scrollRef, offset: scrollOffset, max: scrollMax, edges: scrollEdges }),
+    [scrollRef, scrollOffset, scrollMax, scrollEdges],
+  );
+  const [dragging, setDragging] = useState(false);
+  const [seen] = useState(makeSeenSignal);
+
+  return (
+    <HomeFrame scroll={scroll} scrollEnabled={!dragging} onScrolled={seen.scrolled} quietLink={link !== "revoked"}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
+        <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {/* A tap opens the computer's page; a hold opens the switcher. */}
+          <HoldMenu title="Computers" actions={computerActions(computers, inUse, directoryHosts, computerOrder, unified)} onPressAction={({ nativeEvent }) => runComputerChoice(nativeEvent.event)} style={{ flexShrink: 1 }}>
+            <Tap
+              onPress={() => router.push(unified ? "/settings/computers" : "/settings/desktop")}
+              feel="select"
+              accessibilityLabel={computer + (pillOnline ? ", connected" : ", not connected") + (adminOn ? ", Admin mode" : "")}
+              accessibilityHint="Hold to switch computers"
+              style={{ flexShrink: 1, flexDirection: "row", alignItems: "center", gap: 7, height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: colors.surface }}
+            >
+              <Dot tone={pillOnline ? "success" : "warning"} size={7} />
+              <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
+                {computer}
+              </T>
+              {/* While Admin mode is on, the lists hold every member's things: the tag says so. */}
+              {adminOn && (
+                <T variant="caption" weight="600" color="accentText" numberOfLines={1}>
+                  Admin mode
+                </T>
+              )}
+            </Tap>
+          </HoldMenu>
+          <ServerLinkStatus />
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          {canCreate && <IconButton icon={Plus} label="New bot" variant="soft" size={44} onPress={() => router.push("/bot/new")} />}
+          <SettingsButton />
+        </View>
+      </View>
+
+      <HomeBody
+        bots={frozen.bots}
+        chats={frozen.chats}
+        synced={frozen.synced}
+        requests={frozen.requests}
+        board={frozen.board}
+        panels={frozen.panels}
+        sections={frozen.sections}
+        onDrop={order.drop}
+        scroll={scroll}
+        setDragging={setDragging}
+        seen={seen}
+      />
     </HomeFrame>
   );
 }

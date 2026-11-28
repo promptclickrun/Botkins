@@ -1,7 +1,7 @@
 import { PendingSends } from "../desktop/link/pending-sends";
 import { CompletionScroll } from "./completionScroll";
 import { chatDisplayEvent, readChatDisplay, settleChatDisplay } from "./chatDisplay";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -32,6 +32,7 @@ import { AvatarAnimations } from "./Avatar";
 import ChatView, { type SideAnswer } from "./ChatView";
 import { WindowState, type HotMessage } from "./hotState";
 import { ChatListColumn, ChatsPage, HomePage, SidebarBots, type PageActions } from "./Pages";
+import LoadingGrid from "./LoadingGrid";
 import { ActivityPage } from "./Work";
 import { WORK_TABS, WorkBack, type WorkNav, type WorkTab } from "./WorkBar";
 import RoutinesPage from "./Routines";
@@ -153,6 +154,20 @@ function App() {
   const [chatId, setChatId] = useState("");
   /** The space whose page is open (page "Space"). */
   const [spaceId, setSpaceId] = useState("");
+  /** The bot whose page is open, or "". */
+  const [profileId, setProfileId] = useState("");
+  // Defer the main pane's route values so clicking a sidebar item updates the sidebar's selected
+  // highlight in the press frame, and heavy page content follows in a low-priority commit (with
+  // LoadingGrid shown if it takes longer than 120ms).
+  const deferredPage = useDeferredValue(page);
+  const deferredChatId = useDeferredValue(chatId);
+  const deferredSpaceId = useDeferredValue(spaceId);
+  const deferredProfileId = useDeferredValue(profileId);
+  const mainPending =
+    deferredPage !== page ||
+    deferredChatId !== chatId ||
+    deferredSpaceId !== spaceId ||
+    deferredProfileId !== profileId;
   /** Text a panel's view handed over, for the ask bar of its space. */
   const [spaceAbout, setSpaceAbout] = useState<{ spaceId: string; panelId: string; text: string; n: number }>();
   useEffect(() => {
@@ -195,8 +210,6 @@ function App() {
   const [settingsRevision, setSettingsRevision] = useState(0);
   const [teamJoinUrl, setTeamJoinUrl] = useState("");
   const [side, setSide] = useState<Record<string, SideAnswer>>({});
-  /** The bot whose page is open, or "". */
-  const [profileId, setProfileId] = useState("");
   // The bot whose page opens on the setup steps of its Proactive agent (`actions.proactiveSetup`).
   const [setupId, setSetupId] = useState("");
   const [settingsBot, setSettingsBot] = useState("");
@@ -802,7 +815,7 @@ function App() {
     }
   }, [spaces, page, spaceId, !!openedSpace]);
   const migrationPrompt = useMigrationPrompt(state?.profile);
-  if (!state) return <main>{error || "Opening Botkins…"}</main>;
+  if (!state) return <main>{error ? error : <LoadingGrid label="Loading" caption="Opening Botkins…" />}</main>;
   if (migrationPrompt.open) return <ProfileMigrationPrompt state={state} onDismiss={migrationPrompt.dismiss} />;
   if (firstRun && setupPath === "") return <SetupChoice choose={setSetupPath} state={state} />;
   if (firstRun && setupPath === "computer") return <SetupConnect back={() => setSetupPath("")} />;
@@ -864,6 +877,10 @@ function App() {
     fail,
   };
   const profileBot = state.bots.find((b) => b.id === profileId);
+  const deferredChat = state.chats.find((c) => c.id === deferredChatId);
+  const deferredBot = deferredChat ? state.bots.find((b) => b.id === deferredChat.botId) : undefined;
+  const deferredProfileBot = state.bots.find((b) => b.id === deferredProfileId);
+  const deferredOpenedSpace = deferredPage === "Space" ? state.spaces?.find((s) => s.id === deferredSpaceId) : undefined;
   // The side menu's Models line: how many providers are connected, or what to do.
   const modelsState = !providers
     ? "Checking…"
@@ -1050,57 +1067,61 @@ function App() {
         )}
         {hostDown ? (
           <HostUnreachable state={state} pairAgain={() => settings("Computers")} />
-        ) : chat && bot ? (
+        ) : mainPending ? (
+          <div className="content">
+            <LoadingGrid label="Loading" />
+          </div>
+        ) : deferredChat && deferredBot ? (
           <div className={"chat-with-list" + (chatListShown ? " list-shown" : "")}>
-          {chatListShown && <ChatListColumn state={state} actions={actions} selectedChatId={chat.id} />}
+          {chatListShown && <ChatListColumn state={state} actions={actions} selectedChatId={deferredChat.id} />}
           <ChatView
             listShown={chatListShown}
             toggleList={toggleChatList}
             updates={updates}
             completions={completionByHost.get(host)!}
-            onScreen={onScreen === chat.id}
+            onScreen={onScreen === deferredChat.id}
             state={state}
-            chat={chat}
+            chat={deferredChat}
             pending={pending}
-            bot={bot}
+            bot={deferredBot}
             back={() => nav("Chats")}
             botSettings={() => settings("Bot")}
             prefill={prefill}
             pickModel={() => setModal("model")}
-            side={side[chat.id]}
+            side={side[deferredChat.id]}
             dismissSide={() =>
               setSide((p) => {
                 const v = { ...p };
-                delete v[chat.id];
+                delete v[deferredChat.id];
                 return v;
               })
             }
             composer={canChat ? composer(
-              chat.id,
-              (chat.botIds?.length ?? 0) > 1 ? "Message the group… Type @ to ask one bot" : "Message " + bot.name + "…",
+              deferredChat.id,
+              (deferredChat.botIds?.length ?? 0) > 1 ? "Message the group… Type @ to ask one bot" : "Message " + deferredBot.name + "…",
             ) : null}
             openChat={open}
-            messageTarget={messageTarget?.chatId === chat.id ? messageTarget : undefined}
+            messageTarget={messageTarget?.chatId === deferredChat.id ? messageTarget : undefined}
             openProject={(projectId) => projects({ projectId })}
             openWiki={(path) => wiki(path)}
             openToday={openToday}
             openRoutines={routines}
-            openBot={() => botPage(bot.id)}
+            openBot={() => botPage(deferredBot.id)}
           />
           </div>
-        ) : profileBot ? (
+        ) : deferredProfileBot ? (
           <div className="content">
             <BotProfile
-              key={profileBot.id}
+              key={deferredProfileBot.id}
               state={state}
-              bot={profileBot}
+              bot={deferredProfileBot}
               actions={actions}
               back={() => setProfileId("")}
-              proactiveSetup={setupId === profileBot.id}
+              proactiveSetup={setupId === deferredProfileBot.id}
               routines={routines}
             />
           </div>
-        ) : page === "Wiki" ? (
+        ) : deferredPage === "Wiki" ? (
           <WikiPage
             key={wikiTarget.n}
             state={state}
@@ -1109,19 +1130,19 @@ function App() {
             startChat={(text, wikiPage) => void wikiChat(text, wikiPage).catch(fail)}
             guard={(ask) => (leaveGuard.current = ask)}
           />
-        ) : page === "Space" && openedSpace ? (
+        ) : deferredPage === "Space" && deferredOpenedSpace ? (
           <SpacePage
-            key={host + ":" + openedSpace.id}
+            key={host + ":" + deferredOpenedSpace.id}
             state={state}
-            space={openedSpace}
+            space={deferredOpenedSpace}
             open={open}
             openNew={(id) => void openNew(id).catch(fail)}
             openProject={(projectId) => projects({ projectId })}
             boardChat={boardChat}
-            about={spaceAbout?.spaceId === openedSpace.id ? spaceAbout : undefined}
+            about={spaceAbout?.spaceId === deferredOpenedSpace.id ? spaceAbout : undefined}
             removed={() => {
               hadSpace.current = "";
-              const first = state.spaces?.find((s) => s.pinned && s.id !== openedSpace.id);
+              const first = state.spaces?.find((s) => s.pinned && s.id !== deferredOpenedSpace.id);
               if (first) openSpace(first.id);
               else nav("Home");
             }}
@@ -1129,10 +1150,10 @@ function App() {
           />
         ) : (
           <div className="content">
-            {page === "AllSpaces" && <AllSpaces state={state} openSpace={openSpace} fail={fail} />}
+            {deferredPage === "AllSpaces" && <AllSpaces state={state} openSpace={openSpace} fail={fail} />}
             {/* The Market: apps, bots, skills, plugins and Pi packages to add (Settings › Marketplace has the same). */}
-            {page === "Market" && <MarketPage state={state} bots={state.bots} createBot={createBot} />}
-            {page === "Today" && !spaces && (
+            {deferredPage === "Market" && <MarketPage state={state} bots={state.bots} createBot={createBot} />}
+            {deferredPage === "Today" && !spaces && (
               <Today
                 state={state}
                 open={open}
@@ -1146,7 +1167,7 @@ function App() {
                 }
               />
             )}
-            {page === "Home" && state.bots.length > 0 && (
+            {deferredPage === "Home" && state.bots.length > 0 && (
               <HomePage
                 state={state}
                 actions={actions}
@@ -1159,7 +1180,7 @@ function App() {
                 openToday={openToday}
               />
             )}
-            {page === "Chats" && (
+            {deferredPage === "Chats" && (
               <ChatsPage
                 state={state}
                 actions={actions}
@@ -1167,10 +1188,10 @@ function App() {
                 setQuery={setQuery}
               />
             )}
-            {page === "Activity" && (
+            {deferredPage === "Activity" && (
               <ActivityPage state={state} actions={actions} filter={filter} setFilter={setFilter} routines={routines} back={openWork} />
             )}
-            {page === "Home" && state.bots.length === 0 && (
+            {deferredPage === "Home" && state.bots.length === 0 && (
               <div className="empty">
                 {memberHost ? (
                   "No agents are visible to this role. Ask the team owner if you need access."
@@ -1195,7 +1216,7 @@ function App() {
                 )}
               </div>
             )}
-            {page === "Projects" && (
+            {deferredPage === "Projects" && (
               <ProjectsPage
                 key={projectTarget.n}
                 state={state}
@@ -1209,10 +1230,10 @@ function App() {
                 fail={fail}
               />
             )}
-            {page === "Tasks" && (
+            {deferredPage === "Tasks" && (
               <TasksPage state={state} openChat={open} work={work} fail={fail} />
             )}
-            {page === "Routines" && (
+            {deferredPage === "Routines" && (
               <RoutinesPage
                 key={routineTarget.n}
                 state={state}
@@ -1222,7 +1243,7 @@ function App() {
                 openToday={openToday}
               />
             )}
-            {page === "Usage" && (
+            {deferredPage === "Usage" && (
               <div className="page work-page usage-page">
                 <WorkBack back={openWork} />
                 <h1 className="page-title">Usage</h1>

@@ -13,6 +13,7 @@ import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { BackdropLayer } from "./Backdrop";
 import { Glass } from "./Glass";
+import { LoadingGrid } from "./LoadingGrid";
 import { Tap } from "./Tap";
 import { T } from "./Text";
 import { radius, slopFor, space, useTheme } from "./theme";
@@ -238,12 +239,11 @@ export function Sheet({ title, children, action, onAction, actionDisabled, actio
   );
 }
 
-/** A centered spinner for a screen that is still loading its first data. */
-export function Loading({ label }: { label?: string }) {
-  const { colors } = useTheme();
+/** A centered LoadingGrid for a screen that is still loading its first data. */
+export function Loading({ label, delay }: { label?: string; delay?: number }) {
   return (
     <View style={{ paddingVertical: 56, alignItems: "center", gap: space.md }}>
-      <ActivityIndicator color={colors.muted} />
+      <LoadingGrid label={label || "Loading"} delay={delay} />
       {!!label && (
         <T variant="footnote" color="muted">
           {label}

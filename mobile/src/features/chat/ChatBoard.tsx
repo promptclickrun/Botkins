@@ -6,7 +6,7 @@
 import { MenuView } from "@react-native-menu/menu";
 import { router } from "expo-router";
 import { ChevronDown, ChevronRight, Ellipsis } from "lucide-react-native";
-import { createContext, type ReactNode, use, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, type ReactNode, startTransition, use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, type LayoutChangeEvent, View } from "react-native";
 import { GestureDetector, GestureStateManager, usePanGesture } from "react-native-gesture-handler";
 import Animated, { type FrameCallback, scrollTo, type SharedValue, useAnimatedStyle, useFrameCallback, useSharedValue, withTiming } from "react-native-reanimated";
@@ -14,7 +14,7 @@ import { scheduleOnRN } from "react-native-worklets";
 import type { BoardScroll } from "@/features/home/BotBoard";
 import { DRAG } from "@/features/home/drag";
 import type { Bot, ChatSummary, Section } from "@/link/types";
-import { activityLabel, useCan, useChatActivity, usePart } from "@/state/hooks";
+import { activityLabel, useCan, useCapability, useChatActivity, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { useApp } from "@/state/store";
@@ -25,7 +25,7 @@ import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
 import { arrangeChats, arrangeChatsFlat, chatDropPlan, type ChatGroup, groupAt, type ListItem, listItems, sectionOfChat } from "./sections";
-import { regenerateTitle, regenerateTitleAction, useCanRegenerateTitle } from "./titleActions";
+import { regenerateTitle, regenerateTitleAction } from "./titleActions";
 
 function remove(chat: ChatSummary) {
   Alert.alert("Delete this chat?", chat.title, [
@@ -46,85 +46,138 @@ function rename(chat: ChatSummary, ask: (options: TextPromptOptions) => void) {
   });
 }
 
-/** What VoiceOver offers on a chat in place of dragging. */
-type RowActions = { list: { name: string; label: string }[]; run: (name: string) => void };
+/** How many items to render on the first frame so a filter switch stays snappy; the rest follow in a transition. */
+const INITIAL_BATCH = 24;
 
 /** One chat: its bot's face, its title, its last line, and when. `sections` is undefined on a computer without them. */
-function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: Map<string, Bot>; sections: Section[] | undefined; actions?: RowActions }) {
+const ChatRow = memo(function ChatRow({
+  chat,
+  bots,
+  sections,
+  movable,
+  canView,
+  canChat,
+  canRegenerateTitle,
+  unified,
+  me,
+  onDrop,
+  onAsk,
+}: {
+  chat: ChatSummary;
+  bots: Map<string, Bot>;
+  sections: Section[] | undefined;
+  movable: boolean;
+  canView: boolean;
+  canChat: boolean;
+  canRegenerateTitle: boolean;
+  unified: boolean;
+  me: ReturnType<typeof myself>;
+  onDrop: (chatId: string, group: string) => void;
+  onAsk: (options: TextPromptOptions) => void;
+}) {
   const state = useChatActivity(chat.id);
-  const unified = useApp((s) => s.unified);
   const bot = bots.get(chat.botId);
   const hostName = unified ? chat.hostName || bot?.hostName : undefined;
   const live = activityLabel(state);
   const group = chat.botIds && chat.botIds.length > 1;
-  const canView = useCan("agents", "view");
-  const canChat = useCan("agents", "chat");
-  const me = myself(usePart("meta"));
   const speaker = chat.last?.role === "user" ? "You" : group && chat.last?.botId ? bots.get(chat.last.botId)?.name : undefined;
   const preview = chat.last ? (speaker ? speaker + ": " : "") + plainPreview(chat.last.text) : "No messages yet";
   const title = chat.title || bot?.name || "Chat";
   // With the chat open beside the list (two panes), its row is marked.
   const picked = useChatSplit((split) => split.active && split.id === chat.id);
   const { colors } = useTheme();
-  const prompt = useTextPrompt();
   // Renaming and deleting a chat are its starter's (and the owner's); someone invited to it has their own marks only.
   const mine = myPlace(chat, me) === "manages";
-  const canRegenerate = useCanRegenerateTitle(chat, mine);
-  const starters = mine && !chat.main ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
-  const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
-  // A section is the person's own way to group their chats, like a pin.
-  const filing = sections ? [moveToSection(chat, sections)] : [];
-  const menu = chat.archived
-    ? [{ id: "restore", title: "Restore", image: "tray.and.arrow.up" }, ...starters, ...ends]
-    : [
-        { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
-        ...filing,
-        ...(!isRoutineChat(chat) ? [{ id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" }] : []),
-        ...starters,
-        ...(chat.main && !mine ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
-        ...ends,
-      ];
-  const viewOnlyMenu = canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];
+  const canRegenerate =
+    canRegenerateTitle && canChat && mine && chat.count > 0 && !chat.panelId && !chat.schedules?.some((entry) => entry.routine);
+  const routine = isRoutineChat(chat);
+  const unread = !!chat.unread && !routine;
+
+  const menu = useMemo(() => {
+    if (!canChat) {
+      return canView && !chat.archived && chat.unread ? [{ id: "unread", title: "Mark as read", image: "envelope.open" }] : [];
+    }
+    const starters = mine && !chat.main ? [{ id: "rename", title: "Rename…", image: "pencil" }, ...(canRegenerate ? [regenerateTitleAction] : [])] : [];
+    const ends = mine ? [{ id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } }] : [];
+    const filing = sections ? [moveToSection(chat, sections)] : [];
+    return chat.archived
+      ? [{ id: "restore", title: "Restore", image: "tray.and.arrow.up" }, ...starters, ...ends]
+      : [
+          { id: "pin", title: chat.pinned ? "Unpin" : "Pin", image: chat.pinned ? "pin.slash" : "pin" },
+          ...filing,
+          ...(!routine ? [{ id: "unread", title: chat.unread ? "Mark as read" : "Mark as unread", image: chat.unread ? "envelope.open" : "envelope.badge" }] : []),
+          ...starters,
+          ...(chat.main && !mine ? [] : [{ id: "archive", title: "Archive", image: "archivebox" }]),
+          ...ends,
+        ];
+  }, [canChat, canView, chat, mine, canRegenerate, sections, routine]);
+
+  const a11yActions = useMemo(() => {
+    const list: { name: string; label: string }[] = [];
+    if (movable && !chat.archived) {
+      const own = sectionOfChat(chat, sections)?.id;
+      for (const section of sections ?? []) {
+        if (section.id !== own) list.push({ name: "section:" + section.id, label: "Move to " + section.name });
+      }
+      if (own) list.push({ name: "none", label: "Move out of its section" });
+    }
+    if (canRegenerate) list.push({ name: regenerateTitleAction.id, label: regenerateTitleAction.title });
+    return list.length ? list : undefined;
+  }, [movable, chat, sections, canRegenerate]);
+
+  const onMenuAction = useCallback(
+    ({ nativeEvent }: { nativeEvent: { event: string } }) => {
+      const action = nativeEvent.event;
+      if (runSectionChoice(chat, action, onAsk)) return;
+      if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
+      else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: canChat ? !chat.unread : false }));
+      else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
+      else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
+      else if (action === "rename") rename(chat, onAsk);
+      else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
+      else if (action === "delete") remove(chat);
+    },
+    [chat, canChat, onAsk],
+  );
+
+  const onPress = useCallback(() => openFromList(chat.id), [chat.id]);
+
+  const onA11yAction = useCallback(
+    (event: { nativeEvent: { actionName: string } }) => {
+      const action = event.nativeEvent.actionName;
+      if (canRegenerate && action === regenerateTitleAction.id) regenerateTitle(chat.id);
+      else onDrop(chat.id, action);
+    },
+    [canRegenerate, chat.id, onDrop],
+  );
+
+  const groupBots = useMemo(
+    () => (group ? chat.botIds!.slice(0, 2).map((id) => bots.get(id)) : undefined),
+    [group, chat.botIds, bots],
+  );
+
   return (
-    <>
-    <HoldMenu
-      actions={canChat ? menu : viewOnlyMenu}
-      onPressAction={({ nativeEvent }) => {
-        const action = nativeEvent.event;
-        if (runSectionChoice(chat, action, prompt.ask)) return;
-        if (action === "pin") void attempt(api.setChatFlags(chat.id, { pinned: !chat.pinned }));
-        else if (action === "unread") void attempt(api.setChatFlags(chat.id, { unread: canChat ? !chat.unread : false }));
-        else if (action === "archive") void attempt(api.setChatFlags(chat.id, { archived: true }), "Archived");
-        else if (action === "restore") void attempt(api.setChatFlags(chat.id, { archived: false }), "Restored");
-        else if (action === "rename") rename(chat, prompt.ask);
-        else if (action === regenerateTitleAction.id) regenerateTitle(chat.id);
-        else if (action === "delete") remove(chat);
-      }}
-    >
+    <HoldMenu actions={menu} onPressAction={onMenuAction}>
       <Tap
-        onPress={() => openFromList(chat.id)}
+        onPress={onPress}
         sink={1}
         feel="select"
         hitSlop={0}
         accessibilityLabel={title + ", " + (live || preview) + (chat.unread ? ", unread" : "")}
         accessibilityHint="Long press for more"
-        accessibilityActions={canRegenerate ? [...(actions?.list ?? []), { name: regenerateTitleAction.id, label: regenerateTitleAction.title }] : actions?.list}
-        onAccessibilityAction={actions || canRegenerate ? (event) => {
-          const action = event.nativeEvent.actionName;
-          if (canRegenerate && action === regenerateTitleAction.id) regenerateTitle(chat.id);
-          else actions?.run(action);
-        } : undefined}
+        accessibilityActions={a11yActions}
+        onAccessibilityAction={a11yActions ? onA11yAction : undefined}
       >
         <View style={[{ minHeight: 72, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md }, picked && { backgroundColor: colors.sunken, borderRadius: radius.lg, marginHorizontal: -space.sm, paddingHorizontal: space.sm }]} accessibilityState={picked ? { selected: true } : undefined}>
-          {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
+          {groupBots ? <GroupFace bots={groupBots} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} animated={false} />}
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <T variant="callout" weight={chat.unread && !isRoutineChat(chat) ? "700" : "600"} numberOfLines={1} style={{ flexShrink: 1 }}>
+              <T variant="callout" weight={unread ? "700" : "600"} numberOfLines={1} style={{ flexShrink: 1 }}>
                 {title}
               </T>
               {!!hostName && <Badge label={hostName} tone="neutral" />}
               <View style={{ flex: 1 }} />
-              <T variant="footnote" color={chat.unread && !isRoutineChat(chat) ? "accentText" : "faint"} weight={chat.unread && !isRoutineChat(chat) ? "600" : "400"}>
+              <T variant="footnote" color={unread ? "accentText" : "faint"} weight={unread ? "600" : "400"}>
                 {chat.time ? ago(chat.time) : ""}
               </T>
             </View>
@@ -134,25 +187,22 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
                   {live}
                 </T>
               ) : (
-                <T variant="subhead" color={chat.unread && !isRoutineChat(chat) ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
+                <T variant="subhead" color={unread ? "ink2" : "muted"} numberOfLines={1} style={{ flex: 1 }}>
                   {preview}
                 </T>
               )}
-              {chat.unread && !isRoutineChat(chat) && <Dot size={9} />}
+              {unread && <Dot size={9} />}
             </View>
           </View>
         </View>
       </Tap>
     </HoldMenu>
-    {prompt.node}
-    </>
   );
-}
+});
 
 /** A group's heading. A section's folds it with a tap and has the section's menu; the others are plain. */
-function GroupHead({ group, sections, open, onToggle, note }: { group: ChatGroup; sections: Section[]; open: boolean; onToggle: () => void; note?: string }) {
+const GroupHead = memo(function GroupHead({ group, sections, open, onToggle, note, onAsk }: { group: ChatGroup; sections: Section[]; open: boolean; onToggle: () => void; note?: string; onAsk: (options: TextPromptOptions) => void }) {
   const { colors } = useTheme();
-  const prompt = useTextPrompt();
   const section = group.section;
   if (!section)
     return (
@@ -182,13 +232,12 @@ function GroupHead({ group, sections, open, onToggle, note }: { group: ChatGroup
           </T>
           <Fold size={14} color={colors.faint} strokeWidth={2.4} />
         </Tap>
-        <MenuView title={section.name} actions={sectionActions(sections, section)} onPressAction={({ nativeEvent }) => runSectionAction(sections, section, nativeEvent.event, prompt.ask)}>
+        <MenuView title={section.name} actions={sectionActions(sections, section)} onPressAction={({ nativeEvent }) => runSectionAction(sections, section, nativeEvent.event, onAsk)}>
           <View accessible accessibilityRole="button" accessibilityLabel={"Options for section " + section.name} style={{ width: 44, height: 44, marginRight: -space.md, alignItems: "center", justifyContent: "center" }}>
             <Ellipsis size={18} color={colors.muted} strokeWidth={2.2} />
           </View>
         </MenuView>
       </View>
-      {prompt.node}
       {!!note && (
         <T variant="footnote" color="faint" style={{ paddingBottom: space.sm }}>
           {note}
@@ -196,7 +245,7 @@ function GroupHead({ group, sections, open, onToggle, note }: { group: ChatGroup
       )}
     </View>
   );
-}
+});
 
 /** The list as the UI thread sees it: the items, and each one's top and height in the list. */
 type Model = { items: ListItem[]; ys: number[]; hs: number[] };
@@ -223,7 +272,7 @@ type Board = {
 const BoardContext = createContext<Board | null>(null);
 
 /** One item of the list: it shades with its group while a chat is over it, and, when it is the dragged chat, lifts and follows the finger. */
-function Cell({ item, children }: { item: ListItem; children: ReactNode }) {
+const Cell = memo(function Cell({ item, children }: { item: ListItem; children: ReactNode }) {
   const theme = useTheme();
   const { colors } = theme;
   const board = use(BoardContext)!;
@@ -250,15 +299,16 @@ function Cell({ item, children }: { item: ListItem; children: ReactNode }) {
       shadowOpacity: 0,
     };
   });
+  const onLayout = useCallback((event: LayoutChangeEvent) => board.measure(key, event), [board, key]);
   return (
-    <Animated.View onLayout={(event) => board.measure(key, event)} style={[{ paddingHorizontal: space.xl, shadowColor: colors.shadow, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, item.kind === "head" && { paddingTop: space.md }, style]}>
+    <Animated.View onLayout={onLayout} style={[{ paddingHorizontal: space.xl, shadowColor: colors.shadow, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } }, item.kind === "head" && { paddingTop: space.md }, style]}>
       {children}
     </Animated.View>
   );
-}
+});
 
 /** A chat that can be dragged: the pan that waits for a rest and then a move (see the top of BotBoard.tsx). */
-function DragHandle({ itemKey, children, disabled }: { itemKey: string; children: ReactNode; disabled?: boolean }) {
+const DragHandle = memo(function DragHandle({ itemKey, children, disabled }: { itemKey: string; children: ReactNode; disabled?: boolean }) {
   const board = use(BoardContext)!;
   const down = useSharedValue({ t: 0, x: 0, y: 0 });
   const pan = usePanGesture({
@@ -298,7 +348,7 @@ function DragHandle({ itemKey, children, disabled }: { itemKey: string; children
       <View collapsable={false}>{children}</View>
     </GestureDetector>
   );
-}
+});
 
 type Plan = NonNullable<ReturnType<typeof chatDropPlan>>;
 const NO_FOLDS: string[] = [];
@@ -362,8 +412,13 @@ export type ChatBoardProps = {
   flat?: boolean;
 };
 
-export function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging, flat }: ChatBoardProps) {
+export const ChatBoard = memo(function ChatBoard({ chats, archived, sections, bots, searching, scroll, onDragging, flat }: ChatBoardProps) {
+  const canView = useCan("agents", "view");
   const canChat = useCan("agents", "chat");
+  const canRegenerateTitle = useCapability("chat-title-regeneration-v1");
+  const unified = useApp((s) => s.unified);
+  const me = myself(usePart("meta"));
+  const prompt = useTextPrompt();
   const [dragging, setDragging] = useState<string | null>(null);
   // Sections fold while the app is open, as on Home.
   const [folded, setFolded] = useState<string[]>([]);
@@ -376,6 +431,39 @@ export function ChatBoard({ chats, archived, sections, bots, searching, scroll, 
   // A folded section opens while a search is on, so its matches show.
   const closed = searching ? NO_FOLDS : folded;
   const items = useMemo(() => listItems(groups, closed), [groups, closed]);
+  // Render the first screenful immediately so switching filters/tabs stays fast, then fill in the
+  // rest in a transition. Full virtualization (FlatList) is skipped here because ChatBoard shares
+  // the outer ScrollView with PinnedChat and needs measured frames for every drop zone during drag.
+  const [limit, setLimit] = useState(() => Math.min(items.length, INITIAL_BATCH));
+  useEffect(() => {
+    if (dragging) {
+      setLimit(items.length);
+      return;
+    }
+    if (items.length <= INITIAL_BATCH) {
+      setLimit(items.length);
+      return;
+    }
+    if (limit >= items.length) return;
+    let cancelled = false;
+    const step = () => {
+      if (cancelled) return;
+      startTransition(() => setLimit((now) => Math.min(items.length, Math.max(INITIAL_BATCH, now + 60))));
+    };
+    const handle =
+      typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame(step)
+        : (setTimeout(step, 0) as unknown as number);
+    return () => {
+      cancelled = true;
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(handle);
+      else clearTimeout(handle);
+    };
+  }, [items.length, limit, dragging]);
+  const visibleItems = useMemo(
+    () => (dragging || items.length <= limit ? items : items.slice(0, limit)),
+    [items, limit, dragging],
+  );
   const byId = useMemo(() => new Map([...hold.shown, ...archived].map((chat) => [chat.id, chat])), [hold.shown, archived]);
   const byKey = useMemo(() => new Map(groups.map((group) => [group.key, group])), [groups]);
   // A chat is filed only on a computer that keeps sections; without them a drag would have nowhere to go.
@@ -391,22 +479,42 @@ export function ChatBoard({ chats, archived, sections, bots, searching, scroll, 
   const dropping = useSharedValue(false);
 
   // Each item's place in the list, measured as it lays out, handed to the UI thread with the items.
+  // Syncing the shared value is batched once per commit (not per-row onLayout) to avoid O(N²) work.
   const frames = useRef(new Map<string, { y: number; h: number }>());
-  const sync = (list: ListItem[]) => {
+  const itemsRef = useRef(visibleItems);
+  itemsRef.current = visibleItems;
+  const syncPending = useRef(false);
+  const sync = useCallback((list: ListItem[]) => {
     model.value = { items: list, ys: list.map((item) => frames.current.get(item.key)?.y ?? 0), hs: list.map((item) => frames.current.get(item.key)?.h ?? 0) };
-  };
-  useLayoutEffect(() => sync(items));
-  const measure = (key: string, event: LayoutChangeEvent) => {
+  }, [model]);
+  useLayoutEffect(() => sync(visibleItems), [sync, visibleItems]);
+  const measure = useCallback((key: string, event: LayoutChangeEvent) => {
     const { y, height } = event.nativeEvent.layout;
+    const prev = frames.current.get(key);
+    if (prev && prev.y === y && prev.h === height) return;
     frames.current.set(key, { y, h: height });
-    sync(items);
-  };
+    if (!syncPending.current) {
+      syncPending.current = true;
+      queueMicrotask(() => {
+        syncPending.current = false;
+        sync(itemsRef.current);
+      });
+    }
+  }, [sync]);
 
   // The gesture may keep the worklets of an earlier render; these read the latest props when they run.
   const handlers = useRef({ onDragging, drop: hold.drop });
   useLayoutEffect(() => {
     handlers.current = { onDragging, drop: hold.drop };
   });
+  const stableDrop = useCallback((chatId: string, groupKey: string) => {
+    handlers.current.drop(chatId, groupKey);
+  }, []);
+  const askRef = useRef(prompt.ask);
+  askRef.current = prompt.ask;
+  const stableAsk = useCallback((options: TextPromptOptions) => {
+    askRef.current(options);
+  }, []);
   const started = (key: string) => {
     haptic.tap();
     setDragging(key);
@@ -496,22 +604,17 @@ export function ChatBoard({ chats, archived, sections, bots, searching, scroll, 
   }, false);
   useEffect(() => () => autoScroll.setActive(false), [autoScroll]);
 
-  const board: Board = { model, active, zone, top, lifted, begin, move, end, measure };
-
-  // VoiceOver can't drag: each chat has "Move to" each other section, and out of its own.
-  const actionsFor = (chat: ChatSummary): RowActions | undefined => {
-    if (!movable || chat.archived) return undefined;
-    const own = sectionOfChat(chat, sections)?.id;
-    return {
-      list: [...(sections ?? []).filter((section) => section.id !== own).map((section) => ({ name: "section:" + section.id, label: "Move to " + section.name })), ...(own ? [{ name: "none", label: "Move out of its section" }] : [])],
-      run: (name) => hold.drop(chat.id, name),
-    };
-  };
+  const board = useMemo<Board>(
+    () => ({ model, active, zone, top, lifted, begin, move, end, measure }),
+    // begin/move/end close over shared values (stable) and started/dropped (which read handlers ref).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model, active, zone, top, lifted, measure],
+  );
 
   return (
     <BoardContext value={board}>
       <View style={{ marginHorizontal: -space.xl }}>
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const group = byKey.get(item.group);
           if (item.kind === "head") {
             if (!group) return null;
@@ -519,7 +622,7 @@ export function ChatBoard({ chats, archived, sections, bots, searching, scroll, 
             const note = group.section && open && !group.chats.length && !dragging ? "No chats here yet." : undefined;
             return (
               <Cell key={item.key} item={item}>
-                <GroupHead group={group} sections={sections ?? []} open={open} onToggle={() => group.section && setFolded((now) => (now.includes(group.section!.id) ? now.filter((id) => id !== group.section!.id) : [...now, group.section!.id]))} note={note} />
+                <GroupHead group={group} sections={sections ?? []} open={open} onToggle={() => group.section && setFolded((now) => (now.includes(group.section!.id) ? now.filter((id) => id !== group.section!.id) : [...now, group.section!.id]))} note={note} onAsk={stableAsk} />
               </Cell>
             );
           }
@@ -528,12 +631,25 @@ export function ChatBoard({ chats, archived, sections, bots, searching, scroll, 
           return (
             <Cell key={item.key} item={item}>
               <DragHandle itemKey={item.key} disabled={!movable || !!chat.archived}>
-                <ChatRow chat={chat} bots={bots} sections={sections} actions={actionsFor(chat)} />
+                <ChatRow
+                  chat={chat}
+                  bots={bots}
+                  sections={sections}
+                  movable={movable}
+                  canView={canView}
+                  canChat={canChat}
+                  canRegenerateTitle={canRegenerateTitle}
+                  unified={unified}
+                  me={me}
+                  onDrop={stableDrop}
+                  onAsk={stableAsk}
+                />
               </DragHandle>
             </Cell>
           );
         })}
       </View>
+      {prompt.node}
     </BoardContext>
   );
-}
+});
