@@ -452,7 +452,7 @@ export const MessageRow = memo(function MessageRow({ item, chatId, group, bots, 
         <WorkflowActionCard chatId={chatId} card={message.actionCard} rich={rich} onOpenChat={onOpenChat} />
       ) : message.voiceCaption ? (
         <Reply message={{ ...message, text: message.voiceCaption }} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} />
-      ) : (
+      ) : message.textFromCards && message.a2uiSurfaces?.length ? null : (
         <Reply message={message} index={item.index} id={chatId + ":" + item.key} botId={speaker} markdown={markdown} actions={actions} paths={links.paths} parts={links.parts} />
       )}
       {!!message.a2uiSurfaces?.length &&

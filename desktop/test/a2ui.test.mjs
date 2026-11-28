@@ -379,6 +379,8 @@ test("render_ui creates, attaches to message, updates live by same bot, and bloc
   assert.equal(chat.messages.length, 1);
   assert.equal(chat.messages[0].a2uiSurfaces.length, 1);
   assert.equal(chat.messages[0].text, "Building...");
+  // The text only repeats the card, so the chat shows just the card (notifications still use the text).
+  assert.equal(chat.messages[0].textFromCards, true);
 
   // Same bot can updateDataModel in a later turn
   const run2 = { id: "run-2", chatId: chat.id, status: "Working" };
@@ -548,6 +550,9 @@ test("workflow Output step renders templated A2UI v1.0 surface and routes workfl
   const msg = chat.messages.at(-1);
   assert.equal(msg.a2uiSurfaces.length, 1);
   const surface = msg.a2uiSurfaces[0];
+  // No template text: the message text is the card's summary, flagged so apps show only the card.
+  assert.equal(msg.textFromCards, true);
+  assert.ok(msg.text.includes("Release v0.18.0 ready"));
   assert.equal(surface.components[1].text, "Release v0.18.0 ready");
   assert.equal(surface.dataModel.tag, "v0.18.0");
   assert.equal(surface.workflow.onAction, "trigger");

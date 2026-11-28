@@ -2839,6 +2839,7 @@ export class Workflows {
       let actionCard;
       let a2uiSurfaces;
       let finalText = text;
+      let textFromCards = false;
       if (hasCard) {
         const built = resolveOutputCard(cfg.card, run.context, title, text, this.ws);
         actionCard = built.actionCard;
@@ -2847,6 +2848,7 @@ export class Workflows {
       if (hasA2ui) {
         const built = resolveOutputA2ui(cfg.a2ui, run.context, wf, run, bot, target, this.ws);
         if (built.surfaces.length) a2uiSurfaces = built.surfaces;
+        if (!finalText && a2uiSurfaces) textFromCards = true;
         finalText = finalText || built.fallbackText || title;
         if (!a2uiSurfaces && !actionCard && !text && (built.updatedIds.length || built.deletedIds.length)) {
           this.ws.save();
@@ -2860,6 +2862,8 @@ export class Workflows {
         fromWorkflow: { workflowId: wf.id, workflowName: wf.name, runId: run.id },
         ...(actionCard ? { actionCard } : {}),
         ...(a2uiSurfaces ? { a2uiSurfaces } : {}),
+        // The text only repeats the card (it's there for notifications, search and older apps): the chat shows just the card.
+        ...(textFromCards ? { textFromCards: true } : {}),
       });
       target.time = now;
       target.unread = true;

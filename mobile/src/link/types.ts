@@ -339,6 +339,8 @@ export type Message = {
   voiceId?: string;
   voicePartial?: true;
   voiceCaption?: string;
+  /** The text only repeats this message's A2UI cards (for notifications and search): show just the cards. */
+  textFromCards?: boolean;
   role: "assistant" | "user" | "command";
   text: string;
   mentions?: Mention[];
