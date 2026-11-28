@@ -14,9 +14,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { main as cliMain } from "../cli/main.mjs";
 import { Workspace } from "../desktop/workspace.mjs";
+import { readWorkspace } from "../desktop/workspace-file.mjs";
 import {
   countDbRecords,
   countStateRecords,
+  exportWorkspaceToJson,
   isLazyStep,
   migrateWorkspaceFile,
   openWorkspaceDb,
@@ -276,7 +278,7 @@ test("lazy run-step payloads stay off heap for finished runs and hydrate on dema
   assert.equal(exportedStep.output, bigOutput);
 });
 
-test("CLI `botkins workspace migrate --dry-run` and `botkins workspace status` work offline with --json", async (t) => {
+test("CLI `botkins workspace migrate`, `status`, and `export` (downgrade round-trip) work offline with --json", async (t) => {
   const root = tempDir(t);
   const dataDir = join(root, "data");
   const state = makeSyntheticWorkspace({ runCount: 5, chatCount: 2, stepsPerRun: 3, stepOutputBytes: 600, stepInputBytes: 200 });
@@ -325,6 +327,34 @@ test("CLI `botkins workspace migrate --dry-run` and `botkins workspace status` w
   assert.equal(afterRes.journalMode, "wal");
   assert.equal(afterRes.counts.runs, 5);
   assert.equal(afterRes.counts.runSteps, 15);
+
+  // Downgrade path: export back to workspace.json (custom --out path and default path)
+  const customOut = join(root, "downgrade-backup.json");
+  const expCustom = await runCli(["workspace", "export", "--out", customOut, "--json"]);
+  assert.equal(expCustom.code, 0, expCustom.stderr);
+  const expCustomRes = JSON.parse(expCustom.stdout);
+  assert.equal(expCustomRes.status, "exported");
+  assert.equal(expCustomRes.outPath, customOut);
+  assert.deepEqual(expCustomRes.counts, afterRes.counts);
+  assert.equal(existsSync(customOut), true);
+
+  // Old JSON reader (`readWorkspace` from workspace-file.mjs) round-trips all counts & step payloads
+  const roundTripped = readWorkspace(customOut);
+  const expectedCounts = countStateRecords(state);
+  assert.deepEqual(countStateRecords(roundTripped), expectedCounts);
+  assert.equal(roundTripped.runs[0].steps[0].output, state.runs[0].steps[0].output);
+  assert.equal(roundTripped.runs[0].steps[0].input, state.runs[0].steps[0].input);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(customOut).mode & 0o777, 0o600);
+  }
+
+  // Default export (no --out) writes <dataDir>/workspace.json
+  const expDefault = await runCli(["workspace", "export", "--json"]);
+  assert.equal(expDefault.code, 0, expDefault.stderr);
+  const defaultOut = join(dataDir, "workspace.json");
+  assert.equal(JSON.parse(expDefault.stdout).outPath, defaultOut);
+  assert.equal(existsSync(defaultOut), true);
+  assert.deepEqual(countStateRecords(readWorkspace(defaultOut)), expectedCounts);
 });
 
 function mkdirSyncSafe(dir) {

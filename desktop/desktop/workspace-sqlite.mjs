@@ -18,7 +18,7 @@
 //   verifying row counts before renaming `workspace.json` -> `workspace.json.migrated-<ts>`.
 //   If migration fails, the caller falls back to the JSON backend and logs loudly.
 
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { LIGHT_STEP_TEXT } from "./link/parts.mjs";
@@ -2194,6 +2194,50 @@ export function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+/**
+ * Export a SQLite workspace (`workspace.db` in `dir`) to a standalone `workspace.json` file
+ * using atomic temp-file write + rename (mode 0o600). Used for downgrade / backup.
+ */
+export function exportWorkspaceToJson(dir, outPath = join(dir, "workspace.json")) {
+  const dbPath = join(dir, WORKSPACE_DB_FILENAME);
+  if (!existsSync(dbPath)) {
+    throw new Error(`No ${WORKSPACE_DB_FILENAME} found in ${dir}.`);
+  }
+  const t0 = performance.now();
+  const store = new SqliteWorkspaceStore(dir, { lazySteps: false });
+  let state;
+  let counts;
+  try {
+    state = store.exportState();
+    counts = countDbRecords(store.db);
+  } finally {
+    store.close();
+  }
+  const json = JSON.stringify(state);
+  const parent = dirname(outPath);
+  mkdirSync(parent, { recursive: true });
+  const tmpPath = `${outPath}.export-${process.pid}-${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmpPath, json, { mode: 0o600 });
+    renameSync(tmpPath, outPath);
+    setPrivateMode(outPath);
+  } catch (error) {
+    rmSync(tmpPath, { force: true });
+    throw error;
+  }
+  const bytes = statSync(outPath).size;
+  const elapsedMs = Math.round((performance.now() - t0) * 10) / 10;
+  return {
+    status: "exported",
+    dir,
+    dbPath,
+    outPath,
+    bytes,
+    elapsedMs,
+    counts,
+  };
 }
 
 /**

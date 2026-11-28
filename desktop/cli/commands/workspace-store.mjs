@@ -1,9 +1,10 @@
 // `botkins workspace` commands: offline/maintenance operations on the workspace store.
 import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CliError, table, usage } from "../output.mjs";
 import {
   countDbRecords,
+  exportWorkspaceToJson,
   formatBytes,
   migrateWorkspaceFile,
   openWorkspaceDb,
@@ -138,6 +139,36 @@ export const workspaceStoreCommands = {
             return;
           }
           context.print({ backend: "none", dir }, () => `No workspace store found in ${dir}.`);
+        },
+      },
+      export: {
+        summary: "Export workspace.db back to workspace.json (backup or downgrade)",
+        usage: "botkins workspace export [--out <path>]",
+        options: {
+          out: {
+            type: "string",
+            takes: "path",
+            about: "Destination JSON path (defaults to <data>/workspace.json)",
+          },
+        },
+        details:
+          "Reads the full workspace state from workspace.db (including all run-step payloads) and writes it atomically as JSON (mode 0600). Stop Botkins first before downgrading to an older release that reads workspace.json.",
+        async run(context) {
+          if (context.args.length) throw usage("`botkins workspace export` takes no positional arguments.");
+          const dir = resolveWorkspaceDir(context);
+          const outArg = context.options.out;
+          const outPath = typeof outArg === "string" && outArg.trim() ? resolve(outArg) : join(dir, "workspace.json");
+          let result;
+          try {
+            result = exportWorkspaceToJson(dir, outPath);
+          } catch (error) {
+            throw new CliError("Workspace export failed: " + error.message);
+          }
+          context.print(result, (r) => [
+            `Exported ${r.dbPath} -> ${r.outPath} (${formatBytes(r.bytes)}) in ${r.elapsedMs} ms.`,
+            "",
+            formatCounts(r.counts),
+          ].join("\n"));
         },
       },
     },

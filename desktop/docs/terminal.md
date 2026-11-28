@@ -1044,7 +1044,10 @@ Workspace state is stored in SQLite (`data/workspace.db`, WAL mode with `synchro
 botkins workspace status --json
 botkins workspace migrate --dry-run
 botkins workspace migrate
+botkins workspace export [--out <path>]
 ```
+
+- **Downgrading to an older build:** stop Botkins, run `botkins workspace export` (writes `data/workspace.json` from `data/workspace.db`), then move or remove `data/workspace.db` (`-wal`/`-shm`) before starting the older build.
 
 ## Scripts and JSON
 
