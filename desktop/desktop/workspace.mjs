@@ -121,6 +121,7 @@ import { SessionSearch } from "./session-search.mjs";
 import { HowToBotkins } from "./how-to-botkins.mjs";
 import { memberCanSpaces, narrower, personName, speakerContext, speakerPrompt, turnAccess } from "./team-turn.mjs";
 import { Spaces } from "./spaces.mjs";
+import { a2uiTools, attachRunA2uiSurfaces, handleChatA2uiAction, handleChatA2uiFunction } from "./a2ui-host.mjs";
 
 // This identifier only correlates a local bubble with its echo. The host still owns every queue and run ID.
 const clientMessageTag = id => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? { clientMessageId: id } : {};
@@ -1490,6 +1491,20 @@ export class Workspace {
     };
   }
   /**
+   * Handles a user action from an A2UI v1.0 surface stored on a chat message (built-in dispatch/dismiss,
+   * workflow resume/trigger, or follow-up turn to the owning bot). Idempotent per (surfaceId, actionId).
+   */
+  chatA2uiAction(chatId, payload, actor = "owner") {
+    return handleChatA2uiAction(this, chatId, payload, actor);
+  }
+  /**
+   * Handles bidirectional A2UI v1.0 function RPC (`callAgentFunction` and `rendererFunctionResponse`)
+   * with correlation IDs, schema validation, timeouts, trigger ACL, and idempotency.
+   */
+  chatA2uiFunction(chatId, payload, actor = "owner") {
+    return handleChatA2uiFunction(this, chatId, payload, actor);
+  }
+  /**
    * Makes a new chat for the same bot holding the conversation up to `messageIndex`.
    * Uses Copilot's native session fork when the boundary maps to a session event,
    * otherwise carries the transcript in the new session's system message.
@@ -1675,6 +1690,7 @@ export class Workspace {
       ...this.secureInputs.tools(bot, chat, run, task),
       ...updateTools(this.updates, chat, run, task, () => this.active.get(chat.id)),
       ...this.panels.tools(bot, chat, run, task),
+      ...a2uiTools(this, bot, chat, run, task),
       ...this.panels.routines.tools(bot, chat, run, task),
       ...this.workflows.tools(bot, chat, run, task),
       ...records,
@@ -3111,11 +3127,12 @@ export class Workspace {
         );
         if (task.stopped || this.closing) return;
         const empty = typeof text !== "string" || !text.trim();
+        const hasUi = Boolean(run.cards?.length || run.a2uiSurfaces?.length);
         if (isSilent(text || task.stream)) {
           run.noOutput = true;
           run.silent = true;
           noOutput = true;
-        } else if (empty && !run.cards?.length && (routine || run.reaction)) {
+        } else if (empty && !hasUi && (routine || run.reaction)) {
           run.noOutput = true;
           noOutput = true;
         }
@@ -3128,7 +3145,7 @@ export class Workspace {
           run.revealed = true;
           delete run.notify;
         }
-        if (empty && !run.cards?.length && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
+        if (empty && !hasUi && !botSteps(run.steps).length && !task.stream?.trim() && !routine && !run.reaction && task.reactedBy !== bot.id)
           throw new Error(bot.name + " finished without a reply.");
         const said = text || task.stream;
         if (!noOutput) this.commitAssistantReply(chat, run, task, said, bot);
@@ -3465,6 +3482,7 @@ export class Workspace {
     const beforeLast = chat.messages.at(-1);
     const wasInterim = !!beforeLast?.interim;
     finishReply(chat, run, task, safeFinal);
+    attachRunA2uiSurfaces(chat, run, task?.speaker || bot?.id);
     if (chat?.channel) {
       const committedMsg = chat.messages.at(-1);
       if (committedMsg?.role === "assistant" && typeof committedMsg.text === "string") {
@@ -3512,7 +3530,7 @@ export function deliveryGuidance(folder, ownerChat = true) {
     (ownerChat
       ? "Pictures, audio and video show from anywhere on this computer; other files only from your folders (that one or the chat's project folder), an upload, or a file you wrote."
       : "Files show only from your folders (that one or the chat's project folder), an upload, or a file you wrote.") +
-    "\nFor a view rather than a file: render_card for an inline card, side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
+    "\nFor a view rather than a file: render_card for an inline card, render_ui for an interactive A2UI v1.0 surface in the chat (forms, inputs, buttons that return structured actions back to you, tabs, live data-bound updates), side_pane_show for a panel beside the chat (HTML or a table), show_app for an interactive app in its own window, today_publish for a panel kept on Today or a space, claude_artifact for a private claude.ai page the person can share. side_pane_show kind \"screen\" offers a live view of browser or desktop work worth watching, not of code, shell commands or fetches."
   );
 }
 /**

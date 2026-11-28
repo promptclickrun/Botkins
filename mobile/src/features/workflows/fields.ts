@@ -243,6 +243,23 @@ function pushCardTemplates(card: Record<string, any> | undefined, push: (prop: s
   }
 }
 
+function pushA2uiTemplates(value: unknown, prefix: string, push: (prop: string, v: unknown) => void, depth = 0) {
+  if (depth > 14 || value === null || value === undefined) return;
+  if (typeof value === "string") {
+    push(prefix, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => pushA2uiTemplates(item, `${prefix}[${i}]`, push, depth + 1));
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      pushA2uiTemplates(v, `${prefix}.${k}`, push, depth + 1);
+    }
+  }
+}
+
 function nodeTemplates(node: WorkflowNode): Array<{ prop: string; value: string }> {
   const cfg = node.config ?? {};
   const list: Array<{ prop: string; value: string }> = [];
@@ -255,6 +272,7 @@ function nodeTemplates(node: WorkflowNode): Array<{ prop: string; value: string 
     push("template", cfg.template);
     push("title", cfg.title);
     pushCardTemplates(cfg.card, push);
+    if (cfg.a2ui !== undefined && cfg.a2ui !== null) pushA2uiTemplates(cfg.a2ui, "a2ui", push);
   } else if (node.kind === "condition") {
     push("expression", cfg.expression);
     if (Array.isArray(cfg.rules)) {

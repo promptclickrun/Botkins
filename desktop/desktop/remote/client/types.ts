@@ -339,6 +339,117 @@ export type Message = {
   fromWorkflow?: { workflowId: string; workflowName: string; runId: string };
   /** Interactive action card attached by a Workflow Output step (dispatch/dismiss + needs-you badge). */
   actionCard?: WorkflowActionCard;
+  /** Interactive A2UI v1.0 UI surfaces attached to this chat message. */
+  a2uiSurfaces?: A2uiSurface[];
+};
+
+export type A2uiComponent = {
+  id: string;
+  component: string;
+  "@catalogId"?: string;
+  "@accessibility"?: {
+    label?: unknown;
+    description?: unknown;
+    live?: "off" | "polite" | "assertive";
+    hidden?: unknown;
+  };
+  "@metadata"?: { extensions?: Record<string, unknown> };
+  "@checks"?: Array<{ condition: unknown; message?: string }>;
+  weight?: number;
+  [key: string]: unknown;
+};
+
+export type A2uiSurface = {
+  surfaceId: string;
+  version: "1.0";
+  catalogId?: string;
+  sendDataModel?: boolean;
+  components: A2uiComponent[];
+  dataModel: Record<string, unknown>;
+  metadata?: { extensions?: Record<string, unknown> };
+  ownerBotId?: string;
+  workflow?: {
+    workflowId: string;
+    workflowName?: string;
+    runId?: string;
+    onAction?: "bot" | "resume" | "trigger";
+    targetWorkflowId?: string;
+  };
+  dispatch?: {
+    botId?: string;
+    botName?: string;
+    label?: string;
+    chatTitle?: string;
+    prompt: string;
+  };
+  state?: "open" | "dispatched" | "dismissed";
+  dispatchedChatId?: string;
+  dispatchedBotId?: string;
+  dispatchedBotName?: string;
+  acted?: Record<string, { route?: string; actionName?: string; state?: string; chatId?: string; workflowRunId?: string; actedBy?: string; actedAt?: number }>;
+  allowMembers?: boolean;
+  inlineCatalogs?: Array<Record<string, unknown>>;
+  pendingRendererCalls?: Array<{ surfaceId?: string; functionCallId: string; callFunction: Record<string, unknown>; createdAt?: number }>;
+  functionResults?: Record<string, { functionCallId: string; value?: unknown; error?: { code: string; message: string }; status?: string; updatedAt?: number }>;
+  actedBy?: string;
+  actedAt?: number;
+  deleted?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export type A2uiFunctionRpcPayload =
+  | {
+      kind: "callAgentFunction";
+      surfaceId: string;
+      functionCallId: string;
+      callFunction: { "@call": string; catalogId?: string; args?: Record<string, unknown> };
+      timeoutMs?: number;
+      dataModel?: Record<string, unknown>;
+    }
+  | {
+      kind: "rendererFunctionResponse";
+      surfaceId?: string;
+      response: { functionCallId: string; value?: unknown; error?: { code: string; message: string } };
+    };
+
+export type ChatA2uiFunctionResult = {
+  ok: boolean;
+  idempotent: boolean;
+  kind: "callAgentFunction" | "rendererFunctionResponse";
+  functionCallId: string;
+  status?: string;
+  route?: "bot" | "workflow";
+  envelope?: Record<string, unknown>;
+};
+
+export type A2uiActionPayload = {
+  version?: "1.0";
+  surfaceId: string;
+  sourceComponentId: string;
+  name: string;
+  actionId?: string;
+  userMessage?: string;
+  timestamp?: string;
+  context?: Record<string, unknown>;
+  dataModel?: Record<string, unknown>;
+};
+
+export type ChatA2uiActionResult = {
+  ok: true;
+  idempotent: boolean;
+  actionId: string;
+  route: "builtin" | "workflow" | "bot";
+  state?: "dispatched" | "dismissed";
+  chatId?: string;
+  botId?: string;
+  botName?: string;
+  alreadyDispatched?: boolean;
+  workflowId?: string;
+  workflowRunId?: string;
+  decision?: "approved" | "rejected";
+  actionName?: string;
+  surface: A2uiSurface;
 };
 
 export type WorkflowActionCard = {
@@ -674,6 +785,7 @@ export type Run = RunSummary & {
   usedTools?: string[];
   steps?: Step[];
   cards?: Card[];
+  a2uiSurfaces?: A2uiSurface[];
   apps?: { id: string; title: string; description: string; sendsAnswers: boolean }[];
   /** Composio apps the bot asked the person to connect in this turn. */
   connects?: ConnectCard[];
@@ -1713,6 +1825,8 @@ export type Calls = {
   deleteChat(id: string): void;
   reactToMessage(chatId: string, index: number, time: number | null, emoji: string): NonNullable<Message["reactions"]>;
   "chat.cardAction"(chatId: string, target: number | string, action: "dispatch" | "dismiss"): ChatCardActionResult;
+  "chat.a2uiAction"(chatId: string, payload: A2uiActionPayload): ChatA2uiActionResult;
+  "chat.a2uiFunction"(chatId: string, payload: A2uiFunctionRpcPayload): ChatA2uiFunctionResult;
   forkChat(chatId: string, messageIndex: number): string;
   warmChat(chatId: string): void;
   startProjectChat(botIds: string[], projectId: string, mode?: ChatMode, folder?: string | null): string;

@@ -691,8 +691,10 @@ export class Routines {
     if (run?.scheduleId == null || run.status !== "Completed" || run.delivery) return;
     const entry = chat.schedules?.find((s) => s.id === run.scheduleId && s.routine);
     if (!entry?.deliver || entry.deliver.to === "none") return;
-    const text = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim)?.text?.trim();
-    if (!text) return;
+    const msg = chat.messages.findLast((m) => m.runId === run.id && m.role === "assistant" && !m.interim);
+    const text = msg?.text?.trim();
+    const a2uiSurfaces = Array.isArray(msg?.a2uiSurfaces) && msg.a2uiSurfaces.length ? structuredClone(msg.a2uiSurfaces) : undefined;
+    if (!text && !a2uiSurfaces) return;
     const { category } = entry.deliver;
     let to = entry.deliver.to;
     const maker = entry.createdBy ?? chat.createdBy;
@@ -711,7 +713,13 @@ export class Routines {
           : this.chatTarget(chat.botId, entry.deliver, entry.name, maker);
         const time = Date.now();
         // A proactive alert carries what the apps may do with it (desktop/proactive.mjs, `act`).
-        target.messages.push({ role: "assistant", text, time, ...(run.proactive && { proactiveRunId: run.id, alert: this.ws.proactive.alertOf(run, proactiveCheck) }) });
+        target.messages.push({
+          role: "assistant",
+          text: text || "Interactive UI",
+          time,
+          ...(a2uiSurfaces ? { a2uiSurfaces } : {}),
+          ...(run.proactive && { proactiveRunId: run.id, alert: this.ws.proactive.alertOf(run, proactiveCheck) }),
+        });
         target.time = time;
         target.unread = true;
         // The message was written in the routine's own chat, so the session behind this chat has

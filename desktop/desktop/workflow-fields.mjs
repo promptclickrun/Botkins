@@ -367,6 +367,23 @@ function pushCardTemplates(card, push) {
   }
 }
 
+function pushA2uiTemplates(value, prefix, push, depth = 0) {
+  if (depth > 14 || value === null || value === undefined) return;
+  if (typeof value === "string") {
+    push(prefix, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => pushA2uiTemplates(item, `${prefix}[${i}]`, push, depth + 1));
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) {
+      pushA2uiTemplates(v, `${prefix}.${k}`, push, depth + 1);
+    }
+  }
+}
+
 /**
  * Collects all template strings referenced on a node.
  */
@@ -384,6 +401,7 @@ export function nodeTemplateStrings(node) {
     push("template", cfg.template);
     push("title", cfg.title);
     pushCardTemplates(cfg.card, push);
+    if (cfg.a2ui !== undefined && cfg.a2ui !== null) pushA2uiTemplates(cfg.a2ui, "a2ui", push);
   } else if (node?.kind === "condition") {
     if (typeof cfg.expression === "string") push("expression", cfg.expression);
     if (Array.isArray(cfg.rules)) {
@@ -723,6 +741,25 @@ export function validateWorkflow(workflow, { strictFields = false } = {}) {
           } else if (typeof card.dispatch.prompt !== "string" || !card.dispatch.prompt.trim()) {
             errors.push(`Output card dispatch on ${node.id} needs a prompt.`);
           }
+        }
+      }
+    }
+    if (node.kind === "output" && node.config?.a2ui !== undefined && node.config?.a2ui !== null) {
+      const dest = node.config.destination || "chat";
+      const a2ui = node.config.a2ui;
+      if (dest !== "chat") {
+        errors.push(`Output a2ui on ${node.id} is only supported for chat destination.`);
+      } else if (typeof a2ui === "string") {
+        if (!a2ui.trim()) errors.push(`Output a2ui on ${node.id} cannot be empty.`);
+      } else if (typeof a2ui !== "object") {
+        errors.push(`Output a2ui on ${node.id} must be an A2UI v1.0 message array, object, or JSON string.`);
+      } else if (!Array.isArray(a2ui)) {
+        const msgs = a2ui.messages;
+        if (msgs !== undefined && !Array.isArray(msgs) && typeof msgs !== "string") {
+          errors.push(`Output a2ui.messages on ${node.id} must be an array or JSON string.`);
+        }
+        if (a2ui.onAction !== undefined && !["bot", "resume", "trigger"].includes(a2ui.onAction)) {
+          errors.push(`Output a2ui.onAction on ${node.id} must be "bot", "resume", or "trigger".`);
         }
       }
     }

@@ -396,26 +396,49 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
   const label = (d: string) => (d === "chat" ? "Chat" : d === "feed" ? "Feed" : d === "idea" ? "Ideas" : d === "goal" ? "Goals" : "Notification");
   const visible = chats.filter((c) => !c.archived).slice(0, 20);
   const card = dest === "chat" && cfg.card && typeof cfg.card === "object" ? cfg.card : null;
+  const a2ui = dest === "chat" && cfg.a2ui !== undefined && cfg.a2ui !== null ? cfg.a2ui : null;
+  const a2uiObj = a2ui && typeof a2ui === "object" && !Array.isArray(a2ui) ? a2ui : null;
+  const a2uiOnAction: string = typeof a2uiObj?.onAction === "string" ? a2uiObj.onAction : "bot";
+  const a2uiText: string =
+    typeof a2ui === "string"
+      ? a2ui
+      : typeof a2uiObj?.messages === "string"
+        ? a2uiObj.messages
+        : a2ui
+          ? JSON.stringify(Array.isArray(a2uiObj?.messages) ? a2uiObj.messages : a2ui, null, 2)
+          : "";
+  const updateA2ui = (nextText: string, nextOnAction: string) => {
+    let messagesVal: unknown = nextText;
+    try {
+      const parsed = JSON.parse(nextText);
+      if (Array.isArray(parsed)) messagesVal = parsed;
+    } catch {
+      // Keep string while typing JSON
+    }
+    setConfig({ a2ui: { ...(a2uiObj ?? {}), messages: messagesVal, onAction: nextOnAction } });
+  };
   const setCard = (patch: Record<string, unknown>) => setConfig({ card: { ...(card ?? {}), ...patch } });
   const dispatch = card?.dispatch && typeof card.dispatch === "object" ? card.dispatch : null;
   const setDispatch = (patch: Record<string, unknown>) => setCard({ dispatch: { ...(dispatch ?? {}), ...patch } });
   const cardFields: { label: string; value: string; tone?: string }[] = Array.isArray(card?.fields) ? card.fields : [];
-  const hasMessageOrCard = !!String(cfg.template ?? "").trim() || !!(card && String(card.title ?? "").trim());
+  const hasMessageOrCard = !!String(cfg.template ?? "").trim() || !!(card && String(card.title ?? "").trim()) || !!a2uiText.trim();
   return (
     <View style={{ gap: space.lg }}>
-      <Choice label="Send to" options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))} value={dest} onChange={(destination: string) => setConfig({ destination, ...(destination !== "chat" ? { card: undefined } : {}) })} />
+      <Choice label="Send to" options={DESTINATIONS.map((d) => ({ value: d, label: label(d) }))} value={dest} onChange={(destination: string) => setConfig({ destination, ...(destination !== "chat" ? { card: undefined, a2ui: undefined } : {}) })} />
       <Choice label="As" options={[{ value: "", label: "First bot" }, ...bots.map((b) => ({ value: b.name, label: b.name }))]} value={cfg.botName ?? ""} onChange={(botName: string) => setConfig({ botName: botName || undefined, botId: undefined })} />
       {dest === "chat" && <Choice label="Chat" options={[{ value: "", label: "The bot's main chat" }, ...visible.map((c) => ({ value: c.id, label: c.title || "Chat" }))]} value={cfg.chatId ?? ""} onChange={(chatId: string) => setConfig({ chatId: chatId || undefined })} />}
       {dest === "chat" && (
         <Segmented
           options={[
-            { value: "text", label: "Plain text" },
+            { value: "text", label: "Text" },
             { value: "card", label: "Action card" },
+            { value: "a2ui", label: "A2UI" },
           ]}
-          value={card ? "card" : "text"}
+          value={a2ui ? "a2ui" : card ? "card" : "text"}
           onChange={(mode) => {
             if (mode === "card") {
               setConfig({
+                a2ui: undefined,
                 card: card ?? {
                   title: cfg.title || "{{title}}",
                   needsYou: "{{needs_you}}",
@@ -423,8 +446,29 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
                   fields: [],
                 },
               });
+            } else if (mode === "a2ui") {
+              const starter = [
+                {
+                  version: "1.0",
+                  createSurface: {
+                    surfaceId: "wf-surface",
+                    sendDataModel: true,
+                    components: [
+                      { id: "root", component: "Column", children: ["heading", "ok_btn"] },
+                      { id: "heading", component: "Text", text: "{{title?}}" },
+                      { id: "ok_btn", component: "Button", child: "ok_label", variant: "primary", action: { event: { name: "acknowledge" } } },
+                      { id: "ok_label", component: "Text", text: "Acknowledge" },
+                    ],
+                    dataModel: {},
+                  },
+                },
+              ];
+              setConfig({
+                card: undefined,
+                a2ui: a2ui ?? { messages: JSON.stringify(starter, null, 2), onAction: "bot" },
+              });
             } else {
-              setConfig({ card: undefined });
+              setConfig({ card: undefined, a2ui: undefined });
             }
           }}
         />
@@ -480,9 +524,31 @@ function OutputEditor({ cfg, setConfig, fields, analysis }: { cfg: Record<string
           )}
         </View>
       )}
+      {dest === "chat" && a2ui && (
+        <View style={{ gap: space.md, padding: space.md, borderRadius: radius.lg, backgroundColor: colors.sunken, borderWidth: 1, borderColor: colors.line }}>
+          <Choice
+            label="Surface action routing"
+            options={[
+              { value: "bot", label: "Send to owning bot" },
+              { value: "resume", label: "Resume workflow approval" },
+              { value: "trigger", label: "Trigger workflow" },
+            ]}
+            value={a2uiOnAction}
+            onChange={(nextAction: string) => updateA2ui(a2uiText, nextAction)}
+          />
+          <TemplateField
+            label="A2UI v1.0 messages JSON"
+            value={a2uiText}
+            onChange={(val) => updateA2ui(val, a2uiOnAction)}
+            fields={fields}
+            problems={problemsFor(analysis, "a2ui")}
+            placeholder='[{"version":"1.0","createSurface":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"{{title}}"}]}}]'
+          />
+        </View>
+      )}
       {dest !== "chat" && <TemplateField label="Title" area={false} value={cfg.title ?? ""} onChange={(title) => setConfig({ title: title || undefined })} fields={fields} problems={problemsFor(analysis, "title")} placeholder="The workflow's name" />}
       {dest === "goal" && <Choice label="Category" options={GOAL_CATEGORIES.map((c) => ({ value: c, label: cap(c) }))} value={cfg.category ?? "other"} onChange={(category: string) => setConfig({ category })} />}
-      <TemplateField label={card ? "Plain-text fallback (optional)" : "Message"} value={cfg.template ?? ""} onChange={(template) => setConfig({ template })} fields={fields} problems={problemsFor(analysis, "template")} placeholder={card ? "Auto-generated from the card when blank." : "What to send. Tap a field to put it in."} />
+      <TemplateField label={card || a2ui ? "Plain-text fallback (optional)" : "Message"} value={cfg.template ?? ""} onChange={(template) => setConfig({ template })} fields={fields} problems={problemsFor(analysis, "template")} placeholder={card || a2ui ? "Auto-generated from the UI when blank." : "What to send. Tap a field to put it in."} />
       {!hasMessageOrCard && <T variant="footnote" style={{ color: colors.warning }}>An empty message fails the run.</T>}
     </View>
   );

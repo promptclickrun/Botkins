@@ -1077,7 +1077,7 @@ export function WorkflowInspector({
                       value={node.config.destination || "chat"}
                       onChange={(e) => {
                         const destination = e.target.value;
-                        setConfig(destination === "chat" ? { destination } : { destination, card: undefined });
+                        setConfig(destination === "chat" ? { destination } : { destination, card: undefined, a2ui: undefined });
                       }}
                     >
                       <option value="chat">Post to chat</option>
@@ -1303,6 +1303,87 @@ export function WorkflowInspector({
                           </div>
                         );
                       })()}
+                      <label className="wf-check">
+                        <input
+                          type="checkbox"
+                          checked={!!node.config.a2ui}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              const starter = [
+                                {
+                                  version: "1.0",
+                                  createSurface: {
+                                    surfaceId: "wf-surface",
+                                    sendDataModel: true,
+                                    components: [
+                                      { id: "root", component: "Column", children: ["heading", "body", "actions"] },
+                                      { id: "heading", component: "Text", text: "{{title?}}" },
+                                      { id: "body", component: "Text", text: "{{agent_reply?}}", variant: "caption" },
+                                      { id: "actions", component: "Row", children: ["ok_btn"] },
+                                      { id: "ok_btn", component: "Button", child: "ok_label", variant: "primary", action: { event: { name: "acknowledge" } } },
+                                      { id: "ok_label", component: "Text", text: "Acknowledge" },
+                                    ],
+                                    dataModel: {},
+                                  },
+                                },
+                              ];
+                              setConfig({ a2ui: { messages: JSON.stringify(starter, null, 2), onAction: "bot" } });
+                            } else {
+                              setConfig({ a2ui: undefined });
+                            }
+                          }}
+                        />
+                        <span>Post as A2UI v1.0 interactive surface</span>
+                      </label>
+                      {node.config.a2ui && (() => {
+                        const rawA2ui = node.config.a2ui;
+                        const isObj = typeof rawA2ui === "object" && rawA2ui !== null && !Array.isArray(rawA2ui);
+                        const onAction: string = isObj && typeof rawA2ui.onAction === "string" ? rawA2ui.onAction : "bot";
+                        const payloadText: string =
+                          typeof rawA2ui === "string"
+                            ? rawA2ui
+                            : isObj && typeof rawA2ui.messages === "string"
+                              ? rawA2ui.messages
+                              : JSON.stringify(isObj && Array.isArray(rawA2ui.messages) ? rawA2ui.messages : rawA2ui, null, 2);
+                        const updateA2ui = (nextText: string, nextOnAction: string) => {
+                          let parsed: unknown = nextText;
+                          try {
+                            const obj = JSON.parse(nextText);
+                            if (Array.isArray(obj)) parsed = obj;
+                          } catch {
+                            // Keep raw string while editing JSON with {{field}} tokens
+                          }
+                          setConfig({
+                            a2ui: {
+                              ...(isObj ? rawA2ui : {}),
+                              messages: parsed,
+                              onAction: nextOnAction,
+                            },
+                          });
+                        };
+                        return (
+                          <div className="wf-card-editor">
+                            <div className="wf-field-group">
+                              <label className="wf-label">When the person clicks a surface action</label>
+                              <select
+                                value={onAction}
+                                onChange={(e) => updateA2ui(payloadText, e.target.value)}
+                              >
+                                <option value="bot">Send action to owning bot in chat</option>
+                                <option value="resume">Resume waiting workflow approval (or trigger)</option>
+                                <option value="trigger">Trigger this workflow with action as input</option>
+                              </select>
+                            </div>
+                            <WorkflowFieldInput
+                              label="A2UI v1.0 messages JSON (supports {{field}} templates)"
+                              value={payloadText}
+                              onChange={(val) => updateA2ui(val, onAction)}
+                              analysis={analysis}
+                              placeholder='[{"version":"1.0","createSurface":{"surfaceId":"s1","components":[{"id":"root","component":"Text","text":"{{title}}"}]}}]'
+                            />
+                          </div>
+                        );
+                      })()}
                     </>
                   )}
                   {node.config.destination === "goal" && (
@@ -1328,7 +1409,7 @@ export function WorkflowInspector({
                     />
                   )}
                   <WorkflowFieldInput
-                    label={node.config.card ? "Fallback text template (optional — for notifications & older clients)" : "Message template"}
+                    label={node.config.card || node.config.a2ui ? "Fallback text template (optional — for notifications & older clients)" : "Message template"}
                     value={node.config.template || ""}
                     onChange={(template) => setConfig({ template })}
                     analysis={analysis}

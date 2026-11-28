@@ -2968,6 +2968,61 @@ export class MockBackend {
       this.emit?.();
       return { ok: true, state: "dispatched", chatId: newChatId, botId: bot.id, botName: bot.name, alreadyDispatched: false, card: next };
     },
+    "chat.a2uiAction"(chatId, payload) {
+      const chat = this.chat(chatId);
+      let surface = null;
+      let ownerMessage = null;
+      for (const msg of chat.messages) {
+        const hit = msg.a2uiSurfaces?.find((s) => s.surfaceId === payload?.surfaceId);
+        if (hit) {
+          surface = hit;
+          ownerMessage = msg;
+          break;
+        }
+      }
+      if (!surface || !ownerMessage) throw new Error("A2UI surface not found in this chat.");
+      const actionId = payload.actionId || `${payload.surfaceId}:${payload.sourceComponentId}:${payload.name}`;
+      const acted = surface.acted || {};
+      if (Object.hasOwn(acted, actionId)) {
+        return { ok: true, idempotent: true, actionId, surface, ...acted[actionId] };
+      }
+      const next = {
+        ...surface,
+        ...(payload.dataModel ? { dataModel: payload.dataModel } : {}),
+        acted: { ...acted, [actionId]: { route: "bot", actionName: payload.name, actedAt: Date.now() } },
+        updatedAt: Date.now(),
+      };
+      ownerMessage.a2uiSurfaces = ownerMessage.a2uiSurfaces.map((s) => (s.surfaceId === surface.surfaceId ? next : s));
+      this.emit?.();
+      return { ok: true, idempotent: false, actionId, route: "bot", chatId, actionName: payload.name, surface: next };
+    },
+    "chat.a2uiFunction"(chatId, payload) {
+      const chat = this.chat(chatId);
+      const callId = payload?.functionCallId || payload?.response?.functionCallId || "fn-mock";
+      if (payload?.kind === "rendererFunctionResponse") {
+        return { ok: true, idempotent: false, kind: "rendererFunctionResponse", functionCallId: callId, envelope: { version: "1.0", rendererFunctionResponse: payload.response } };
+      }
+      let surface = null;
+      let ownerMessage = null;
+      for (const msg of chat.messages) {
+        const hit = msg.a2uiSurfaces?.find((s) => s.surfaceId === payload?.surfaceId);
+        if (hit) {
+          surface = hit;
+          ownerMessage = msg;
+          break;
+        }
+      }
+      if (!surface || !ownerMessage) throw new Error("A2UI surface not found in this chat.");
+      const envelope = { version: "1.0", agentFunctionResponse: { functionCallId: callId, value: { ok: true, echo: payload?.callFunction?.args ?? {} } } };
+      const next = {
+        ...surface,
+        functionResults: { ...(surface.functionResults || {}), [callId]: { ...envelope.agentFunctionResponse, status: "resolved", updatedAt: Date.now() } },
+        updatedAt: Date.now(),
+      };
+      ownerMessage.a2uiSurfaces = ownerMessage.a2uiSurfaces.map((s) => (s.surfaceId === surface.surfaceId ? next : s));
+      this.emit?.();
+      return { ok: true, idempotent: false, kind: "callAgentFunction", route: "bot", functionCallId: callId, status: "resolved", envelope };
+    },
     forkChat(chatId, messageIndex) {
       const from = this.chat(chatId);
       if (from.botIds) throw new Error("A group chat can't be forked.");

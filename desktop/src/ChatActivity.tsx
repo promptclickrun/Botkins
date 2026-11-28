@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { todoLabel } from "../desktop/link/session-todos";
+import A2uiSurface from "./A2uiSurface";
 import type { ChatFiles } from "./ChatFileLink";
 import { toolKind } from "../desktop/tool-kind.mjs";
 import "./apps.css";
@@ -1108,6 +1109,9 @@ export function RunCards({
       ))}
       {run.mcpApps?.map((card) => (
         <McpAppCard key={card.id} chatId={run.chatId} card={card} />
+      ))}
+      {run.a2uiSurfaces?.map((surface) => (
+        <A2uiSurface key={surface.surfaceId} chatId={run.chatId} surface={surface} />
       ))}
       {run.cards?.map((card) => (
         <section className="chat-card" key={card.id} aria-label={card.title}>

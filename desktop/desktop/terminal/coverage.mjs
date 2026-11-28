@@ -93,6 +93,8 @@ export const WORKSPACE = {
   deleteChat: cmd("chats delete"),
   reactToMessage: cmd("chats react"),
   "chat.cardAction": cmd("chats card"),
+  "chat.a2uiAction": no("window's own"),
+  "chat.a2uiFunction": no("window's own"),
   forkChat: cmd("chats fork"),
   compact: cmd("chats compact"),
   setChatFlags: cmd("chats flags"),
