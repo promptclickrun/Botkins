@@ -8,7 +8,7 @@ import { botAccess } from "./access.mjs";
 const workspaceFields = new Set([
   "apps", "board", "bots", "channels", "chats", "claudeArtifacts", "frames", "mcpServers", "mediaPass", "panels",
   "hostDispatch", "nodeHost", "outgoingDispatches", "detachedQuestions", "pendingMessages", "proactive", "projects", "runs", "sections", "settings", "skills", "spaces", "tasks", "templates",
-  "workflows", "workflowRuns", "workflowGithubActions",
+  "workflows", "workflowRuns", "workflowGithubActions", "workflowGithubDeliveries",
 ]);
 const projectFields = new Set([
   "id", "name", "description", "folder", "color", "todos", "artifacts", "lastUsed", "createdAt",

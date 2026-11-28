@@ -84,6 +84,7 @@ export const WORKFLOW_METHODS = [
   "workflowRun", "workflowRetryRun", "workflowRespondApproval", "workflowCancelRun",
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
   "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
+  "workflowGithubCatalog", "workflowGithubDeliveries", "workflowGithubReplayLast",
 ];
 /** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
 export const CHANNEL_METHODS = [
@@ -567,6 +568,24 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
   }
   if (method === "workflowGithubSignInStart" || method === "workflowGithubSignInCancel") {
     return [];
+  }
+  if (method === "workflowGithubCatalog") {
+    const opts = args[0] && typeof args[0] === "object" && !Array.isArray(args[0]) ? args[0] : {};
+    const repos = Array.isArray(opts.repos) ? opts.repos.map((r) => String(r ?? "").trim()).filter(Boolean).slice(0, 10) : [];
+    const repo = typeof opts.repo === "string" && opts.repo.trim() ? opts.repo.trim() : undefined;
+    return [{
+      ...(repos.length ? { repos } : {}),
+      ...(repo ? { repo } : {}),
+      includeLabels: opts.includeLabels !== false,
+      includeAssignees: opts.includeAssignees !== false,
+    }];
+  }
+  if (method === "workflowGithubDeliveries" || method === "workflowGithubReplayLast") {
+    const [workflowId, nodeId] = args;
+    if (!clean(workflowId) || (nodeId != null && !clean(nodeId))) {
+      throw new Error("Choose a workflow to inspect or replay GitHub deliveries.");
+    }
+    return nodeId ? [workflowId, nodeId] : [workflowId];
   }
   if (method === "regenerateChatTitle") {
     if (args.length !== 1 || !clean(args[0])) throw new Error("Choose a chat to regenerate its title.");

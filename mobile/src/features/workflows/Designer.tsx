@@ -162,7 +162,7 @@ function Designer({ id }: { id: string }) {
     const out: { nodeId: string; text: string }[] = [];
     for (const n of draft.nodes) {
       for (const p of analysis[n.id]?.problems ?? []) out.push({ nodeId: n.id, text: `${n.label}: ${p.message}` });
-      if (n.kind === "output" && !String(n.config?.template ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: the message is empty, so the run fails here.` });
+      if (n.kind === "output" && n.config?.destination !== "github" && !n.config?.card && !n.config?.a2ui && !String(n.config?.template ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: the message is empty, so the run fails here.` });
       if (n.kind === "agent" && !n.config?.botId && !n.config?.botName) out.push({ nodeId: n.id, text: `${n.label}: choose a bot.` });
       if (n.kind === "agent" && !String(n.config?.prompt ?? "").trim()) out.push({ nodeId: n.id, text: `${n.label}: write a prompt.` });
     }
@@ -371,12 +371,18 @@ function Designer({ id }: { id: string }) {
       )}
       {footer}
       <StepSheet
+        workflowId={workflow.id}
+        triggerNodes={triggers}
         node={editingNode}
         analysis={editingNode ? analysis[editingNode.id] : undefined}
         canRemove={!!editingNode && editable && canRemove(draft, editingNode.id)}
         onChange={(next: WorkflowNode) => change(updateNode(draft, next.id, next))}
         onRemove={() => editing && change(removeStep(draft, editing))}
         onClose={() => setEditing(null)}
+        onReplayed={() => {
+          setEditing(null);
+          setTab("runs");
+        }}
       />
       <AddSheet adding={adding} onStep={add} onTrigger={addTriggerOf} onClose={() => setAdding(null)} />
       {prompt.node}

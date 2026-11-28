@@ -515,16 +515,61 @@ export interface WorkflowGithubSignIn {
   login: string | null;
 }
 
+export interface WorkflowGithubRepoAccess {
+  fullName: string;
+  writable?: boolean;
+  events?: boolean;
+  isPrivate?: boolean;
+}
+
+export interface WorkflowGithubLabelOption {
+  name: string;
+  color: string;
+  description?: string;
+}
+
+export interface WorkflowGithubAssigneeOption {
+  login: string;
+  type?: string;
+}
+
+export interface WorkflowGithubCatalog {
+  repos: string[];
+  labels: WorkflowGithubLabelOption[];
+  assignees: WorkflowGithubAssigneeOption[];
+}
+
+export interface WorkflowGithubDelivery {
+  workflowId: string;
+  nodeId: string;
+  deliveryId: string;
+  event: string;
+  repository: string | null;
+  number: number | null;
+  pullRequest: boolean | null;
+  title: string | null;
+  url?: string | null;
+  receivedAt: string;
+  outcome: "waiting" | "started" | "skipped";
+  reason: "filter" | "self" | "chain" | "offline" | "refused" | null;
+  reasonDetail?: string | null;
+  runId: string | null;
+  waitsForRunId?: string | null;
+  replayable?: boolean;
+}
+
 export interface WorkflowGithubStatus {
   installed: boolean;
   authenticated: boolean;
   login: string | null;
   scopes: string[];
   repos: string[];
+  repoAccess?: WorkflowGithubRepoAccess[];
+  webhookEventsEnabled?: boolean;
   installUrl: string;
   signIn: WorkflowGithubSignIn;
 }
-export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification";
+export type WorkflowOutputDestination = "chat" | "feed" | "idea" | "goal" | "notification" | "github";
 
 export interface WorkflowFieldDef {
   name: string;
@@ -1599,6 +1644,9 @@ declare global {
       workflowGithubStatus(options?: { includeRepos?: boolean }): Promise<WorkflowGithubStatus>;
       workflowGithubSignInStart(): Promise<WorkflowGithubSignIn>;
       workflowGithubSignInCancel(): Promise<WorkflowGithubStatus>;
+      workflowGithubCatalog(options?: { repos?: string[]; repo?: string; includeLabels?: boolean; includeAssignees?: boolean }): Promise<WorkflowGithubCatalog>;
+      workflowGithubDeliveries(workflowId: string, nodeId?: string): Promise<WorkflowGithubDelivery[]>;
+      workflowGithubReplayLast(workflowId: string, nodeId?: string): Promise<WorkflowRun>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;

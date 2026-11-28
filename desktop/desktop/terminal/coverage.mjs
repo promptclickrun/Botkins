@@ -140,6 +140,9 @@ export const WORKSPACE = {
   workflowGithubStatus: no("person"), // checks local gh CLI sign-in state for the Workflow trigger UI; terminal users run `gh auth status`
   workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
   workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
+  workflowGithubCatalog: no("person"), // lists repository labels and assignees for the desktop/mobile GitHub workflow pickers
+  workflowGithubDeliveries: no("person"), // reads per-trigger GitHub delivery log rows for the workflow UI
+  workflowGithubReplayLast: no("person"), // replays the latest stored GitHub event payload from the workflow UI
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
   channelAdd: cmd("channels add"),

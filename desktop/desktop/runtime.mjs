@@ -856,6 +856,9 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowGithubStatus: (options) => workspace.workflows.githubStatus(options ?? {}),
     workflowGithubSignInStart: () => workspace.workflows.githubSignInStart(),
     workflowGithubSignInCancel: () => workspace.workflows.githubSignInCancel(),
+    workflowGithubCatalog: (options) => workspace.workflows.githubCatalog(options ?? {}),
+    workflowGithubDeliveries: (workflowId, nodeId) => workspace.workflows.listGithubDeliveries(workflowId, nodeId ?? null),
+    workflowGithubReplayLast: (workflowId, nodeId) => workspace.workflows.replayLastGithubEvent(workflowId, nodeId ?? null),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
     workflowExport: async (id) => {

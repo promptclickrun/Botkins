@@ -1709,12 +1709,57 @@ export type WorkflowGithubSignIn = {
   login: string | null;
 };
 
+export type WorkflowGithubRepoAccess = {
+  fullName: string;
+  writable?: boolean;
+  events?: boolean;
+  isPrivate?: boolean;
+};
+
+export type WorkflowGithubLabelOption = {
+  name: string;
+  color: string;
+  description?: string;
+};
+
+export type WorkflowGithubAssigneeOption = {
+  login: string;
+  type?: string;
+};
+
+export type WorkflowGithubCatalog = {
+  repos: string[];
+  labels: WorkflowGithubLabelOption[];
+  assignees: WorkflowGithubAssigneeOption[];
+};
+
+export type WorkflowGithubDelivery = {
+  workflowId: string;
+  nodeId: string;
+  deliveryId: string;
+  event: string;
+  repository: string | null;
+  number: number | null;
+  pullRequest: boolean | null;
+  title: string | null;
+  url?: string | null;
+  receivedAt: string;
+  outcome: "waiting" | "started" | "skipped";
+  reason: "filter" | "self" | "chain" | "offline" | "refused" | null;
+  reasonDetail?: string | null;
+  runId: string | null;
+  waitsForRunId?: string | null;
+  replayable?: boolean;
+};
+
 export type WorkflowGithubStatus = {
   installed: boolean;
   authenticated: boolean;
   login: string | null;
   scopes: string[];
   repos: string[];
+  repoAccess?: WorkflowGithubRepoAccess[];
+  webhookEventsEnabled?: boolean;
   installUrl: string;
   signIn: WorkflowGithubSignIn;
 };
@@ -2374,6 +2419,9 @@ export type Calls = {
   workflowGithubStatus(options?: { includeRepos?: boolean }): WorkflowGithubStatus;
   workflowGithubSignInStart(): WorkflowGithubSignIn;
   workflowGithubSignInCancel(): WorkflowGithubStatus;
+  workflowGithubCatalog(options?: { repos?: string[]; repo?: string; includeLabels?: boolean; includeAssignees?: boolean }): WorkflowGithubCatalog;
+  workflowGithubDeliveries(workflowId: string, nodeId?: string): WorkflowGithubDelivery[];
+  workflowGithubReplayLast(workflowId: string, nodeId?: string): WorkflowRun;
   channelsList(): ChannelConnection[];
   channelAdd(input: ChannelInput): ChannelConnection;
   channelUpdate(id: string, patch: ChannelInput): ChannelConnection;
