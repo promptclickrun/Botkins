@@ -40,10 +40,24 @@ const knownPdf: Artifact = {
   source: "media",
 };
 
+const knownMacShot: Artifact = {
+  id: "art-mac-shot",
+  botId: "pip",
+  chatId: "chat-1",
+  path: "/Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png",
+  name: "botkins-a2ui-desktop.png",
+  kind: "image",
+  mime: "image/png",
+  size: 472000,
+  time: 1000,
+  source: "media",
+};
+
 const knownByChat: Record<string, Record<string, Artifact | null>> = {
   "chat-1": {
     [knownShot.path]: knownShot,
     [knownPdf.path]: knownPdf,
+    [knownMacShot.path]: knownMacShot,
     "/tmp/secret.txt": null,
   },
 };
@@ -212,6 +226,38 @@ test("mobile TurnText and Aside render InlineMedia for known MEDIA: in interim u
     ["art-shot", "art-pdf"],
     "expanded FoldRow renders InlineMedia for MEDIA: in folded interim updates",
   );
+});
+
+test("mobile TurnText renders InlineMedia for macOS Application Support MEDIA: path with spaces in interim updates", async (t) => {
+  const interimText = `Screenshot ready:\nMEDIA: ${knownMacShot.path}`;
+  const ask: Message = { role: "user", text: "Capture on Mac", runId: "r-mac", time: 100 };
+  const interim: Message = { role: "assistant", text: interimText, runId: "r-mac", time: 200, interim: true };
+  const liveRun: Run = { id: "r-mac", chatId: "chat-1", title: "Capture", status: "Working", time: 100, steps: [{ id: "s1", name: "bash", label: "run", status: "Running", started: 250 }] };
+
+  const during = chatTimeline({
+    messages: [ask, interim],
+    from: 0,
+    runs: {},
+    running: liveRun,
+    live: { stream: "" },
+    timeline: true,
+    group: false,
+    prefs: { steps: "show", thinking: "show", updates: true, foldFinishedSteps: false },
+  });
+  const liveTextItem = during.find((item) => item.kind === "text");
+  assert.ok(liveTextItem && liveTextItem.kind === "text");
+
+  const screenLive = await mount(el(TurnText, { chatId: "chat-1", item: liveTextItem }));
+  t.after(screenLive.unmount);
+
+  const mediaNodes = screenLive.root.root.findAllByType("InlineMedia" as never);
+  assert.deepEqual(
+    mediaNodes.map((n) => n.props.artifact.id),
+    ["art-mac-shot"],
+    "TurnText renders InlineMedia for macOS Application Support path with spaces in interim update",
+  );
+  const mdTexts = screenLive.root.root.findAllByType("Markdown" as never).map((n) => String(n.props.text));
+  assert.ok(mdTexts.every((txt) => !txt.includes("MEDIA:") && !txt.includes("Application Support")), "raw MEDIA: line with spaces is stripped");
 });
 
 test("mobile RunActivity sheet renders InlineMedia for MEDIA: in interim updates (during and after a run)", async (t) => {

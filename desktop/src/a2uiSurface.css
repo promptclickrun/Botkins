@@ -136,13 +136,20 @@
 .a2ui-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .a2ui-btn.borderless {
   background: transparent;
   border-color: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   padding: 4px 6px;
+}
+.a2ui-btn .a2ui-text,
+.a2ui-btn .a2ui-text.caption {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 .a2ui-btn:disabled {
   opacity: 0.55;
@@ -205,7 +212,7 @@
 .a2ui-chip.selected {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .a2ui-slider-head {

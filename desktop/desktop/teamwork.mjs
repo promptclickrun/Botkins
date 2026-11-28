@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { defineTool } from "./providers/provider.mjs";
 import { isGroup } from "./groups.mjs";
-import { OutgoingDispatches, peerCapabilities, peerRoster, remoteJob, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
+import { OutgoingDispatches, normalizeHostId, peerCapabilities, peerRoster, remoteJob, remoteReply, remoteTeamworkAllowed, requireRemoteTurn } from "./remote-teamwork.mjs";
 import { LIST_FILES_OPERATION } from "./node-host.mjs";
 import { canUseProject } from "./access.mjs";
 import { bindRailStep, recordActivity } from "./activity.mjs";
@@ -82,9 +82,10 @@ export class Teamwork {
         parameters: { type: "object", properties: { host: { type: "string", description: "A Botkins host ID." } }, additionalProperties: false },
         handler: async ({ host } = {}) => {
           requireRemoteTurn(this.ws, bot, chat, run, task);
-          const roster = await peerRoster(this.ws.teamworkPeers, host);
+          const hostId = normalizeHostId(host);
+          const roster = await peerRoster(this.ws.teamworkPeers, hostId);
           requireRemoteTurn(this.ws, bot, chat, run, task);
-          return JSON.stringify(host === undefined ? roster : { host: roster.host, bots: roster.bots });
+          return JSON.stringify(hostId === undefined ? roster : { host: roster.host, bots: roster.bots });
         },
       }),
       defineTool("list_node_hosts", {
@@ -92,9 +93,10 @@ export class Teamwork {
         parameters: { type: "object", properties: { host: { type: "string", description: "Optional Botkins host ID." } }, additionalProperties: false },
         handler: async ({ host } = {}) => {
           requireRemoteTurn(this.ws, bot, chat, run, task);
-          const discovered = await peerCapabilities(this.ws.teamworkPeers, host);
+          const hostId = normalizeHostId(host);
+          const discovered = await peerCapabilities(this.ws.teamworkPeers, hostId);
           requireRemoteTurn(this.ws, bot, chat, run, task);
-          if (host === undefined) return JSON.stringify(discovered);
+          if (hostId === undefined) return JSON.stringify(discovered);
           return JSON.stringify({
             host: discovered.host,
             online: discovered.online,
@@ -400,16 +402,17 @@ export class Teamwork {
     if (!run || task.stopped || this.ws.closing || this.ws.active.get(chat.id) !== task)
       throw new Error("This turn is no longer active");
     const team = this.roster(bot, chat);
+    const hostId = normalizeHostId(host);
     const wanted = String(teammate ?? "").trim().replace(/^@/, "").toLowerCase();
     let remote, helper, pin;
-    if (host !== undefined) {
+    if (hostId !== undefined) {
       requireRemoteTurn(this.ws, bot, chat, run, task);
-      const roster = await peerRoster(this.ws.teamworkPeers, host);
+      const roster = await peerRoster(this.ws.teamworkPeers, hostId);
       requireRemoteTurn(this.ws, bot, chat, run, task);
       helper = roster.bots.find((b) => b.id === teammate);
       if (!helper) throw new Error("Choose an available bot ID on " + roster.host.name + " from list_host_teammates.");
       pin = roster.pin;
-      remote = { hostId: host, hostName: roster.host.name, botName: helper.name };
+      remote = { hostId, hostName: roster.host.name, botName: helper.name };
     } else {
       helper = team.find((b) => b.name.toLowerCase() === wanted) ?? team.find((b) => b.id === wanted);
     }
