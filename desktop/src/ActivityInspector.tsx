@@ -10,7 +10,7 @@
 // open crew card or a pane tab on a running turn ticks a clock, once a second.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowLeft, Ban, Brain, Check, ChevronRight, Copy, ExternalLink, ListChecks, MessageSquareText, Square, Terminal, Users, X } from "lucide-react";
-import { StepDetailBody, stepIcon, useNow } from "./ChatActivity";
+import { StepDetailBody, stepIcon, useNow, useStepDetail } from "./ChatActivity";
 import type { ChatFiles } from "./ChatFileLink";
 import { RichText } from "./RichText";
 import { Shimmer } from "./Shimmer";
@@ -265,7 +265,7 @@ function Detail({ row, run, files, onCrew }: { row: Row; run: Run; files?: ChatF
         {step.finished && <span>Took {took(step.finished - step.started)}</span>}
         {step.source && <span>{step.source}</span>}
       </div>
-      <StepDetailBody step={step} />
+      <StepDetailBody step={step} chatId={run.chatId} runId={run.id} />
       {onCrew && classifyStep(step) === "helper" && run.agents?.some((agent) => agent.id === step.id) && (
         <button type="button" className="secondary insp-open-crew" onClick={() => onCrew(step.id)}>
           <Users size={13} aria-hidden="true" />
@@ -466,7 +466,7 @@ function HelperView({ run, member, index, botName, botFace, now }: { run: Run; m
                   <StepMark step={step} />
                   <ChevronRight size={12} className="crew-step-chevron" aria-hidden="true" />
                 </summary>
-                <StepDetailBody step={step} />
+                <StepDetailBody step={step} chatId={run.chatId} runId={run.id} />
               </details>
             </li>
           ))}
@@ -492,7 +492,7 @@ function HelperView({ run, member, index, botName, botFace, now }: { run: Run; m
 }
 
 function CommandView({ run, member, botName, now }: { run: Run; member: Extract<CrewMember<Step>, { kind: "command" }>; botName: string; now: number }) {
-  const step = member.step;
+  const step = useStepDetail(member.step, run.chatId, run.id, true);
   const text = (step.progress || step.output || "").replace(/\s+$/, "");
   const links = useMemo(() => outputLinks(text), [text]);
   const thought = thoughtBefore(run.reasoning, step.started);

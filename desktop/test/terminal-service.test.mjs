@@ -10,6 +10,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readPersistedWorkspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { promisify } from "node:util";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
@@ -119,7 +120,7 @@ async function service(t, { signedIn = true, config = {} } = {}) {
 
 test("the service starts on its settings, keeps its folder to itself and answers the command line", { skip }, async (t) => {
   const { paths, port, client, running } = await service(t, { config: { name: "Studio server" } });
-  for (const [path, mode] of [[paths.root, 0o700], [paths.runDir, 0o700], [paths.socket, 0o600], [paths.config, 0o600], [paths.logFile, 0o600], [join(paths.dataDir, "workspace.json"), 0o600], [join(paths.dataDir, "link", "link.json"), 0o600]])
+  for (const [path, mode] of [[paths.root, 0o700], [paths.runDir, 0o700], [paths.socket, 0o600], [paths.config, 0o600], [paths.logFile, 0o600], [join(paths.dataDir, "workspace.db"), 0o600], [join(paths.dataDir, "link", "link.json"), 0o600]])
     assert.equal(statSync(path).mode & 0o777, mode, path);
   const status = await client.call("status");
   assert.equal(status.running, true);
@@ -291,7 +292,8 @@ test("a provider signs in from the terminal: its own sign-in is followed, and a 
   assert.equal(signIns.copilotGitHub(), undefined);
   vault.put("gho_fixturetoken0000000000000000000000", {}, "terminal-provider-copilot");
   assert.deepEqual(signIns.copilotGitHub(), { token: "gho_fixturetoken0000000000000000000000" });
-  for (const file of [join(paths.dataDir, "vault.json"), paths.config, paths.logFile, join(paths.dataDir, "workspace.json")]) assert.doesNotMatch(readFileSync(file, "utf8"), /fixture-token|fixture-key|fixturetoken/, file);
+  for (const file of [join(paths.dataDir, "vault.json"), paths.config, paths.logFile]) assert.doesNotMatch(readFileSync(file, "utf8"), /fixture-token|fixture-key|fixturetoken/, file);
+  assert.doesNotMatch(readPersistedWorkspaceText(paths.dataDir), /fixture-token|fixture-key|fixturetoken/, "workspace");
   // A new token for a provider that has one kept, and a sign-out, lose the old token: the socket's own call refuses with no mark, and the token stays. With the mark, the call goes on to the provider (this stand-in has no sign-out).
   await assert.rejects(client.call("providers.login", "claude", { token: "sk-ant-oat01-another-token-00000000000" }), { code: "NEEDS_YES" });
   await assert.rejects(client.call("providers.logout", "claude"), { code: "NEEDS_YES" });
@@ -367,7 +369,7 @@ test("a team member has their own spaces on the terminal host, and not the owner
   // The member's four built-in spaces are theirs, not the owner's: the app keeps one set for each person.
   const after = await phoneDoes(["--pairing", owners, "--call", JSON.stringify([["link.team.get"]])]);
   const memberId = after.calls[0].members[0].id;
-  const state = JSON.parse(readFileSync(join(paths.dataDir, "workspace.json"), "utf8"));
+  const state = readPersistedWorkspace(paths.dataDir);
   assert.deepEqual(state.spaces.filter((space) => space.builtin).map((space) => space.createdBy ?? "owner").sort(), ["owner", "owner", "owner", "owner", memberId, memberId, memberId, memberId].sort());
 });
 

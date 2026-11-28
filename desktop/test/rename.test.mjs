@@ -150,7 +150,13 @@ test("an earlier folder that could not be linked is used where it is, with every
   assert.ok(ws.state.bots[0].look, "the bot becomes a Botkin");
   assert.deepEqual(ws.state.bots[0].avatar, { body: "bighelp.biggie" }, "and what an earlier version drew stays in the file");
   assert.equal(ws.wiki.page("projects/website.md").content.trim(), "# Website");
-  for (const path of Object.keys(files)) assert.ok(existsSync(join(root, path)), path);
+  for (const path of Object.keys(files)) {
+    if (path === "data/workspace.json") {
+      assert.ok(existsSync(join(root, "data/workspace.db")), "workspace migrated to SQLite in place");
+      continue;
+    }
+    assert.ok(existsSync(join(root, path)), path);
+  }
   assert.equal(readFileSync(join(data, "files", "pip", "notes.txt"), "utf8"), "kept");
   // A chat still works in the folder its conversation was started in.
   assert.equal(join(ws.dir, "files", "pip"), join(appData, LEGACY_NAME, "data", "files", "pip"));

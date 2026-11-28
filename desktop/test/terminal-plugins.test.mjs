@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -66,7 +67,7 @@ async function setup(t) {
     return { exit, out, err, json: () => JSON.parse(out) };
   };
   const logged = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => /(Changed|Tried) from the command line/.test(text)).map((text) => text.slice(text.search(/(Changed|Tried) from/)));
-  const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(join(paths.dataDir, "plugins.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
+  const everything = () => [readPersistedWorkspaceText(paths.dataDir), readFileSync(join(paths.dataDir, "plugins.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
   return { dir, write, market, memory, botkins, client, logged, everything, running };
 }
 

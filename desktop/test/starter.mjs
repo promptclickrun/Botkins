@@ -1,8 +1,18 @@
 // Test fixture: the three bots most tests talk to. A new Botkins workspace has no bots (the
 // first-run screen makes them), so tests that need bots start from this workspace instead.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Workspace as RealWorkspace } from "../desktop/workspace.mjs";
+import { readWorkspaceState } from "../desktop/workspace-sqlite.mjs";
+
+/** Read persisted workspace state from a data directory (works with SQLite or JSON). */
+export const readPersistedWorkspace = (dataDir) => readWorkspaceState(dataDir);
+
+/** Read raw text representation of persisted workspace state on disk (for secret-leak regex checks). */
+export const readPersistedWorkspaceText = (dataDir) => {
+  const state = readWorkspaceState(dataDir);
+  return state ? JSON.stringify(state) : "";
+};
 
 export const starterBots = [
   ["pip", "Pip", "Everyday helper", "Help the user plan, write and think clearly.", "idle"],
@@ -13,10 +23,11 @@ export const starterBots = [
 /** Writes a workspace file with the starter bots into `dataDir`, unless the folder already has one. */
 export function seedBots(dataDir) {
   mkdirSync(dataDir, { recursive: true });
+  const db = join(dataDir, "workspace.db");
   const file = join(dataDir, "workspace.json");
   // Auto-summarize is off here: its own sessions would answer the fakes that other tests write for a chat's
   // turns (test/summaries.test.mjs turns it on).
-  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ bots: starterBots, chats: [], runs: [], settings: { autoSummarize: 0 } }));
+  if (!existsSync(db) && !existsSync(file)) writeFileSync(file, JSON.stringify({ bots: starterBots, chats: [], runs: [], settings: { autoSummarize: 0 } }));
 }
 
 /** For smokes: seeds the data folder the app uses when BOTKINS_DATA_DIR is `userData`. */

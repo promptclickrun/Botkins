@@ -297,7 +297,7 @@ test("the socket takes a cut that can be read and no other, answers nothing abou
     }
   };
   walk(host.dir);
-  assert.ok(files.some((path) => path.endsWith("workspace.json")));
+  assert.ok(files.some((path) => path.endsWith("workspace.db") || path.endsWith("workspace.json")));
   for (const path of files) for (const word of ["r_maker", "g_makers", "Makers", "Guests", "\"grants\"", "\"perms\""]) assert.equal(readFileSync(path, "utf8").includes(word), false, word + " in " + path);
   // The link's own half of Spaces goes through too, by three names and no other.
   assert.deepEqual(await workspaceRequest(host.socket, "spaces", ["ensure", "m_avery"]), ["today", "feed", "ideas", "goals"]);

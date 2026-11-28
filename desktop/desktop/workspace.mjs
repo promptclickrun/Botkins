@@ -116,6 +116,7 @@ import { proposalsFrom } from "./proactive-learning.mjs";
 import { Templates } from "./templates.mjs";
 import { currentBotBundle, templateBundle } from "./link/template-bundle.mjs";
 import { readWorkspace, WorkspaceWriter } from "./workspace-file.mjs";
+import { migrateWorkspaceFile, SqliteWorkspaceStore, WORKSPACE_DB_FILENAME } from "./workspace-sqlite.mjs";
 import { Access } from "./access.mjs";
 import { SessionSearch } from "./session-search.mjs";
 import { HowToBotkins } from "./how-to-botkins.mjs";
@@ -226,9 +227,43 @@ export class Workspace {
     this.spaceEventOf = options?.spaceEvent ?? null;
     // The port a sign-in's answer comes back on. Tests pass 0 for any free port.
     this.oauthPort = options?.oauthPort;
-    this.file = join(dir, "workspace.json");
-    this.writer = new WorkspaceWriter(this.file);
     this.dir = dir;
+    this.dbFile = join(dir, WORKSPACE_DB_FILENAME);
+    this.jsonFile = join(dir, "workspace.json");
+    // Storage backend: SQLite (`workspace.db`, WAL mode) by default, migrating any existing
+    // `workspace.json` atomically on first open. Falls back to JSON if migration or DB open fails,
+    // or when explicitly requested via `options.storage === "json"`.
+    const requestedBackend = options?.storage ?? process.env.BOTKINS_WORKSPACE_STORAGE;
+    const hadDb = existsSync(this.dbFile);
+    const hadJson = existsSync(this.jsonFile);
+    const isNew = !hadDb && !hadJson;
+    let useSqlite = requestedBackend !== "json";
+    if (useSqlite && !hadDb && hadJson) {
+      try {
+        migrateWorkspaceFile(dir);
+      } catch (error) {
+        console.error("[workspace] SQLite migration failed; falling back to workspace.json:", error?.stack ?? error);
+        useSqlite = false;
+      }
+    }
+    this.storage = useSqlite ? "sqlite" : "json";
+    if (useSqlite) {
+      try {
+        this.sqlite = new SqliteWorkspaceStore(dir, { lazySteps: options?.lazySteps !== false });
+        this.writer = this.sqlite;
+        this.file = this.dbFile;
+      } catch (error) {
+        console.error("[workspace] SQLite open failed; falling back to workspace.json:", error?.stack ?? error);
+        this.storage = "json";
+        this.sqlite = null;
+        this.file = this.jsonFile;
+        this.writer = new WorkspaceWriter(this.jsonFile);
+      }
+    } else {
+      this.sqlite = null;
+      this.file = this.jsonFile;
+      this.writer = new WorkspaceWriter(this.jsonFile);
+    }
     this.providers =
       providers instanceof Providers ? providers : new Providers([new CopilotProvider({ connect: providers })]);
     // What runs a turn around the model: the Copilot runtime for every plan it can serve, or each
@@ -258,12 +293,13 @@ export class Workspace {
     // One session per bot answers "/" menus and side questions before a chat has a conversation.
     this.menus = new Map();
     this.panels = new Panels(this);
-    const isNew = !existsSync(this.file);
     this.state = isNew
       ? // A new workspace has no bots: the first-run screen offers the person's existing agents
         // (desktop/agents.mjs importable) or the Create a bot form.
         { bots: [], chats: [], runs: [] }
-      : readWorkspace(this.file);
+      : this.sqlite
+        ? this.sqlite.load()
+        : readWorkspace(this.jsonFile);
     this.hostDispatch = new HostDispatch(this, this.state.hostDispatch);
     delete this.state.hostDispatch;
     this.nodeHost = new NodeHost(this, this.state.nodeHost);
@@ -490,9 +526,39 @@ export class Workspace {
       });
     }
   }
-  /** Fold a pending or published checkpoint back into the full file on orderly shutdown. */
+  /** Fold a pending or published checkpoint back into the store on orderly shutdown. */
   flushSave() {
     if (this.saveTimer || this.writer.written.size) this.save();
+  }
+  /** Flush any pending save and close the underlying SQLite handle cleanly. */
+  close() {
+    this.flushSave();
+    this.sqlite?.close();
+  }
+  /**
+   * Read full `input` and `output` for one step (hydrating from SQLite when loaded lazily).
+   * Returns `{ input?, output? }` or `null` when the run/step does not exist.
+   */
+  stepDetail(chatId, runId, stepId, { maxChars = 4000 } = {}) {
+    const run = this.state.runs.find((r) => r.id === runId && r.chatId === chatId);
+    if (!run) return null;
+    const all = [...(run.steps ?? []), ...(run.teamwork ?? []).flatMap((ask) => ask.steps ?? [])];
+    const step = all.find((s) => s.id === stepId);
+    if (!step) return null;
+    let input = step.input;
+    let output = step.output;
+    if (this.sqlite && (input === undefined || output === undefined || step.more)) {
+      const stored = this.sqlite.readStepPayload(runId, stepId);
+      if (stored) {
+        if (input === undefined && stored.input !== undefined) input = stored.input;
+        if (output === undefined && stored.output !== undefined) output = stored.output;
+      }
+    }
+    const clipText = (text) => (maxChars && typeof text === "string" && text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text);
+    return {
+      ...(input && { input: clipText(input) }),
+      ...(output && { output: clipText(output) }),
+    };
   }
   save(announce = true) {
     if (this.batchingSave) return;

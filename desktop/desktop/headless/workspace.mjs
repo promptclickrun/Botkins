@@ -56,6 +56,7 @@ export function workspaceActions(backend, inject) {
       if (!["ensure", "release", "snapshot"].includes(name) || typeof backend.spaces?.[name] !== "function") throw new Error("Unknown workspace action.");
       return backend.spaces[name](...args);
     },
+    stepDetail: (chatId, runId, stepId) => backend.stepDetail?.(String(chatId), String(runId), String(stepId)) ?? null,
     setLook: (...args) => backend.setLook(...args),
     framePage: (id) => backend.frames.page(id),
     frameChat: (id) => backend.frames.chatFor(id),

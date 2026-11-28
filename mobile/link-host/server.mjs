@@ -2421,7 +2421,11 @@ export class LinkHost extends EventEmitter {
       // A session that follows with light steps gets its earlier pages the same way.
       return session.light ? lightPart(page) : page;
     }
-    if (method === "link.step") return stepDetail(this.backend.snapshot(), String(args[0]), String(args[1]), String(args[2]));
+    if (method === "link.step") {
+      const chatId = String(args[0]), runId = String(args[1]), stepId = String(args[2]);
+      if (typeof this.backend.stepDetail === "function") return this.backend.stepDetail(chatId, runId, stepId);
+      return stepDetail(this.backend.snapshot(), chatId, runId, stepId);
+    }
     if (method === "link.setLook") {
       const bots = this.backend.snapshot().bots ?? [];
       if (!bots.some((bot) => bot.id === args[0])) throw new Error("This bot no longer exists.");

@@ -177,7 +177,7 @@ function takeExtras(record, supported) {
 }
 
 const grantFields = new Set(["all", "projects"]);
-export function readWorkspace(file) {
+export function readWorkspace(file, options = {}) {
   const state = JSON.parse(readFileSync(file, "utf8"));
   restoreCheckpoints(file, state);
   const sections = takeExtras(state, workspaceFields);
@@ -196,7 +196,7 @@ export function readWorkspace(file) {
     if (extra.length) (recovery.grants ??= []).push({ id: bot.id, fields: Object.fromEntries(extra) });
     bot.access = botAccess(bot);
   }
-  if (Object.keys(recovery).length) archiveSections(dirname(file), recovery);
+  if (!options.dryRun && Object.keys(recovery).length) archiveSections(dirname(file), recovery);
   for (const chat of state.chats) for (const message of chat.messages) restoreMentions(message, true);
   for (const queue of Object.values(state.pendingMessages ?? {})) {
     for (const message of queue) restoreMentions(message, false);

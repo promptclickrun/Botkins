@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { SignIns } from "../desktop/terminal/signin.mjs";
@@ -85,7 +86,7 @@ async function world(t, serverOptions) {
     return { out: () => out, err: () => err, type: (line) => void stdin.write(line + "\n"), hangUp: () => void stdin.destroy(), stdinWrite: (text) => void stdin.write(text), interrupt: () => void stdin.write("\u0003"), seen: (pattern) => until(() => out + err, pattern), finished };
   };
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => /(Changed|Tried) from the command line/.test(text)).map((text) => text.slice(text.search(/(Changed|Tried) from/)).replace("Changed from the command line: ", ""));
-  const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
+  const everything = () => [readPersistedWorkspaceText(paths.dataDir), readFileSync(paths.logFile, "utf8")].join("\n");
   const write = (path, value) => {
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, JSON.stringify(value));

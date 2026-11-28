@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspace } from "./starter.mjs";
 import { MAX_PROJECT_ARTIFACTS, PROJECT_ARTIFACTS, Projects, parseStatus } from "../desktop/projects.mjs";
 import { CAPABILITIES, linkCapabilities } from "../desktop/runtime.mjs";
 import { JOB_CALLS, PROJECT_JOBS } from "../desktop/jobs.mjs";
@@ -183,7 +183,7 @@ test("folder projects saved before workspaces migrate: path becomes folder, no t
   assert.deepEqual(p, { id: "p1", name: "code", folder, folders: [folder], description: "", todos: [], lastUsed: 5, createdAt: 5 });
   assert.equal(ws.projects.folderFor(ws.chat("c1")), folder, "the chat still runs in its folder");
   assert.equal(ws.chat("c1").mode, "yolo", "and keeps its mode");
-  const saved = JSON.parse(readFileSync(join(dir, "data", "workspace.json"), "utf8")).projects[0];
+  const saved = readPersistedWorkspace(join(dir, "data")).projects[0];
   assert.equal(saved.path, undefined);
   assert.equal(new Workspace(join(dir, "data"), async () => ({}), () => {}).projects.get("p1").folder, folder, "loading again keeps it");
 });

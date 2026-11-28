@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { createServer as listening } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { accountOf, challengeParam, REDIRECT_PORT, scheme } from "../desktop/oauth.mjs";
 import { serversWithTokens } from "../desktop/providers/sessions.mjs";
 import { fakeClient, tempDir, tick } from "./fake-copilot.mjs";
@@ -25,7 +25,7 @@ async function setup(t, serverOptions, workspaceOptions = {}) {
   const id = ws.integrations.saveServer({ name: "words", type: "http", url: remote.url });
   const view = (w = ws) => w.snapshot().mcpServers.find((s) => s.id === id);
   const ask = (reason = "initial", w = ws) => w.integrations.mcpAuth({ server: "words", url: remote.url, reason });
-  return { remote, dir, ws, id, view, ask, open, opened, fake, files: () => readFileSync(join(dir, "workspace.json"), "utf8") + readFileSync(join(dir, "vault.json"), "utf8") };
+  return { remote, dir, ws, id, view, ask, open, opened, fake, files: () => readPersistedWorkspaceText(dir) + readFileSync(join(dir, "vault.json"), "utf8") };
 }
 
 test("the parameters of a sign-in challenge are read", () => {

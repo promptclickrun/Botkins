@@ -14,7 +14,8 @@ export function env(name, source = process.env) {
 }
 
 /** True when a folder holds a workspace: the app has run there. */
-export const hasWorkspace = (dir) => existsSync(join(dir, "data", "workspace.json"));
+export const hasWorkspace = (dir) =>
+  existsSync(join(dir, "data", "workspace.db")) || existsSync(join(dir, "data", "workspace.json"));
 
 /**
  * The folder for the app's data (Electron's "userData").
