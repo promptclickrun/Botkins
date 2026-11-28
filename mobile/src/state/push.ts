@@ -25,8 +25,9 @@ import { sendAnswers, startAnswers } from "./answers";
 import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
-import { api, attempt, chatOnScreen, holdBackgroundLink, syncForPush, onChatOnScreen, restIfAway, switchComputer, tellOthers, wakeForNotification } from "./link";
+import { api, attempt, callHost, chatOnScreen, holdBackgroundLink, isUnifiedActive, onChatOnScreen, pooledEntries, restIfAway, switchComputer, syncForPush, tellOthers, wakeForNotification } from "./link";
 import { routeForNotification } from "./pushRouting";
+import { hostOfId, idForHost, unscopeId } from "./unified";
 import { useApp } from "./store";
 import { createRegistrar } from "./pushRegistrar";
 
@@ -132,11 +133,24 @@ const registrar = createRegistrar({
   },
   async said(token) {
     const { pairing } = useApp.getState();
-    return [pairing?.serverId, pairing?.deviceId, token, await pushEnv(), startToken ?? "", cardMode()].join();
+    const pooled = isUnifiedActive()
+      ? pooledEntries()
+          .filter((e) => e.link === "online" && e.parts.meta?.capabilities.includes("push-v1"))
+          .map((e) => e.pairing.serverId)
+          .sort()
+          .join(",")
+      : "";
+    return [pairing?.serverId, pairing?.deviceId, pooled, token, await pushEnv(), startToken ?? "", cardMode()].join();
   },
   async send(token) {
     const cards = cardMode();
-    await api["link.push.register"]({ token, env: await pushEnv(), ...(startToken && { start: startToken }), ...(cards && { cards }) });
+    const payload = { token, env: await pushEnv(), ...(startToken && { start: startToken }), ...(cards && { cards }) };
+    if (isUnifiedActive()) {
+      const online = pooledEntries().filter((e) => e.link === "online" && e.parts.meta?.capabilities.includes("push-v1"));
+      await Promise.all(online.map((e) => callHost(e.pairing.serverId, "link.push.register", payload)));
+      return;
+    }
+    await api["link.push.register"](payload);
   },
   sent() {
     usePush.setState({ status: "on", problem: null });
@@ -150,7 +164,7 @@ const registrar = createRegistrar({
 // Only a development build can say it is on Apple's test service: its signing profile says
 // "development". A build from TestFlight or the App Store carries no profile to read (the answer
 // is null) and is always on production.
-async function pushEnv() {
+async function pushEnv(): Promise<"sandbox" | "production"> {
   return (await Application.getIosPushNotificationServiceEnvironmentAsync()) === "development" ? "sandbox" : "production";
 }
 
@@ -198,6 +212,21 @@ function tellPresence() {
   if (useApp.getState().link !== "online" || !usePush.getState().wanted || !canPush()) return;
   const active = AppState.currentState === "active";
   const chatId = active ? chatOnScreen() : undefined;
+  if (isUnifiedActive()) {
+    const primaryId = useApp.getState().pairing?.serverId ?? null;
+    const online = pooledEntries().filter((e) => e.link === "online" && e.parts.meta?.capabilities.includes("push-v1"));
+    const now = active + ":" + (chatId ?? "") + ":" + online.map((e) => e.pairing.serverId).join(",");
+    if (now === presence) return;
+    presence = now;
+    const chatHost = chatId ? hostOfId(chatId, primaryId) : null;
+    for (const entry of online) {
+      const rawChat = chatId && chatHost === entry.pairing.serverId ? unscopeId(chatId) : undefined;
+      void callHost(entry.pairing.serverId, "link.push.presence", active, rawChat).catch(() => {
+        presence = "";
+      });
+    }
+    return;
+  }
   const now = active + ":" + (chatId ?? "");
   if (now === presence) return;
   presence = now;
@@ -294,23 +323,31 @@ function openFrom(response: import("expo-notifications").NotificationResponse | 
   // paired computer makes the phone use that computer first.
   const go = () => {
     const state = useApp.getState();
+    const primaryId = state.pairing?.serverId ?? null;
+    const inUnifiedPool = !!state.unified && !!host && state.unifiedHosts.some((h) => h.id === host && h.included);
+    const scope = (raw: string | undefined) => (raw && inUnifiedPool && host ? idForHost(host, raw, primaryId) : raw);
     const decision = routeForNotification({
-      chatId,
-      requestId,
+      chatId: scope(chatId),
+      requestId: scope(requestId),
       host,
       kind,
       nodeJob,
       actionIdentifier: response.actionIdentifier,
-      spaceId: about.spaceId,
-      panelId: about.panelId,
-      activeHostId: state.pairing?.serverId,
+      spaceId: scope(about.spaceId),
+      panelId: scope(about.panelId),
+      activeHostId: inUnifiedPool && host ? host : state.pairing?.serverId,
       pairedHostIds: state.pairings.map((pairing) => pairing.serverId),
       chatOnScreen: chatOnScreen(),
     });
     if (decision.switchHost) void switchComputer(decision.switchHost);
     if (response.actionIdentifier === "alert.take" && chatId) {
       const offered = alertOf(response);
-      if (offered) takeAlert(offered, decision.switchHost ?? state.pairing?.serverId);
+      if (offered) {
+        takeAlert(
+          inUnifiedPool && host ? { bot: idForHost(host, offered.bot, primaryId), run: idForHost(host, offered.run, primaryId) } : offered,
+          inUnifiedPool ? primaryId ?? undefined : decision.switchHost ?? state.pairing?.serverId,
+        );
+      }
     }
     const { route } = decision;
     if (!route) return;
@@ -612,9 +649,18 @@ export async function startPush() {
     handleNotification: async (notification) => {
       const request = notification.request;
       const payload = request.trigger && "payload" in request.trigger ? (request.trigger.payload as Record<string, unknown> | undefined) : undefined;
-      // A chat on another paired computer is never the one on screen, whatever its id.
-      const other = typeof payload?.host === "string" && payload.host !== useApp.getState().pairing?.serverId;
-      const here = !other && !!payload?.chatId && payload.chatId === chatOnScreen();
+      const state = useApp.getState();
+      const primaryId = state.pairing?.serverId ?? null;
+      const host = typeof payload?.host === "string" ? payload.host : undefined;
+      const rawChat = typeof payload?.chatId === "string" ? payload.chatId : undefined;
+      const screen = chatOnScreen();
+      // In unified mode a remote computer's chat may be the one currently open on screen.
+      const here =
+        !!rawChat &&
+        !!screen &&
+        (state.unified && host
+          ? idForHost(host, rawChat, primaryId) === screen
+          : (!host || host === primaryId) && rawChat === screen);
       return { shouldShowBanner: !here, shouldShowList: !here, shouldPlaySound: !here, shouldSetBadge: false };
     },
   });
@@ -653,25 +699,37 @@ export async function startPush() {
   let link = useApp.getState().link;
   let meta = useApp.getState().parts.meta;
   let pairings = useApp.getState().pairings;
+  let unifiedSig = "";
   useApp.subscribe((state, before) => {
-    if (state.parts === before.parts && state.texts !== before.texts && state.running === before.running && state.chats === before.chats) return;
+    if (state.parts === before.parts && state.texts !== before.texts && state.running === before.running && state.chats === before.chats && state.unifiedHosts === before.unifiedHosts) return;
     // A computer was paired or unpaired: the keys follow, so an unpaired computer's key is gone at once.
     if (state.pairings !== pairings) {
       pairings = state.pairings;
       if (usePush.getState().wanted) void saveKeys(pairings).catch(() => {});
     }
+    const nextUnifiedSig = state.unified
+      ? state.unifiedHosts
+          .filter((h) => h.included)
+          .map((h) => h.id + ":" + h.state)
+          .join(",")
+      : "";
     // The computer says what it can do in its first answer, a moment after the link is up.
-    if (state.link !== link || state.parts.meta !== meta) {
+    if (state.link !== link || state.parts.meta !== meta || nextUnifiedSig !== unifiedSig) {
       const came = state.link === "online" && link !== "online";
+      const poolChanged = nextUnifiedSig !== unifiedSig;
       link = state.link;
       meta = state.parts.meta;
+      unifiedSig = nextUnifiedSig;
       if (link === "online") {
-        if (came) {
+        if (came || poolChanged) {
           presence = "";
-          // The computer may have restarted, or never got an address: every card's is passed on again.
-          told.clear();
-          void syncActivities();
-          void sendAnswers();
+          if (came) {
+            // The computer may have restarted, or never got an address: every card's is passed on again.
+            told.clear();
+            void syncActivities();
+            void sendAnswers();
+          }
+          if (poolChanged && usePush.getState().wanted) void register(false);
         }
         void register();
         tellPresence();

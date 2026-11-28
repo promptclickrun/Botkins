@@ -16,7 +16,8 @@ import { AccessibilityInfo, Alert, Keyboard, StyleSheet, Switch, type TextInputI
 import Animated, { FadeInDown } from "react-native-reanimated";
 import type { AgentRequest, Bot, FormField, RequestAnswer } from "@/link/types";
 import { api, attempt } from "@/state/link";
-import { BotAvatar, Button, Field, haptic, lift, radius, space, switchColors, T, Tap, useTheme } from "@/ui";
+import { useApp } from "@/state/store";
+import { Badge, BotAvatar, Button, Field, haptic, lift, radius, space, switchColors, T, Tap, useTheme } from "@/ui";
 import { shownText } from "@/ui/shownText";
 import {
   answerOf,
@@ -382,6 +383,8 @@ function Unknown({ request, room }: { request: AgentRequest; room: number }) {
 export function RequestPanel({ request, bot, maxHeight, count }: { request: AgentRequest; bot?: Bot; maxHeight: number; count?: number }) {
   const theme = useTheme();
   const { colors } = theme;
+  const unified = useApp((s) => s.unified);
+  const hostName = unified ? request.hostName || bot?.hostName : undefined;
   const [open, setOpen] = useState(true);
   // After a secret answer, one quiet line stands in until the bot moves on.
   const [sent, setSent] = useState<string | null>(null);
@@ -445,6 +448,7 @@ export function RequestPanel({ request, bot, maxHeight, count }: { request: Agen
           <T variant="subhead" weight="700" color={tone} numberOfLines={open ? undefined : 1} style={{ flex: 1 }}>
             {title}
           </T>
+          {!!hostName && <Badge label={hostName} tone="neutral" />}
           {!!of && (
             <T variant="footnote" weight="600" color="muted">
               {of}

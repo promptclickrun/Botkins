@@ -74,6 +74,8 @@ export default function BotForm({
   const [role, setRole] = useState(filled?.role ?? "");
   const [summary, setSummary] = useState(filled?.summary ?? "");
   const [instructions, setInstructions] = useState(filled?.instructions ?? "");
+  const onlineUnifiedHosts = remote?.unified ? (remote.unifiedHosts ?? []).filter((h) => h.local || h.state === "online") : [];
+  const [targetHost, setTargetHost] = useState(remote?.settingsHost ?? "local");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState<Picker>();
   const bundle = market?.bundle ?? chosen?.bundle;
@@ -154,6 +156,7 @@ export default function BotForm({
             ...(agent && { agent: agent.key }),
             ...(starter && { starter: starter.id }),
             ...(bundle && { bundle }),
+            ...(onlineUnifiedHosts.length > 1 && { hostId: targetHost }),
           });
           created(id, { setUp: !!starter?.suggestProactive });
         } catch (e) {
@@ -203,6 +206,18 @@ export default function BotForm({
           {agent.missingModel && " Its model, " + agent.missingModel + ", isn't on your account, so this bot will use your default model."}
           {agent.ownTools && " It sets its own tools there. This bot uses Botkins' Skills, MCP servers and approvals instead."}
         </p>
+      )}
+      {onlineUnifiedHosts.length > 1 && (
+        <div className="settings-host-bar">
+          <label htmlFor="botform-target-host">Create bot on</label>
+          <select id="botform-target-host" value={targetHost} onChange={(e) => setTargetHost(e.target.value)}>
+            {onlineUnifiedHosts.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.local ? h.name + " (this computer)" : h.name}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
       {/* The bot as the phone shows it: its Botkin beside its name and role, then what it is for. */}
       <div className="botform-top group padded botform-card">

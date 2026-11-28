@@ -49,6 +49,9 @@ export function shapeOf(state) {
     state.phones?.revision,
     state.remote?.using?.id,
     state.remote?.using?.state,
+    state.remote?.unified,
+    state.remote?.settingsHost,
+    state.remote?.unifiedHosts?.map((h) => h.id + ":" + h.state).join(","),
     state.remote?.hosts?.length,
     state.adminMode,
   ];

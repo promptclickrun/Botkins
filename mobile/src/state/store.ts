@@ -4,6 +4,7 @@ import { PendingSends } from "../../link-host/pending-sends";
 import { create } from "zustand";
 import type { LinkRoute, LinkState, Pairing } from "@/link/client";
 import type { ChatDetail, Live, Message, ModelInfo, Parts, ProviderStatus, ReasoningView, Run, SkillInfo } from "@/link/types";
+import type { UnifiedHostStatus } from "./unified";
 
 /** A chat's messages as loaded so far: a run of them ending at the newest. */
 export type ChatView = {
@@ -32,6 +33,10 @@ export type AppState = {
   pairing: Pairing | null;
   /** Every computer this phone is paired with, in the order they were paired. */
   pairings: Pairing[];
+  /** True when unified mode is on and at least two paired computers are included. */
+  unified: boolean;
+  /** Per-computer status while unified mode is enabled. */
+  unifiedHosts: UnifiedHostStatus[];
   link: LinkState;
   /** How the phone reaches the computer right now: null while there is no session. */
   route: LinkRoute | null;
@@ -53,6 +58,8 @@ export const useApp = create<AppState>(() => ({
   booted: false,
   pairing: null,
   pairings: [],
+  unified: false,
+  unifiedHosts: [],
   link: "connecting",
   route: null,
   synced: false,

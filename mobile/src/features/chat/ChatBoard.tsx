@@ -20,7 +20,7 @@ import { isRoutineChat } from "../../../link-host/routine-chat.mjs";
 import { useApp } from "@/state/store";
 import { ago } from "@/state/time";
 import { openFromList, useChatSplit } from "./split";
-import { BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, type TextPromptOptions, useTextPrompt, useTheme } from "@/ui";
+import { Badge, BotAvatar, Dot, haptic, HoldMenu, radius, space, T, Tap, type TextPromptOptions, useTextPrompt, useTheme } from "@/ui";
 import { GroupFace, plainPreview } from "./bits";
 import { myPlace, myself } from "./people";
 import { moveToSection, runSectionAction, runSectionChoice, sectionActions } from "./sectionMenus";
@@ -52,7 +52,9 @@ type RowActions = { list: { name: string; label: string }[]; run: (name: string)
 /** One chat: its bot's face, its title, its last line, and when. `sections` is undefined on a computer without them. */
 function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: Map<string, Bot>; sections: Section[] | undefined; actions?: RowActions }) {
   const state = useChatActivity(chat.id);
+  const unified = useApp((s) => s.unified);
   const bot = bots.get(chat.botId);
+  const hostName = unified ? chat.hostName || bot?.hostName : undefined;
   const live = activityLabel(state);
   const group = chat.botIds && chat.botIds.length > 1;
   const canView = useCan("agents", "view");
@@ -117,9 +119,11 @@ function ChatRow({ chat, bots, sections, actions }: { chat: ChatSummary; bots: M
           {group ? <GroupFace bots={chat.botIds!.slice(0, 2).map((id) => bots.get(id))} size={48} state={state} /> : <BotAvatar bot={bot} size={48} state={state} />}
           <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <T variant="callout" weight={chat.unread && !isRoutineChat(chat) ? "700" : "600"} numberOfLines={1} style={{ flex: 1 }}>
+              <T variant="callout" weight={chat.unread && !isRoutineChat(chat) ? "700" : "600"} numberOfLines={1} style={{ flexShrink: 1 }}>
                 {title}
               </T>
+              {!!hostName && <Badge label={hostName} tone="neutral" />}
+              <View style={{ flex: 1 }} />
               <T variant="footnote" color={chat.unread && !isRoutineChat(chat) ? "accentText" : "faint"} weight={chat.unread && !isRoutineChat(chat) ? "600" : "400"}>
                 {chat.time ? ago(chat.time) : ""}
               </T>

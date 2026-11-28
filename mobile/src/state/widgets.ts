@@ -7,8 +7,10 @@ import { lookOf } from "@/data/botLook";
 import { readPanels, readSpaceOnce, watchSpaceContents } from "@/features/spaces/data";
 import { spaceTitle } from "@/features/spaces/logic";
 import { createCoalescedPacer, WIDGET_MIN_INTERVAL_MS, WIDGET_QUIET_MS } from "./activityPace";
+import { isUnifiedActive, pooledEntries } from "./link";
 import { loadProviderUsage, providerUsageNow, watchProviderUsage } from "./providerUsage";
-import { useApp } from "./store";
+import { type QuietLive, useApp } from "./store";
+import { unscopeValueForHost } from "./unified";
 import { computerPart, panelParts, sameSnapshot, type WidgetSnapshot, withComputer } from "./widgetData";
 
 /** Plans and limits older than this are asked for again when the app comes to the front and a usage widget is on show. */
@@ -16,10 +18,44 @@ const USAGE_OLD_MS = 10 * 60_000;
 
 let saved: WidgetSnapshot | undefined;
 
+function toQuietLive(live: NonNullable<ReturnType<typeof pooledEntries>[number]["parts"]["live"]>): QuietLive {
+  const streams: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(live.streams ?? {})) if (v) streams[k] = true;
+  const thinking: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(live.thinking ?? {})) if (v) thinking[k] = true;
+  return { ...live, streams, thinking };
+}
+
 function snapshotNow(): WidgetSnapshot | undefined {
   const state = useApp.getState();
   const pairing = state.pairing;
   if (!pairing || !state.synced) return undefined;
+  const keepIds = state.pairings.map((item) => item.serverId);
+  const now = Date.now();
+  if (isUnifiedActive()) {
+    let next = saved;
+    const entries = pooledEntries().filter((e) => e.synced);
+    for (const entry of entries) {
+      const rawParts = entry.pairing.serverId === pairing.serverId ? entry.parts : unscopeValueForHost(entry.parts, entry.pairing.serverId);
+      const bots = rawParts.bots ?? [];
+      const spaces = rawParts.meta?.capabilities.includes("spaces-v1") ? (rawParts.spaces ?? []) : [];
+      const part = computerPart({
+        name: rawParts.meta?.name ?? entry.pairing.name ?? "Your computer",
+        panels: panelParts(spaces, readPanels(), bots, lookOf, spaceTitle, next?.computers[entry.pairing.serverId]?.panels),
+        bots,
+        chats: rawParts.chats ?? [],
+        runs: rawParts.runs ?? [],
+        live: rawParts.live ? toQuietLive(rawParts.live) : undefined,
+        defaultProvider: rawParts.settings?.model?.provider,
+        models: entry.pairing.serverId === pairing.serverId ? state.models : undefined,
+        usage: entry.pairing.serverId === pairing.serverId ? providerUsageNow() : undefined,
+        look: lookOf,
+        now,
+      });
+      next = withComputer(next, entry.pairing.serverId, part, keepIds, now);
+    }
+    return next;
+  }
   const bots = state.parts.bots ?? [];
   // A panel's widget ("spaces-v1"): the panels of the person's spaces, as the phone last read them.
   const spaces = state.parts.meta?.capabilities.includes("spaces-v1") ? (state.parts.spaces ?? []) : [];
@@ -34,9 +70,9 @@ function snapshotNow(): WidgetSnapshot | undefined {
     models: state.models,
     usage: providerUsageNow(),
     look: lookOf,
-    now: Date.now(),
+    now,
   });
-  return withComputer(saved, pairing.serverId, part, state.pairings.map((item) => item.serverId), Date.now());
+  return withComputer(saved, pairing.serverId, part, keepIds, now);
 }
 
 function write() {

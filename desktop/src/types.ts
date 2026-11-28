@@ -114,6 +114,11 @@ export type Bot = {
   suggestProactive?: boolean;
   /** A voice of this bot's own ("bot-voice-v1"). A field it leaves out is the same as Settings › Voice. */
   voice?: BotVoice;
+  /** Unified multi-host mode: which computer owns this bot ("local" or remote host id). */
+  hostId?: string;
+  hostName?: string;
+  hostMember?: boolean;
+  hostTeam?: string;
 };
 /**
  * An agent the person already has with a model provider (for Copilot, ~/.copilot/agents), as the
@@ -310,6 +315,11 @@ export type Chat = {
     /** The person closed the pane (runId: the turn that was running, if any). */
     closed?: { runId: string | null; at: number };
   };
+  /** Unified multi-host mode: which computer owns this chat. */
+  hostId?: string;
+  hostName?: string;
+  hostMember?: boolean;
+  hostTeam?: string;
 };
 /** One tab of a chat's side pane, opened by a bot (docs/SIDE_PANE.md). */
 export type PanePanel = {
@@ -624,6 +634,19 @@ export type RemoteHost = {
   member?: true;
   /** The team this host's member pairing belongs to. */
   team?: string;
+  /** Whether this host is included when operating all computers in one view (default true). */
+  included?: boolean;
+};
+export type UnifiedHostStatus = {
+  id: string;
+  name: string;
+  state: "idle" | "connecting" | "online" | "offline" | "revoked";
+  local?: boolean;
+  route?: "direct" | "relay" | null;
+  member?: boolean;
+  team?: string;
+  bots?: number;
+  requests?: number;
 };
 export type ProfileHost = {
   serverId: string;
@@ -1020,6 +1043,16 @@ export type State = {
   /** Which computer's workspace this is: null for this one, else the paired computer in use. */
   remote?: {
     using: { id: string; name: string; state: "idle" | "connecting" | "online" | "offline" | "revoked"; route: "direct" | "relay" | null; version: string | null; capabilities: string[]; member?: true; team?: string } | null;
+    /** True when operating all connected computers together in one view. */
+    unified?: boolean;
+    /** Saved user preference for operating all computers in one view. */
+    unifiedEnabled?: boolean;
+    /** Display name for this local computer. */
+    localName?: string;
+    /** Target host for host-scoped Settings & creation while unified mode is active ("local" or a host id). */
+    settingsHost?: string;
+    /** Live status of each computer included in the unified view. */
+    unifiedHosts?: UnifiedHostStatus[];
     hosts: RemoteHost[];
   };
   /** The hosted profile's public identity and computer directory; no token or verifier is sent. */
@@ -1301,6 +1334,8 @@ declare global {
             agent?: string;
             /** The starter the form started from (desktop/starters.mjs). */
             starter?: string;
+            /** Unified multi-host mode: target computer id ("local" or remote host id). */
+            hostId?: string;
           },
       ): Promise<string>;
       /** The person's existing agents that can become bots. */
@@ -1930,6 +1965,12 @@ declare global {
       setMyAvatar(image: string | null): Promise<{ avatar?: string }>;
       /** Shows a paired computer's workspace in this window, or this computer's own (null). */
       useRemoteHost(id: string | null): Promise<unknown>;
+      /** Enables or disables operating all connected computers together in one unified view. */
+      setUnifiedHosts(enabled: boolean): Promise<boolean>;
+      /** Includes or excludes a specific paired computer from the unified view. */
+      setUnifiedHostIncluded(id: string, included: boolean): Promise<boolean>;
+      /** Selects which computer host-scoped Settings target while unified view is active ("local" or host id). */
+      setSettingsHost(id: string): Promise<string>;
       forgetRemoteHost(id: string): Promise<void>;
       renameRemoteHost(id: string, name: string): Promise<void>;
       /** Renames a paired phone or computer as this computer lists it. */
@@ -2918,6 +2959,8 @@ export type AgentRequest = {
   title: string;
   label?: string;
   preview?: string;
+  hostId?: string;
+  hostName?: string;
   detail?: string;
   remember?: string;
   sourceBotName?: string;
@@ -3100,6 +3143,8 @@ export type BotTask = {
   chatId?: string;
   runId?: string;
   result?: string;
+  hostId?: string;
+  hostName?: string;
   problem?: string;
   pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
   history?: TaskHistoryEntry[];
