@@ -506,6 +506,7 @@ export default function Settings({
           {section === "notifications" && (
             <NotificationPreferences
               value={preferences.notifications}
+              bots={bots}
               change={(notifications) => changePreferences({ notifications })}
               fail={fail}
             />
@@ -867,19 +868,23 @@ function About() {
   );
 }
 
-/** Settings › Notifications: what alerts, quiet hours and a test. */
+/** Settings › Notifications: what alerts, per-agent filters, quiet hours and a test. */
 function NotificationPreferences({
   value,
+  bots,
   change,
   fail,
 }: {
   value: NotificationSettings;
+  bots: Bot[];
   change: (v: NotificationSettings) => Promise<void>;
   fail: (e: unknown) => void;
 }) {
   const [sent, setSent] = useState("");
   const set = (patch: Partial<NotificationSettings>) => void change({ ...value, ...patch }).catch(fail);
   const quiet = value.quietHours;
+  const botsFilter = value.bots ?? { mode: "all" as const, ids: [] as string[] };
+  const mutedBots = value.mutedBots ?? [];
   const toggles: [keyof NotificationSettings, string, string][] = [
     ["replies", "Replies", "When a bot finishes while Botkins is in the background."],
     ["routines", "Routines", "When a routine finishes or fails."],
@@ -887,6 +892,18 @@ function NotificationPreferences({
   ];
   // One plain reminder for what is left waiting, for each person and their own phones too. No model. Missing on an older computer.
   const reminders = value.reminders;
+  const toggleAllowed = (botId: string, on: boolean) => {
+    const ids = new Set(botsFilter.ids);
+    if (on) ids.add(botId);
+    else ids.delete(botId);
+    set({ bots: { mode: "only", ids: [...ids] } });
+  };
+  const toggleMuted = (botId: string, enabled: boolean) => {
+    const next = new Set(mutedBots);
+    if (enabled) next.delete(botId);
+    else next.add(botId);
+    set({ mutedBots: [...next] });
+  };
   return (
     <>
       <Group title="Notify me about">
@@ -895,6 +912,50 @@ function NotificationPreferences({
         ))}
         {reminders !== undefined && <SwitchRow label="Reminders" help="Once, when a bot is left waiting on someone." checked={reminders} onChange={(on) => set({ reminders: on })} />}
       </Group>
+      {bots.length > 0 && (
+        <Group
+          title="Bots"
+          footer="Filters replies, routines, and spaces. Approvals, questions, @mentions, and updates still come through."
+        >
+          <div className="set-row">
+            <div className="set-label">
+              <span className="set-name">Notify for</span>
+              <small>Choose whether all bots or only selected bots notify you.</small>
+            </div>
+            <div className="set-control">
+              <GlassTabBar
+                aria-label="Bot notification filter"
+                value={botsFilter.mode}
+                items={[
+                  { value: "all", label: "All bots" },
+                  { value: "only", label: "Only these" },
+                ]}
+                onValueChange={(mode) => set({ bots: { mode: mode === "only" ? "only" : "all", ids: botsFilter.ids } })}
+              />
+            </div>
+          </div>
+          {botsFilter.mode === "only" &&
+            bots.map((bot) => (
+              <SwitchRow
+                key={"allow-" + bot.id}
+                label={bot.name}
+                help={bot.role || undefined}
+                checked={botsFilter.ids.includes(bot.id)}
+                onChange={(on) => toggleAllowed(bot.id, on)}
+              />
+            ))}
+          {botsFilter.mode === "all" &&
+            bots.map((bot) => (
+              <SwitchRow
+                key={"mute-" + bot.id}
+                label={bot.name}
+                help={mutedBots.includes(bot.id) ? "Muted for replies and routines" : bot.role || undefined}
+                checked={!mutedBots.includes(bot.id)}
+                onChange={(on) => toggleMuted(bot.id, on)}
+              />
+            ))}
+        </Group>
+      )}
       <Group
         title="Quiet hours"
         actions={

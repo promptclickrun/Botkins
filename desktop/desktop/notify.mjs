@@ -1,6 +1,7 @@
 // Desktop notifications. `decide` is pure so the rules are testable without Electron;
 // `Notifier` connects it to workspace events and a Notification class supplied by main.mjs.
 import { resolveRoutineTargets } from "./link/notify-targets.mjs";
+import { allowsBot, isCreatorReviewedWorkerRun } from "./link/push.mjs";
 import { defaultSettings } from "./preferences.mjs";
 import { mentionTitle } from "./human-mentions.mjs";
 
@@ -46,7 +47,7 @@ export const ALERT_ACTIONS = [
  * {type: "reminder", reminder, bot}. `alert` is what a delivered proactive alert carries (`{ runId, offer? }`).
  * Returns {title, body, chatId, alert?} or null.
  */
-export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true, resolved } = {}) {
+export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true, resolved, state } = {}) {
   const prefs = { ...defaultSettings.notifications, ...settings?.notifications };
   if (inQuietHours(prefs.quietHours, now, timeZone)) return null;
   const rawBotName = event.bot?.name ?? "Botkins";
@@ -102,6 +103,10 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
   if (event.type !== "turn") return null;
   const { chat, run } = event;
   if (!run || run.notify === false || run.status === "Stopped" || run.status === "Working" || chat?.temporary) return null;
+  if (state && isCreatorReviewedWorkerRun(run, chat, state)) return null;
+  const reply = chat?.messages?.findLast((m) => m.runId === run.id && m.role !== "user" && !m.interim);
+  const botId = reply?.botId ?? event.bot?.id ?? chat?.botId ?? null;
+  if (botId && !allowsBot(prefs, botId)) return null;
   const failed = run.status !== "Completed";
   const routine = run.scheduleId != null || run.trigger === "scheduled";
   if (run.status === "Completed" && (run.silent || (routine && run.noOutput === true))) return null;
@@ -126,7 +131,6 @@ export function decide(event, { settings, focused, now = new Date(), timeZone, m
       return null;
     }
   } else if (!mine || !prefs.replies || focused) return null;
-  const reply = chat?.messages?.findLast((m) => m.runId === run.id && m.role !== "user" && !m.interim);
   // A bot that looks out for the person speaks under its own name: the title is the bot's name alone and the
   // text is the alert's first line. A check that failed is in the bot's Proactive log, not a notification.
   if (run.proactive) {
@@ -219,7 +223,7 @@ export class Notifier {
         !fromRemote && event.type === "turn" && typeof this.ws.resolveRoutineTargets === "function"
           ? this.ws.resolveRoutineTargets(event.chat, event.run)
           : undefined;
-      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine, resolved });
+      const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine, resolved, state: !fromRemote ? this.ws.state : undefined });
       if (note) this.show(note);
     } catch (error) {
       console.error("Notification:", error.message);

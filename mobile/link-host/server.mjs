@@ -511,8 +511,13 @@ export class LinkHost extends EventEmitter {
         const titles = new Map([...(state.panels ?? []), ...(state.board ?? [])].map((item) => [item.id, item.title]));
         return (id) => titles.get(id);
       },
+      itemBot: () => {
+        const state = this.refreshState();
+        const byItem = new Map([...(state.panels ?? []), ...(state.board ?? [])].map((item) => [item.id, item.botId ?? null]));
+        return (id) => byItem.get(id) ?? null;
+      },
       names: () => new Map(teamPeople(this.store.data.team, this.ownerName()).map((person) => [person.id, person.name])),
-      wants: (device) => this.push.wants(device, "spaces"),
+      wants: (device, botId) => this.push.wants(device, "spaces", botId),
       previews: (device) => this.store.push(device.id)?.prefs?.previews !== false,
       send: (device, content, options) => this.push.notify(device.id, content, options),
     });

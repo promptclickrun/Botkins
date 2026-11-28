@@ -109,13 +109,14 @@ export class SpaceAlerts {
    * @param context   (person) => what `spaceView` needs for that person (their role, the names)
    * @param records   () => the app's spaces with their items, or null
    * @param titles    () => (item id) => a panel's or a card's title
+   * @param itemBot   optional () => (item id) => botId for a panel or card
    * @param names     () => person id → name
-   * @param wants     (device) => whether that device's notifications are on and its "Spaces" choice is
+   * @param wants     (device, botId?) => whether that device's notifications are on and its "Spaces" choice (and per-bot filter) allows it
    * @param previews  (device) => whether that device shows what was written
    * @param send      (device, content) => sends one sealed alert
    */
-  constructor({ spaces, team, setTeam, devices, shown, context, records, titles, names, wants, previews, send, now = Date.now }) {
-    Object.assign(this, { spaces, team, setTeam, devices, shown, context, records, titles, names, wants, previews, send, now });
+  constructor({ spaces, team, setTeam, devices, shown, context, records, titles, itemBot, names, wants, previews, send, now = Date.now }) {
+    Object.assign(this, { spaces, team, setTeam, devices, shown, context, records, titles, itemBot, names, wants, previews, send, now });
     this.last = new Map(); // "person:space" → when an "Every change" alert last went
     this.timer = null;
   }
@@ -131,12 +132,13 @@ export class SpaceAlerts {
     const looking = new Set((this.spaces.here().get(event.spaceId) ?? []).map((one) => one.id));
     const byName = this.names().get(event.by) ?? "";
     const panelTitle = event.panelId ? this.titles()(event.panelId) : undefined;
+    const panelBotId = event.panelId && this.itemBot ? this.itemBot()(event.panelId) : null;
     const now = this.now();
     const told = new Set();
     let sent = 0;
     for (const device of this.devices()) {
       const person = device.memberId ?? OWNER;
-      if (person === event.by || looking.has(person) || !this.wants(device)) continue;
+      if (person === event.by || looking.has(person) || !this.wants(device, panelBotId)) continue;
       const space = this.shown(device).find((one) => one.id === event.spaceId);
       if (!space || space.notify === "off" || (event.kind === "change" && space.notify !== "all")) continue;
       const key = person + ":" + event.spaceId;
@@ -171,6 +173,7 @@ export class SpaceAlerts {
     const records = this.records();
     if (!records) return 0;
     const titleOf = this.titles();
+    const botOf = this.itemBot ? this.itemBot() : null;
     const since = Number(before.at) || 0;
     const here = this.spaces.here();
     const byPerson = new Map();
@@ -183,7 +186,11 @@ export class SpaceAlerts {
       const news = byPerson
         .get(person)
         .filter(({ space }) => shown.has(space.id) && !(here.get(space.id) ?? []).some((one) => one.id === person))
-        .map(({ space, items }) => ({ space, total: items.length, titles: items.map((id) => titleOf(id)).filter(Boolean), cards: !!space.builtin && space.builtin !== "today" }));
+        .map(({ space, items }) => {
+          const kept = botOf ? items.filter((id) => this.wants(device, botOf(id))) : items;
+          return { space, total: kept.length, titles: kept.map((id) => titleOf(id)).filter(Boolean), cards: !!space.builtin && space.builtin !== "today" };
+        })
+        .filter((entry) => entry.total > 0);
       const content = digestAlert(news, this.previews(device));
       if (!content) continue;
       // One space: a tap opens it. Several: the list of spaces.

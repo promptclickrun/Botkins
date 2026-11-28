@@ -319,9 +319,12 @@ export class Tasks {
   /** Whether a queued creator review is still waiting on this creator chat (not resolved, overridden, or deleted). */
   needsCreatorReview(taskId, chat) {
     const task = this.all.find((t) => t.id === taskId);
-    if (!task || task.status !== "review" || !task.reviewerBotId) return false;
-    if (!chat || chat.hostDispatch || chat.botId !== task.reviewerBotId) return false;
-    return this.isBotCreator(task.createdBy) && task.reviewerBotId === task.createdBy;
+    if (!task) return false;
+    const waiting = (task.status === "review" && task.reviewerBotId) || (task.status === "blocked" && this.reviewMode(task) === "creator");
+    if (!waiting) return false;
+    const reviewer = task.reviewerBotId ?? task.createdBy;
+    if (!chat || chat.hostDispatch || chat.botId !== reviewer) return false;
+    return this.isBotCreator(task.createdBy) && reviewer === task.createdBy;
   }
   /** Emits the creator review notification when a queued review wakes and starts its turn. */
   creatorReviewStarted(taskId, chatId) {
@@ -343,7 +346,7 @@ export class Tasks {
    * Delivers a task completion notice into the creator bot's originating chat (or its main chat if gone)
    * so the orchestrating bot can review and accept/send back the work without asking the person.
    */
-  notifyCreator(task, { autoAccepted = false, reply = "" } = {}) {
+  notifyCreator(task, { autoAccepted = false, failed = false, reply = "" } = {}) {
     if (!this.isBotCreator(task.createdBy)) return null;
     const creator = this.ws.state.bots.find((b) => b.id === task.createdBy);
     if (!creator) return null;
@@ -354,10 +357,12 @@ export class Tasks {
       this.ws.state.chats.find((c) => c.botId === creator.id);
     const chatId = targetChat?.id ?? this.ws.createChat(creator.id, "Task review · " + task.title.slice(0, 70));
     const chat = this.ws.chat(chatId);
-    const summary = (reply || task.result || "(no summary)").slice(0, 3000);
+    const summary = (reply || task.result || task.problem || "(no summary)").slice(0, 3000);
     const prompt = autoAccepted
       ? `[Task completed and auto-accepted]\nTask: ${task.title} (id: ${task.id})\nCompleted by: ${workerName}\nStatus: done (auto-accepted)\n\nResult:\n${summary}`
-      : `[Task ready for your review]\nTask: ${task.title} (id: ${task.id})\nCompleted by: ${workerName}\nStatus: review (assigned to you as creator)\n\nResult:\n${summary}\n\nReview the work and call task_update with id "${task.id}": set status "done" to accept it, or status "ready" with a "note" to send it back to ${workerName} in the same chat.`;
+      : failed
+        ? `[Task failed]\nTask: ${task.title} (id: ${task.id})\nWorker: ${workerName}\nStatus: blocked\n\nProblem:\n${summary}\n\nDecide how to proceed and inform the person or retry via task_update with id "${task.id}".`
+        : `[Task ready for your review]\nTask: ${task.title} (id: ${task.id})\nCompleted by: ${workerName}\nStatus: review (assigned to you as creator)\n\nResult:\n${summary}\n\nReview the work and call task_update with id "${task.id}": set status "done" to accept it, or status "ready" with a "note" to send it back to ${workerName} in the same chat.`;
     const now = Date.now();
     // Record a structured rail card/context entry on the chat so both UI and next turn see the result.
     const notice = {
@@ -393,7 +398,6 @@ export class Tasks {
         const turn = this.ws.send(chatId, prompt, {
           title: reviewTitle,
           taskReviewId: task.id,
-          notify: false,
         });
         turn.catch((error) => console.error("Task review notify:", error.message));
         this.ws.events?.emit("task.creatorNotified", { task, chatId, autoAccepted: false, mode: "turn" });
@@ -407,7 +411,6 @@ export class Tasks {
       list.push({
         id: randomUUID(),
         steer: false,
-        notify: false,
         title: reviewTitle,
         taskReviewId: task.id,
         text: prompt,
@@ -461,6 +464,9 @@ export class Tasks {
       Object.assign(task, { status: "blocked", problem: run.detail || run.status });
       delete task.reviewerBotId;
       this.recordHistory(task, from, "blocked", { by: "system", note: run.detail || run.status, at: now });
+      if (mode === "creator" && botCreator) {
+        notifyOpts = { autoAccepted: false, failed: true, reply: run.detail || run.status };
+      }
     }
     task.updatedAt = now;
     this.ws.save();

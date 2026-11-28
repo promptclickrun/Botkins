@@ -191,6 +191,8 @@ export const defaultSettings = {
     // One plain nudge when something is left waiting on a person (desktop/reminders.mjs). No model.
     reminders: true,
     quietHours: { enabled: false, from: "22:00", to: "07:00" },
+    bots: { mode: "all", ids: [] },
+    mutedBots: [],
   },
 };
 
@@ -312,11 +314,27 @@ export function changeSettings(settings, patch) {
           quietHours: { ...current.quietHours, ...value?.quietHours },
         };
         const clock = /^([01]\d|2[0-3]):[0-5]\d$/;
+        const cleanIds = (arr) => {
+          if (!Array.isArray(arr)) return null;
+          const out = [];
+          const seen = new Set();
+          for (const item of arr) {
+            if (typeof item !== "string") return null;
+            const id = item.trim();
+            if (!id || id.length > 128 || id.includes("\0")) return null;
+            if (!seen.has(id)) {
+              seen.add(id);
+              out.push(id);
+            }
+            if (out.length > 200) return null;
+          }
+          return out;
+        };
         if (
           !value ||
           typeof value !== "object" ||
           Object.keys(n).some(
-            (k) => !["replies", "routines", "requests", "reminders", "quietHours"].includes(k),
+            (k) => !["replies", "routines", "requests", "reminders", "quietHours", "bots", "mutedBots"].includes(k),
           ) ||
           ["replies", "routines", "requests"].some((k) => typeof n[k] !== "boolean") ||
           (n.reminders !== undefined && typeof n.reminders !== "boolean") ||
@@ -325,6 +343,24 @@ export function changeSettings(settings, patch) {
           !clock.test(n.quietHours.to)
         )
           throw new Error("Invalid notification setting");
+        let bots = current.bots ?? { mode: "all", ids: [] };
+        if (value.bots !== undefined) {
+          if (!value.bots || typeof value.bots !== "object" || Array.isArray(value.bots))
+            throw new Error("Invalid notification setting");
+          const mergedMode = value.bots.mode !== undefined ? value.bots.mode : (bots.mode ?? "all");
+          if (mergedMode !== "all" && mergedMode !== "only")
+            throw new Error("Invalid notification setting");
+          const mergedIdsRaw = value.bots.ids !== undefined ? value.bots.ids : (bots.ids ?? []);
+          const ids = cleanIds(mergedIdsRaw);
+          if (!ids) throw new Error("Invalid notification setting");
+          bots = { mode: mergedMode, ids };
+        }
+        let mutedBots = current.mutedBots ?? [];
+        if (value.mutedBots !== undefined) {
+          const ids = cleanIds(value.mutedBots);
+          if (!ids) throw new Error("Invalid notification setting");
+          mutedBots = ids;
+        }
         next.notifications = {
           replies: n.replies,
           routines: n.routines,
@@ -336,6 +372,8 @@ export function changeSettings(settings, patch) {
             from: n.quietHours.from,
             to: n.quietHours.to,
           },
+          bots,
+          mutedBots,
         };
         break;
       }

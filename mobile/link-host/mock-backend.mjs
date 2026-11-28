@@ -509,7 +509,7 @@ export function seed() {
       approval: "ask",
       clarify: ["missing"],
       clarificationInstructions: "",
-      notifications: { replies: true, routines: true, requests: true, reminders: true, quietHours: { enabled: false, from: "22:00", to: "07:00" } },
+      notifications: { replies: true, routines: true, requests: true, reminders: true, quietHours: { enabled: false, from: "22:00", to: "07:00" }, bots: { mode: "all", ids: [] }, mutedBots: [] },
       access: { allBots: true },
       background: { keepRunning: true, runAtStartup: false },
       sidebar: { order: ["Home", "Today", "Chats", "Work", "Wiki"], collapsed: true },

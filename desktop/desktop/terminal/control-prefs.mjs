@@ -68,6 +68,9 @@ export const PREFERENCES = {
   "notifications.quietHours.enabled": switches("Keep quiet during the quiet hours"),
   "notifications.quietHours.from": { type: "clock", about: "The quiet hours start, as HH:MM" },
   "notifications.quietHours.to": { type: "clock", about: "The quiet hours end, as HH:MM" },
+  "notifications.bots.mode": { type: "choice", values: ["all", "only"], about: "Notify for all bots or only selected bots" },
+  "notifications.bots.ids": { type: "ids", about: "Bot IDs to notify for when notifications.bots.mode is only, comma-separated or none" },
+  "notifications.mutedBots": { type: "ids", about: "Bot IDs muted from reply/routine notifications, comma-separated or none" },
   "access.allBots": switches("Every bot can use every project"),
   harness: choice(HARNESSES, "What runs a bot's turn: pi (Pi, the default), provider (each provider's own tool), copilot (one for every plan) or omp (OMP)"),
   "background.keepRunning": switches("The desktop app keeps running when its window closes (for the app's window; this host runs as a service)"),
@@ -111,7 +114,12 @@ function wholeSettings(settings = {}) {
     ...defaultSettings,
     ...settings,
     appearance: appearanceField(settings.appearance),
-    notifications: { ...notifications, quietHours: { ...defaultSettings.notifications.quietHours, ...settings.notifications?.quietHours } },
+    notifications: {
+      ...notifications,
+      quietHours: { ...defaultSettings.notifications.quietHours, ...settings.notifications?.quietHours },
+      bots: { ...defaultSettings.notifications.bots, ...settings.notifications?.bots },
+      mutedBots: Array.isArray(settings.notifications?.mutedBots) ? settings.notifications.mutedBots : [],
+    },
     access: { ...defaultSettings.access, ...settings.access },
     background: backgroundField(settings.background),
     sidebar: sidebarField(settings.sidebar),
@@ -153,6 +161,14 @@ function parsePreference(key, spec, value) {
       const found = items.map((item) => spec.values.find((entry) => entry.toLowerCase() === item.toLowerCase()));
       if (found.some((item) => !item)) throw refuse("some of " + spec.values.join(", ") + ", or none");
       return [...new Set(found)];
+    }
+    case "ids": {
+      const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : null;
+      if (!raw || raw.some((item) => typeof item !== "string")) throw refuse("comma-separated IDs, or none");
+      const items = raw.map((item) => item.trim()).filter(Boolean);
+      if (items.length === 1 && items[0].toLowerCase() === "none") return [];
+      if (items.length > 200 || items.some((id) => id.length > 128 || id.includes("\0"))) throw refuse("up to 200 IDs (max 128 characters each)");
+      return [...new Set(items)];
     }
     case "color": {
       const word = typeof value === "string" ? value.trim() : "";

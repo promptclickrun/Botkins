@@ -6,11 +6,12 @@ import { Bell, BellRing, CircleHelp, Download, Eye, LayoutGrid, MessageCircle, R
 import { useState } from "react";
 import { Linking, View } from "react-native";
 import type { PushPrefs } from "@/link/types";
-import { useCapability, useMember, useOnline, usePart } from "@/state/hooks";
+import { useBots, useCapability, useMember, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { disablePush, enablePush, pushDefaults, usePush, usePushPrefs } from "@/state/push";
+import { disablePush, enablePush, pushDefaults, updatePushPrefs, usePush, usePushPrefs } from "@/state/push";
+import { toggleAllowedBot } from "@/state/pushPrefs";
 import { showToast } from "@/state/store";
-import { Group, IconTile, Label, Page, Row, space, T, useTheme } from "@/ui";
+import { BotAvatar, Group, IconTile, Label, Page, Row, Segmented, space, T, useTheme } from "@/ui";
 import { ComputerAlerts } from "./ComputerAlerts";
 
 export default function Notifications() {
@@ -20,12 +21,14 @@ export default function Notifications() {
   const member = useMember();
   const canUpdate = useCapability("app-update-v1");
   const canSpaces = useCapability("space-alerts-v1");
+  const bots = useBots();
   const { wanted, status, problem } = usePush();
   const saved = usePushPrefs();
   const [busy, setBusy] = useState(false);
   // A switch holds its new place until the computer says it changed.
   const [pending, setPending] = useState<Partial<PushPrefs>>({});
   const prefs = { ...pushDefaults, ...saved, ...pending };
+  const botsFilter = prefs.bots ?? { mode: "all" as const, ids: [] as string[] };
   const on = wanted && status === "on";
 
   const toggle = async (next: boolean) => {
@@ -38,7 +41,7 @@ export default function Notifications() {
   };
   const set = async (patch: Partial<PushPrefs>) => {
     setPending((held) => ({ ...held, ...patch }));
-    await attempt(api["link.push.prefs"](patch));
+    await attempt(updatePushPrefs(patch));
     setPending((held) => {
       const rest = { ...held };
       for (const name of Object.keys(patch) as (keyof PushPrefs)[]) delete rest[name];
@@ -87,6 +90,39 @@ export default function Notifications() {
               )}
             </Group>
           </View>
+
+          {bots.length > 0 && (
+            <View>
+              <Label>Bots</Label>
+              <Group>
+                <View style={{ padding: space.lg }}>
+                  <Segmented
+                    options={[
+                      { value: "all", label: "All bots" },
+                      { value: "only", label: "Only these" },
+                    ]}
+                    value={botsFilter.mode}
+                    onChange={(mode) => void set({ bots: { mode: mode === "only" ? "only" : "all", ids: botsFilter.ids } })}
+                  />
+                </View>
+                {botsFilter.mode === "only" &&
+                  bots.map((bot) => (
+                    <Row
+                      key={bot.id}
+                      leading={<BotAvatar bot={bot} size={36} badge={false} />}
+                      title={bot.name}
+                      subtitle={bot.hostName ? bot.hostName : bot.role || undefined}
+                      toggled={botsFilter.ids.includes(bot.id)}
+                      disabled={!online}
+                      onToggle={(checked) => void set({ bots: toggleAllowedBot(botsFilter, bot.id, checked) })}
+                    />
+                  ))}
+              </Group>
+              <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs, marginTop: space.sm }}>
+                Filters replies, routines, and spaces. Approvals, questions, @mentions, and updates still come through.
+              </T>
+            </View>
+          )}
 
           <View>
             <Label>What shows</Label>
