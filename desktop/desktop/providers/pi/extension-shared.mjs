@@ -34,6 +34,38 @@ function sessionReader(file) {
   };
 }
 
+/**
+ * The most images one model request carries. Some models refuse a request with more (Gemini
+ * through GitHub Copilot takes 10), and screenshots a bot reads pile up in its conversation until
+ * every later request fails. The session keeps every image; only what is sent is trimmed.
+ */
+export const MAX_IMAGES = 8;
+export const IMAGE_LEFT_OUT = "[An earlier image was left out of this request to stay under the model's image limit. Read the file again if you need to see it.]";
+
+/**
+ * The conversation with only its newest `max` images, the older ones each replaced by a line that
+ * says so. Null when there is nothing to leave out.
+ */
+export function capImages(messages, max = MAX_IMAGES) {
+  if (!Array.isArray(messages)) return null;
+  let seen = 0;
+  let changed = false;
+  const out = messages.slice();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const message = out[i];
+    if (!Array.isArray(message?.content) || !message.content.some((part) => part?.type === "image")) continue;
+    const content = message.content.slice();
+    for (let j = content.length - 1; j >= 0; j--) {
+      if (content[j]?.type !== "image") continue;
+      if (++seen <= max) continue;
+      content[j] = { type: "text", text: IMAGE_LEFT_OUT };
+      changed = true;
+    }
+    out[i] = { ...message, content };
+  }
+  return changed ? out : null;
+}
+
 /** The same Botkins extension contract for Pi and for OMP, which owns its MCP connections. */
 export function makeBotkinsExtension(file, { mcp = true } = {}) {
   const read = sessionReader(file);
@@ -88,6 +120,11 @@ export function makeBotkinsExtension(file, { mcp = true } = {}) {
       watch.unref?.();
     };
     pi.on("session_start", (_event, ctx) => startWatch(ctx));
+    // Each request carries only the newest images (capImages), so a run that reads many screenshots keeps going.
+    pi.on("context", (event) => {
+      const messages = capImages(event?.messages);
+      return messages ? { messages } : undefined;
+    });
     pi.on("session_shutdown", () => { clearInterval(watch); watch = null; });
     for (const hook of ["turn_start", "turn_end", "agent_end", "tool_execution_end"])
       pi.on(hook, (_event, ctx) => publishInventory(ctx));
