@@ -10,6 +10,19 @@ import { useBots, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { Button, Field, Group, Label, Page, Row, space, T } from "@/ui";
 
+// A computer older than 0.17.25 has no Botkins Agent calls and refuses each one as a call a phone
+// may not make. Say what to do about it instead.
+const OLD_COMPUTER = /can't be done from a phone|unknown method/i;
+export const GITHUB_UPDATE_NOTE = "Update Botkins on your computer to 0.17.25 or later to connect GitHub.";
+function ask<T>(work: Promise<T>, done?: string) {
+  return attempt(
+    work.catch((error: unknown) => {
+      throw error instanceof Error && OLD_COMPUTER.test(error.message) ? new Error(GITHUB_UPDATE_NOTE) : error;
+    }),
+    done,
+  );
+}
+
 function formatShortTime(iso?: string | null): string {
   if (!iso) return "None yet";
   try {
@@ -34,7 +47,7 @@ export default function GithubSettings() {
       setLoading(false);
       return;
     }
-    const next = await attempt(
+    const next = await ask(
       refreshFromRelay ? api.githubAgentRefresh() : api.githubAgentStatus(),
     );
     if (next) {
@@ -76,7 +89,7 @@ export default function GithubSettings() {
   const handleInstall = async () => {
     setBusy(true);
     try {
-      const res = await attempt(api.githubAgentInstallUrl());
+      const res = await ask(api.githubAgentInstallUrl());
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         await load(true);
@@ -108,7 +121,7 @@ export default function GithubSettings() {
             void (async () => {
               setBusy(true);
               try {
-                const next = await attempt(api.githubAgentUnbind(installationId), "Disconnected");
+                const next = await ask(api.githubAgentUnbind(installationId), "Disconnected");
                 if (next) setStatus(next);
               } finally {
                 setBusy(false);
@@ -127,7 +140,7 @@ export default function GithubSettings() {
   ) => {
     setBusy(true);
     try {
-      const next = await attempt(api.githubAgentSetRepo(repo, patch), toast);
+      const next = await ask(api.githubAgentSetRepo(repo, patch), toast);
       if (next) setStatus(next);
     } finally {
       setBusy(false);
@@ -137,7 +150,7 @@ export default function GithubSettings() {
   const toggleRelayTokenFallback = async (relayUserTokenFallback: boolean) => {
     setBusy(true);
     try {
-      const next = await attempt(api.githubAgentSetSettings({ relayUserTokenFallback }));
+      const next = await ask(api.githubAgentSetSettings({ relayUserTokenFallback }));
       if (next) setStatus(next);
     } finally {
       setBusy(false);

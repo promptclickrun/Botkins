@@ -604,7 +604,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           )}
           style={{ flex: 1 }}
           // Inverted: the content's top is the screen's bottom, under the message box.
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.lg + listBottom, paddingBottom: space.lg + room.top }}
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: FADE_EDGE + space.xs + listBottom, paddingBottom: space.lg + room.top }}
           ItemSeparatorComponent={Gap}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
@@ -985,8 +985,11 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onO
 
   // The composer rides the keyboard; with the keyboard down it clears the home indicator.
   const keyboard = useReanimatedKeyboardAnimation();
-  // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
-  const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
+  // In a tab (the first tab, or a pane beside the Chats list) the native tab bar's own safe area is
+  // already in insets.bottom, so the composer sits just above the bar: adding shape.tabRoom as well
+  // left a bar's height of empty space under it. On a pushed page the composer may sit a little
+  // into the home indicator's room, as the system's own message boxes do.
+  const bottomInset = paneId ? insets.bottom : Math.max(0, insets.bottom - space.md);
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const hasBackdrop = backdrop !== "clean";

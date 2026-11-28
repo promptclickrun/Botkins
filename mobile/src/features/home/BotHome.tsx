@@ -5,8 +5,8 @@
 // computer keeps one for each bot and person, otherwise its latest chat. A computer with no bots
 // yet, or a person who may not chat, gets Home here. The plain logic is homeBot.ts.
 import { LayoutList } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, View } from "react-native";
+import { type ComponentRef, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { openPlace } from "@/features/all/open";
 import { ChatPane } from "@/features/chat/ChatScreen";
@@ -17,16 +17,19 @@ import { activityLabel, useBotActivity, useBots, useCan, useCapability, useChats
 import { api, attempt } from "@/state/link";
 import { setPrefs, usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
-import { BackdropLayer, BotAvatar, Dot, EmptyState, IconButton, LinkBanner, Loading, space, Tap, useShape, useTheme } from "@/ui";
+import { BackdropLayer, BotAvatar, Dot, EmptyState, IconButton, LinkBanner, Loading, space, T, Tap, useShape, useTheme } from "@/ui";
 import Home from "./Home";
 import { homeBots, homeChat, pickHomeBot } from "./homeBot";
 
-const FACE = 36;
+// The chosen bot is large and in the middle; the others sit small on either side, and a swipe or a
+// tap brings one to the middle (the agreed mock, 2026-11-28).
+const FACE = 34;
+const BIG = 64;
+const SLOT = 64;
 const stay = () => {};
 
-/** One bot in the row: its face, still, with a ring when it is the one on show and a dot when it has something unread. */
+/** One bot in the row: small and quiet at the side, large in the middle when it is the one on show, with a dot when it has something unread. */
 function StripBot({ bot, chosen, unread, onPick }: { bot: Bot; chosen: boolean; unread: boolean; onPick: (id: string) => void }) {
-  const { colors } = useTheme();
   const state = useBotActivity(bot.id);
   const status = activityLabel(state);
   return (
@@ -36,14 +39,11 @@ function StripBot({ bot, chosen, unread, onPick }: { bot: Bot; chosen: boolean; 
       hitSlop={0}
       accessibilityLabel={bot.name + (status ? ", " + status : "") + (unread && !chosen ? ", unread" : "")}
       accessibilityState={{ selected: chosen }}
-      style={{ width: FACE + 14, height: FACE + 14, alignItems: "center", justifyContent: "center" }}
+      style={{ width: SLOT, height: BIG + space.xs, alignItems: "center", justifyContent: "center", opacity: chosen ? 1 : 0.7 }}
     >
-      {/* A chosen avatar gets a ring, not a fill. The row holds still: the chat's own header face is the one that moves. */}
-      <View style={{ padding: 3, borderRadius: (FACE + 10) / 2, borderWidth: 2, borderColor: chosen ? colors.ink : "transparent" }}>
-        <BotAvatar bot={bot} state={state} size={FACE} />
-      </View>
+      <BotAvatar bot={bot} state={chosen ? state : "idle"} size={chosen ? BIG : FACE} />
       {unread && !chosen && (
-        <View pointerEvents="none" style={{ position: "absolute", top: 3, right: 3 }}>
+        <View pointerEvents="none" style={{ position: "absolute", top: (BIG - FACE) / 2, right: (SLOT - FACE) / 2 - 2 }}>
           <Dot size={8} />
         </View>
       )}
@@ -51,15 +51,60 @@ function StripBot({ bot, chosen, unread, onPick }: { bot: Bot; chosen: boolean; 
   );
 }
 
-/** The bots, side by side, and the way to all of them. */
+/** The bots as a carousel: the chosen one centered, a swipe settles on the bot in the middle, and the way to all of them. */
 function BotStrip({ bots, chosen, unread, onPick }: { bots: Bot[]; chosen: string; unread: Set<string>; onPick: (id: string) => void }) {
+  const shape = useShape();
+  const { width: screen } = useWindowDimensions();
+  const width = screen - shape.left - shape.right;
+  // Room on each end so the first and the last bot can sit in the middle too.
+  const side = Math.max(0, (width - SLOT) / 2);
+  const index = Math.max(0, bots.findIndex((bot) => bot.id === chosen));
+  const row = useRef<ComponentRef<typeof ScrollView>>(null);
+  const laidOut = useRef(false);
+  // A new choice (a tap, the bot remembered, a bot added) scrolls the chosen one to the middle.
+  useEffect(() => {
+    row.current?.scrollTo({ x: index * SLOT, animated: laidOut.current });
+  }, [index, width]);
+  const settle = (x: number) => {
+    const next = bots[Math.min(bots.length - 1, Math.max(0, Math.round(x / SLOT)))];
+    if (next && next.id !== chosen) onPick(next.id);
+  };
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: space.md, gap: space.xs, alignItems: "center" }}>
-      {bots.map((bot) => (
-        <StripBot key={bot.id} bot={bot} chosen={bot.id === chosen} unread={unread.has(bot.id)} onPick={onPick} />
-      ))}
-      <IconButton icon={LayoutList} label="All bots" variant="soft" size={40} onPress={() => openPlace("home")} style={{ marginLeft: space.xs }} />
-    </ScrollView>
+    <View style={{ height: BIG + space.sm, justifyContent: "center" }}>
+      <ScrollView
+        ref={row}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        snapToInterval={SLOT}
+        decelerationRate="fast"
+        onLayout={() => {
+          row.current?.scrollTo({ x: index * SLOT, animated: false });
+          laidOut.current = true;
+        }}
+        onMomentumScrollEnd={(event) => settle(event.nativeEvent.contentOffset.x)}
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={{ paddingHorizontal: side, alignItems: "center" }}
+      >
+        {bots.map((bot) => (
+          <StripBot key={bot.id} bot={bot} chosen={bot.id === chosen} unread={unread.has(bot.id)} onPick={onPick} />
+        ))}
+      </ScrollView>
+      <IconButton icon={LayoutList} label="All bots" variant="soft" size={40} onPress={() => openPlace("home")} style={{ position: "absolute", left: space.md }} />
+    </View>
+  );
+}
+
+/** The chosen bot's name and role in a pill under the row, as in the agreed mock. */
+function ChosenPill({ bot }: { bot: Bot }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ alignItems: "center", paddingBottom: space.xs }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, maxWidth: "80%", paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: 999, borderWidth: 1, borderColor: colors.line }}>
+        <T variant="headline" numberOfLines={1}>{bot.name}</T>
+        {!!bot.role && <T variant="subhead" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>{bot.role}</T>}
+      </View>
+    </View>
   );
 }
 
@@ -122,7 +167,12 @@ export default function BotHome() {
   // No bots yet, or a role that may not chat: Home has the first steps and the bots' pages.
   if (!bot || !canChat) return <Home />;
 
-  const strip = shown.length > 1 ? <BotStrip bots={shown} chosen={bot.id} unread={unread} onPick={(id) => setPrefs({ homeBot: id })} /> : undefined;
+  const strip = shown.length > 1 ? (
+    <>
+      <BotStrip bots={shown} chosen={bot.id} unread={unread} onPick={(id) => setPrefs({ homeBot: id })} />
+      <ChosenPill bot={bot} />
+    </>
+  ) : undefined;
   if (chatId)
     return (
       <View style={{ flex: 1, paddingLeft: shape.left, paddingRight: shape.right, backgroundColor: colors.canvas }}>
