@@ -599,3 +599,28 @@ test("per-turn save-cost benchmark stays flat and orders of magnitude faster tha
   assert.ok(large.sqliteFinishMs < 25, `expected SQLite 100 MB finish-turn save < 25 ms, got ${large.sqliteFinishMs} ms`);
   assert.ok(large.sqliteStartMs * 10 < large.jsonSaveMs, `expected >=10x speedup at 100 MB (SQLite ${large.sqliteStartMs} ms vs JSON ${large.jsonSaveMs} ms)`);
 });
+
+test("an unreadable workspace.db after migration stops the start instead of opening an old or empty workspace", (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "workspace.json.migrated-1"), JSON.stringify({ bots: [{ id: "pip", name: "Pip" }], chats: [], runs: [] }));
+  writeFileSync(join(dir, WORKSPACE_DB_FILENAME), "not-a-valid-sqlite-database-header");
+  assert.throws(() => new Workspace(dir, fakeClient().client, () => {}), /could not be opened/);
+  assert.equal(existsSync(join(dir, "workspace.json")), false, "no fresh workspace.json was written");
+});
+
+test("a lazily loaded finished step's input is read from SQLite when artifact history needs it", (t) => {
+  const dir = tempDir(t);
+  const input = JSON.stringify({ path: "notes.md", content: "x".repeat(2000) });
+  writeFileSync(join(dir, "workspace.json"), JSON.stringify({
+    bots: [{ id: "pip", name: "Pip", role: "Helper", instructions: "Help.", face: "idle" }],
+    chats: [{ id: "c1", botId: "pip", title: "t", time: 1, messages: [{ role: "user", text: "hi", runId: "r1", time: 1 }] }],
+    runs: [{ id: "r1", chatId: "c1", title: "t", time: 1, finished: 2, status: "Completed", steps: [{ id: "s1", name: "write", status: "Done", started: 1, finished: 2, input }] }],
+    settings: { autoSummarize: 0 },
+  }));
+  const ws = new Workspace(dir, fakeClient().client, () => {});
+  t.after(() => ws.close());
+  const step = ws.state.runs[0].steps[0];
+  assert.equal(step.input, undefined);
+  assert.equal(step.more, true);
+  assert.equal(ws.stepDetail("c1", "r1", "s1", { maxChars: 0 }).input, input, "maxChars 0 returns the whole input");
+});

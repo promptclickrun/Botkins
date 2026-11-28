@@ -773,7 +773,14 @@ export function migrateWorkspaceFile(dir, { dryRun = false, now = Date.now } = {
   const importMs = performance.now() - importStart;
   const backupName = `workspace.json.migrated-${ts}`;
   const backupPath = join(dir, backupName);
-  renameSync(jsonPath, backupPath);
+  try {
+    renameSync(jsonPath, backupPath);
+  } catch (error) {
+    // Never leave both files: the next start would open workspace.db and hide everything written
+    // to workspace.json after this failed attempt.
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(dbPath + suffix, { force: true });
+    throw error;
+  }
   // Old JSON turn-checkpoints were already folded in by readWorkspace(jsonPath).
   rmSync(join(dir, "turn-checkpoints"), { recursive: true, force: true });
 

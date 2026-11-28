@@ -254,6 +254,9 @@ export class Workspace {
         this.writer = this.sqlite;
         this.file = this.dbFile;
       } catch (error) {
+        // After a migration workspace.json is gone (renamed to .migrated-<ts>). Starting from that
+        // old copy, or from nothing, would hide or lose everything since: stop and say why.
+        if (!hadJson) throw new Error(`The workspace database ${this.dbFile} could not be opened: ${error?.message ?? error}`);
         console.error("[workspace] SQLite open failed; falling back to workspace.json:", error?.stack ?? error);
         this.storage = "json";
         this.sqlite = null;

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { chunk, fileDetails, publicFile } from "./artifact-files.mjs";
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
-import { composeUnifiedDesktopState, LOCAL_HOST_ID, parseScopedId, rescopeResult, routeUnifiedCall } from "./unified-hosts.mjs";
+import { composeUnifiedDesktopState, LOCAL_HOST_ID, parseScopedId, rescopeResult, routeUnifiedCall, unscopeId } from "./unified-hosts.mjs";
 import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
@@ -674,10 +674,13 @@ else
         throw new Error("This file is unavailable.");
       },
       closeArtifactMedia: (url) => artifactMedia.close(url),
-      stepDetail: (chatId, runId, stepId) =>
-        remote.inUse()
-          ? remote.call("link.step", [String(chatId), String(runId), String(stepId)])
-          : runtime.handlers.stepDetail(chatId, runId, stepId),
+      stepDetail: (chatId, runId, stepId) => {
+        if (remote.inUse()) return remote.call("link.step", [String(chatId), String(runId), String(stepId)]);
+        // Unified mode: a remote host's chat and run carry scoped IDs. Ask the host that owns them.
+        const parsed = remote.isUnified() ? parseScopedId(String(chatId)) : null;
+        if (parsed) return remote.callHost(parsed.hostId, "link.step", [parsed.rawId, unscopeId(String(runId)), unscopeId(String(stepId))]);
+        return runtime.handlers.stepDetail(chatId, runId, stepId);
+      },
       showEmojiPanel: () => { if (app.isEmojiPanelSupported()) app.showEmojiPanel(); },
       artifactMessagePage: async (chatId, index) => {
         if (typeof chatId !== "string" || !Number.isSafeInteger(index) || index < 0) throw new Error("Choose a message on the paired computer.");
