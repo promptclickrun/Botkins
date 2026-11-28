@@ -234,6 +234,30 @@ public final class BotkinsActivityModule: Module {
       }
     }
 
+    // ── Share Extension handoff ───────────────────────────────────────────────────────────────
+
+    AsyncFunction("readShare") { (id: String) -> String? in
+      guard let dir = shareDir(id),
+            let data = try? Data(contentsOf: dir.appendingPathComponent("payload.json")),
+            var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+      if let list = obj["attachments"] as? [[String: Any]] {
+        obj["attachments"] = list.map { entry -> [String: Any] in
+          var next = entry
+          if let rel = entry["relativePath"] as? String {
+            next["uri"] = dir.appendingPathComponent(rel).absoluteString
+          }
+          return next
+        }
+      }
+      guard let out = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
+      return String(data: out, encoding: .utf8)
+    }
+
+    AsyncFunction("clearShare") { (id: String) in
+      guard let dir = shareDir(id) else { return }
+      try? FileManager.default.removeItem(at: dir)
+    }
+
     // Tokens are followed only while JavaScript is listening.
     OnStartObserving {
       self.observe()
@@ -409,4 +433,13 @@ private func widgetFile() -> URL? {
   guard let group = Bundle.main.object(forInfoDictionaryKey: "BotkinsAppGroup") as? String, !group.isEmpty,
         let folder = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
   return folder.appendingPathComponent("widgets.json")
+}
+
+/// Staged directory for one iOS Share Extension handoff (`shares/<id>` inside the shared App Group).
+private func shareDir(_ id: String) -> URL? {
+  let clean = id.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !clean.isEmpty, !clean.contains("/"), !clean.contains(".."),
+        let group = Bundle.main.object(forInfoDictionaryKey: "BotkinsAppGroup") as? String, !group.isEmpty,
+        let folder = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
+  return folder.appendingPathComponent("shares", isDirectory: true).appendingPathComponent(clean, isDirectory: true)
 }

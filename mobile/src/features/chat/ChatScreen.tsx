@@ -1,6 +1,7 @@
 import { randomUUID } from "expo-crypto";
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
+import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -1125,7 +1126,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, bar, onOpe
             />
           </ChatPeopleLook>
         )}
-        {paneId && !!bar && <Fade edge="top" cover={topBar} firm />}
+        {paneId && !!bar && <Fade edge="top" cover={topBar} glass />}
         {paneId && header}
         <View onLayout={(event) => setBanners(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: topBar, left: 0, right: 0 }}>
           <RoutineBanner chat={chat} />
@@ -1164,7 +1165,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, bar, onOpe
           ) : canChat ? (
             <View style={{ paddingHorizontal: space.md, gap: space.sm }}>
               <TalkBar chatId={chatId} />
-              <VoiceDock chatId={chatId} />
+              <VoiceDock chatId={chatId} hero={!!bar} />
               {!docked && !!typingLabel && <TypingRow label={typingLabel} />}
               {!docked && <Composer
                 chatId={chatId}
@@ -1232,25 +1233,34 @@ function EdgeFree({ children }: { children: ReactNode & {} }) {
 }
 
 /**
- * The page's color under what floats over the chat: the bar at the top, the message box at the
- * bottom. It is solid under them (`cover`), so the rows never show through the title or the
- * buttons, and fades out over a short soft edge beyond, so there is no hard line where the chat ends.
+ * The soft header/footer backing under what floats over the chat: the bot row at the top, or the
+ * message box at the bottom. With `glass` (the bot tab's floating bar), uses a translucent theme
+ * glass blur + subtle gradient fade instead of an opaque solid block so every theme and backdrop
+ * stays airy and legible without condensing the chat canvas.
  */
 const FADE_EDGE = 28;
-function Fade({ edge, cover, firm }: { edge: "top" | "bottom"; cover: number; /** Over a backdrop, nearly the page's own color under what floats (not a light scrim): for a bar with no fill of its own, whose faces and name the rows must not run behind. */ firm?: boolean }) {
+function Fade({ edge, cover, glass }: { edge: "top" | "bottom"; cover: number; /** Translucent theme-aware glass header backing for floating bars with no solid chrome. */ glass?: boolean }) {
   const { colors, dark } = useTheme();
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const hasBackdrop = backdrop !== "clean";
   if (cover <= 0) return null;
   const top = edge === "top";
-  if (hasBackdrop && firm) {
-    // The backdrop's own color, almost whole under the bar and gone a short way below it: no band and no line, and no row behind the bar's faces.
-    const base = backdropBaseColor(backdrop, dark, colors.canvas);
-    const height = cover + FADE_EDGE * 1.5;
-    const solid = tint(base, 0.97);
+  if (glass) {
+    const base = hasBackdrop ? backdropBaseColor(backdrop, dark, colors.canvas) : colors.canvas;
+    const height = cover + 12;
+    const topTint = tint(base, dark ? 0.42 : 0.48);
+    const midTint = tint(base, dark ? 0.24 : 0.28);
+    const clear = tint(base, 0);
     return (
       <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height, ...(top ? { top: 0 } : { bottom: 0 }) }}>
-        <LinearGradient colors={top ? [solid, solid, tint(base, 0)] : [tint(base, 0), solid, solid]} locations={top ? [0, cover / height, 1] : [0, 1 - cover / height, 1]} style={{ flex: 1 }} />
+        <View style={{ position: "absolute", left: 0, right: 0, height: cover, ...(top ? { top: 0 } : { bottom: 0 }), overflow: "hidden" }}>
+          <BlurView tint={dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"} intensity={dark ? 45 : 55} style={StyleSheet.absoluteFill} />
+        </View>
+        <LinearGradient
+          colors={top ? [topTint, midTint, clear] : [clear, midTint, topTint]}
+          locations={top ? [0, cover / height, 1] : [0, 1 - cover / height, 1]}
+          style={StyleSheet.absoluteFill}
+        />
       </View>
     );
   }

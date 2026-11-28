@@ -63,6 +63,10 @@ type Native = {
   getWidgetData?(): Promise<string | null>;
   /** The kinds of widget the person has put somewhere ("BotkinsBot", "BotkinsCrew", "BotkinsUsage"). */
   installedWidgets?(): Promise<string[]>;
+  /** Reads a staged iOS Share Extension payload (JSON string with resolved file:// URIs) by id, or null. */
+  readShare?(id: string): Promise<string | null>;
+  /** Removes a staged iOS Share Extension directory after it has been sent or dismissed. */
+  clearShare?(id: string): Promise<void>;
   /** An answer was given while the app runs. */
   addListener(name: "answer", listener: (answer: QueuedAnswer) => void): EventSubscription;
   /** An activity got the token Apple delivers its updates to. `chatId` is the card's key: a chat's id, or "bot:" + a Botkin's. */
