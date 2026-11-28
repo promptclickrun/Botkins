@@ -30,6 +30,7 @@ import {
 import { BotAvatar } from "./Avatar";
 import BoardPanel from "./Board";
 import { useAsk, useMenu, type MenuItem } from "./Pages";
+import { HostChip } from "./RemoteHosts";
 import { PanelCard, usePanelManager } from "./Today";
 import SharePopover, { isOwner } from "./SpaceShare";
 import NotesSheet from "./SpaceNotes";
@@ -52,11 +53,13 @@ import {
   initial,
   lastLine,
   moveTargets,
+  offlineComputersNote,
   panelChanged,
   panelProject,
   spaceIcon,
   spaceLine,
   spaceName,
+  spaceReadSignature,
   spaceSections,
   spaceWhen,
   type SpaceContent,
@@ -261,20 +264,39 @@ const STARTS: { id: SpaceStart; label: string }[] = [
 export function NewPanel({ state, space, botId, close, opened }: { state: State; space: SpaceSummary; botId: string; close: () => void; opened: (chatId: string) => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
-  const [bot, setBot] = useState(botId);
-  const [start, setStart] = useState<SpaceStart>();
   const [spaceId, setSpaceId] = useState(space.id);
+  const [start, setStart] = useState<SpaceStart>();
   const [refresh, setRefresh] = useState(false);
   const [cadence, setCadence] = useState<Cadence>({ kind: "weekdays", time: "09:00" });
   const [zone, setZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
   // The spaces a panel may be made in: the open one first, then every other the person can change.
   const choices = [space, ...(state.spaces ?? []).filter((s) => s.id !== space.id && s.can !== "view")];
+  const chosenSpace = choices.find((s) => s.id === spaceId) ?? space;
+  const mergedSources = chosenSpace.merged?.sources ?? [];
+  const defaultMergedHost =
+    (state.remote?.settingsHost && mergedSources.some((s) => s.hostId === state.remote?.settingsHost)
+      ? state.remote.settingsHost
+      : undefined) ??
+    (mergedSources.some((s) => s.hostId === "local") ? "local" : undefined) ??
+    (mergedSources.length === 1 ? mergedSources[0].hostId : "");
+  const [pickedHost, setPickedHost] = useState(defaultMergedHost);
+  const targetHostId = chosenSpace.merged
+    ? (pickedHost && mergedSources.some((s) => s.hostId === pickedHost) ? pickedHost : defaultMergedHost)
+    : "";
+  const hostBots =
+    chosenSpace.merged && targetHostId
+      ? state.bots.filter((b) => (b.hostId ?? "local") === targetHostId)
+      : state.bots;
+  const availableBots = hostBots.length > 0 ? hostBots : state.bots;
+  const [bot, setBot] = useState(() => (availableBots.some((b) => b.id === botId) ? botId : (availableBots[0]?.id ?? "")));
+  const selectedBot = availableBots.some((b) => b.id === bot) ? bot : (availableBots[0]?.id ?? "");
+  const needsHostPick = !!chosenSpace.merged && mergedSources.length > 1 && !targetHostId;
   // A routine is a change to the space: a member needs Can manage for it.
   const canRefresh = teamCan(state, "today", "manage");
   // The owner's Project row. Until the person picks, it follows the chosen space's own project.
   const projects = isOwner(state) ? (state.projects ?? []) : [];
   const [pickedProject, setPickedProject] = useState<string | null | undefined>(undefined);
-  const projectId = panelProject(pickedProject, choices.find((s) => s.id === spaceId), projects);
+  const projectId = panelProject(pickedProject, chosenSpace, projects);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -291,14 +313,15 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          if (busy || !prompt.trim()) return;
+          if (busy || !prompt.trim() || !selectedBot || needsHostPick) return;
           setBusy(true);
           setError("");
           try {
             const { chatId } = await api["spaces.newPanel"]({
               spaceId,
-              botId: bot,
+              botId: selectedBot,
               prompt: prompt.trim(),
+              ...(targetHostId && { hostId: targetHostId }),
               ...(start && { start }),
               ...(projectId && { projectId }),
               ...(refresh && canRefresh && { refresh: { cron: cronFromCadence(cadence), timezone: zone } }),
@@ -314,10 +337,29 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
           What should it show?
           <textarea rows={3} autoFocus required maxLength={8000} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         </label>
+        {mergedSources.length > 1 && (
+          <label>
+            Computer
+            <select
+              value={targetHostId}
+              onChange={(e) => {
+                setPickedHost(e.target.value);
+                setBot("");
+              }}
+            >
+              {!targetHostId && <option value="">Choose computer…</option>}
+              {mergedSources.map((src) => (
+                <option key={src.hostId} value={src.hostId}>
+                  {src.hostId === "local" ? src.hostName + " (this computer)" : src.hostName}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           Bot
-          <select value={bot} onChange={(e) => setBot(e.target.value)}>
-            {state.bots.map((b) => (
+          <select value={selectedBot} onChange={(e) => setBot(e.target.value)}>
+            {availableBots.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
               </option>
@@ -382,7 +424,7 @@ export function NewPanel({ state, space, botId, close, opened }: { state: State;
           </p>
         )}
         <div className="ask-actions">
-          <Button type="submit" variant="filled" className="lg-compact" disabled={busy || !prompt.trim()}>
+          <Button type="submit" variant="filled" className="lg-compact" disabled={busy || !prompt.trim() || !selectedBot || needsHostPick}>
             Create
           </Button>
         </div>
@@ -493,7 +535,8 @@ export function SpacePage({
   fail: (e: unknown) => void;
 }) {
   const [content, setContent] = useState<SpaceContent>();
-  const held = useRef(-1);
+  const heldSig = useRef("");
+  const readSig = spaceReadSignature(space);
   // What changed is told against the visit before this one, so the line and dots stay while the page is open.
   const seenAt = useRef<number | undefined>(undefined);
   const changedAtOpen = useRef(space.changed);
@@ -587,9 +630,9 @@ export function SpacePage({
   // An ask about a panel goes to that panel's bot.
   const bot = (asked && state.bots.find((b) => b.id === asked.botId)) || askBot(state.bots, panels);
 
-  // The content is asked for, and asked again when the space's rev passes the one held.
+  // The content is asked for, and asked again when the space's rev (or merged sources) changes.
   useEffect(() => {
-    if (space.rev <= held.current) return;
+    if (readSig === heldSig.current) return;
     let live = true;
     api["spaces.read"](space.id)
       .then((next) => {
@@ -604,14 +647,14 @@ export function SpacePage({
           // marked changed once they leave. The line and dots still tell it until then.
           void api["link.spaces.seen"](space.id).catch(() => {});
         }
-        held.current = next.rev;
+        heldSig.current = readSig;
         setContent(next);
       })
       .catch(fail);
     return () => {
       live = false;
     };
-  }, [space.id, space.rev]);
+  }, [space.id, readSig]);
   // Who is here: told when the page comes into view, every 30 seconds while it stays, and on leaving.
   useEffect(() => {
     const id = space.id;
@@ -629,7 +672,12 @@ export function SpacePage({
   const project = space.projectId ? state.projects?.find((p) => p.id === space.projectId) : undefined;
   // Once the space is read, the line counts its panels as the dots do, so a person's own tick or
   // note is not news to them. Before that, and for a space never opened, the computer's count.
-  const line = content && seenAt.current ? changedLine(changedPanels(panels, seenAt.current, me, openedItems), seenAt.current) : changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
+  const changedSub = content && seenAt.current ? changedLine(changedPanels(panels, seenAt.current, me, openedItems), seenAt.current) : changedLine(Math.max(space.changed, changedAtOpen.current), seenAt.current);
+  const offlineNote = offlineComputersNote(content?.offlineCount ?? space.merged?.offlineCount);
+  const line = [changedSub, offlineNote].filter(Boolean).join(" · ") || null;
+  const shown = panels.filter((p) => p.hidden === hidden);
+  const panelHostCount = new Set(shown.map((p) => p.hostId).filter(Boolean)).size;
+  const showPanelHosts = !!space.merged && panelHostCount >= 2;
   /** The person opened this panel (clicked in it): its dot clears, here and on their other devices. */
   function openedPanel(panel: SpaceContent["panels"][number]) {
     if (!panelChanged(panel, seenAt.current, me, openedItems)) return;
@@ -637,7 +685,6 @@ export function SpacePage({
     setOpenedItems((now) => ({ ...now, [panel.id]: panel.updatedAt }));
     void api["link.spaces.seen"](space.id, panel.id).catch(() => {});
   }
-  const shown = panels.filter((p) => p.hidden === hidden);
   const drag = usePanelDrag(
     shown.map((p) => p.id),
     space.id,
@@ -745,6 +792,7 @@ export function SpacePage({
               when={(t) => spaceWhen(t)}
               badges={
                 <>
+                  {showPanelHosts && p.hostName && <HostChip name={p.hostName} local={p.hostId === "local"} />}
                   {p.blocks.some((b) => b.type === "html") && <span className="space-app">App</span>}
                   {panelChanged(p, seenAt.current, me, openedItems) && <i className="space-dot" aria-label="Changed" />}
                 </>
@@ -827,7 +875,7 @@ export function SpacePage({
                 <button className="icon-btn space-fullscreen" aria-label={fullLabel} aria-pressed={full.on} title={fullLabel + " (" + FULLSCREEN_HINT + ")"} onClick={full.toggle}>
                   <Maximize2 size={17} aria-hidden="true" />
                 </button>
-                {space.can === "own" && (
+                {space.can === "own" && !space.merged && (
                   <span className="space-share-anchor">
                     <button className="btn space-button" aria-expanded={sharing} aria-haspopup="dialog" onClick={() => setSharing(!sharing)}>
                       <Share size={15} />
@@ -851,7 +899,15 @@ export function SpacePage({
             </div>
           )}
           {board && content && (
-            <BoardPanel state={state} cards={content.cards} only={board} fail={fail} startChat={boardChat} />
+            <BoardPanel
+              state={state}
+              cards={content.cards}
+              only={board}
+              showHost={!!space.merged}
+              targetSpace={space}
+              fail={fail}
+              startChat={boardChat}
+            />
           )}
           {hiddenCount > 0 && (
             <div className="chip-row space-filters">

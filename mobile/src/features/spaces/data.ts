@@ -23,20 +23,27 @@ export const useSpacesOn = () => useCapability("spaces-v1");
 export const useSpaces = (): SpaceSummary[] => usePart("spaces") ?? NONE;
 export const useSpace = (id: string | undefined): SpaceSummary | undefined => useSpaces().find((space) => space.id === id);
 
-type Held = { content?: SpaceContent; error?: string; asking?: boolean };
+type Held = { content?: SpaceContent; error?: string; asking?: boolean; sig?: string };
 const useContents = create<Record<string, Held>>(() => ({}));
 onComputerChange(() => useContents.setState({}, true));
 
+function spaceReadSig(space: SpaceSummary | undefined): string | undefined {
+  if (!space) return undefined;
+  if (!space.merged) return String(space.rev);
+  const parts = space.merged.sources.map((s) => `${s.hostId}:${s.rev}`).join(",");
+  return `${space.rev}|${parts}|off:${space.merged.offlineCount}`;
+}
+
 const asking = new Set<string>();
 /** Reads a space's content, once at a time for each space. */
-function read(id: string) {
+function read(id: string, sig?: string) {
   if (asking.has(id)) return;
   asking.add(id);
   useContents.setState((all) => ({ ...all, [id]: { ...all[id], asking: true } }));
   api["spaces.read"](id)
     .then(
-      (content) => useContents.setState((all) => ({ ...all, [id]: { content } })),
-      (error: unknown) => useContents.setState((all) => ({ ...all, [id]: { content: all[id]?.content, error: error instanceof Error && error.message ? error.message : "Couldn't open this space." } })),
+      (content) => useContents.setState((all) => ({ ...all, [id]: { content, sig: sig ?? String(content.rev) } })),
+      (error: unknown) => useContents.setState((all) => ({ ...all, [id]: { content: all[id]?.content, sig: all[id]?.sig, error: error instanceof Error && error.message ? error.message : "Couldn't open this space." } })),
     )
     .finally(() => asking.delete(id));
 }
@@ -52,20 +59,23 @@ export function readSpaceOnce(id: string) {
 
 /**
  * A space's panels and cards. Read when first asked for, and again when the space changed on the
- * computer (the list's `rev` passed the one held) or the computer came back. What is held stays on
- * screen while a fresh read is on its way.
+ * computer (the list's `rev` passed the one held, or a merged space's contributing hosts changed)
+ * or the computer came back. What is held stays on screen while a fresh read is on its way.
  */
 export function useSpaceContent(id: string | undefined): { content?: SpaceContent; error?: string; loading: boolean; retry: () => void } {
   const on = useSpacesOn();
   const online = useOnline();
-  const rev = useSpace(id)?.rev;
+  const space = useSpace(id);
+  const rev = space?.rev;
+  const sig = spaceReadSig(space);
   const held = useContents((all) => (id ? all[id] : undefined));
   const heldRev = held?.content?.rev;
+  const heldSig = held?.sig;
   useEffect(() => {
-    if (!on || !online || !id || rev === undefined) return;
-    if (heldRev === undefined || rev > heldRev) read(id);
-  }, [on, online, id, rev, heldRev]);
-  return { content: held?.content, error: held?.content ? undefined : held?.error, loading: !held?.content && !held?.error, retry: () => id && read(id) };
+    if (!on || !online || !id || rev === undefined || sig === undefined) return;
+    if (heldRev === undefined || (space?.merged ? sig !== heldSig : rev > heldRev)) read(id, sig);
+  }, [on, online, id, rev, sig, heldRev, heldSig, space?.merged]);
+  return { content: held?.content, error: held?.content ? undefined : held?.error, loading: !held?.content && !held?.error, retry: () => id && read(id, sig) };
 }
 
 /**

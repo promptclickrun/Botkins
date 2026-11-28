@@ -5,11 +5,19 @@ import { test } from "node:test";
 import type { Parts } from "../src/link/types";
 import {
   buildUnifiedHostsStatus,
+  combineMergedSpaceContent,
   idForHost,
+  isMergeableBuiltinSpace,
+  isMergedBuiltinSpaceId,
   isScopedId,
+  mergedBuiltinSpaceId,
   mergeUnifiedParts,
+  mergeUnifiedSpaces,
+  offlineComputersNote,
+  parseMergedBuiltinSpaceId,
   parseScopedId,
   rescopeMobileResult,
+  resolveMergedSpaceTarget,
   routeMobileCall,
   scopeId,
   scopePartsForHost,
@@ -333,4 +341,299 @@ test("mobile unified layer routes channel* and chat.cardAction to the owning hos
   );
   assert.equal(resLogs[0]?.connectionId, connB);
   assert.equal(resLogs[0]?.turnId, scopeId("host-b", "t-42"));
+});
+
+const makeSpace = (overrides: Record<string, unknown> = {}) => ({
+  id: "sp-1",
+  name: "Today",
+  by: { id: "owner", name: "Colt" },
+  mine: true,
+  access: "private",
+  can: "own",
+  count: 1,
+  changed: 0,
+  pinned: true,
+  notify: "off",
+  here: [],
+  rev: 1,
+  updatedAt: 100,
+  ...overrides,
+});
+
+test("unified built-in spaces: merges builtin+mine spaces across hosts and keeps custom & others' built-ins separate", () => {
+  const hostA: PooledHostSnapshot = {
+    pairing: { serverId: "host-a", name: "Desk Mac" } as any,
+    link: "online",
+    synced: true,
+    parts: scopePartsForHost(
+      {
+        meta: { name: "Desk Mac", version: "1.0.0", capabilities: ["spaces-v1"] },
+        spaces: [
+          makeSpace({ id: "sp-today-a", name: "Today", builtin: "today", mine: true, count: 2, changed: 1, rev: 3, updatedAt: 500 }),
+          makeSpace({ id: "sp-feed-a", name: "Feed", builtin: "feed", mine: true, count: 4, changed: 2, rev: 5, updatedAt: 600 }),
+          makeSpace({ id: "sp-ideas-a", name: "Ideas", builtin: "ideas", mine: true, count: 1, rev: 2, updatedAt: 400 }),
+          makeSpace({ id: "sp-goals-a", name: "Goals", builtin: "goals", mine: true, count: 3, rev: 1, updatedAt: 300 }),
+          // Custom space named "Today" (no builtin): must NEVER merge by name.
+          makeSpace({ id: "sp-custom-today-a", name: "Today", builtin: undefined, mine: true, count: 1, rev: 1, updatedAt: 200 }),
+          // Another person's built-in space (mine: false): must stay separate.
+          makeSpace({ id: "sp-maya-today-a", name: "Today", builtin: "today", mine: false, by: { id: "m1", name: "Maya" }, can: "view", count: 2, rev: 1, updatedAt: 250 }),
+        ],
+      },
+      "host-a",
+      "Desk Mac",
+      "host-a",
+    ) as Partial<Parts>,
+    chats: {},
+    running: {},
+    texts: {},
+  };
+
+  const hostB: PooledHostSnapshot = {
+    pairing: { serverId: "host-b", name: "Studio Linux" } as any,
+    link: "online",
+    synced: true,
+    parts: scopePartsForHost(
+      {
+        meta: { name: "Studio Linux", version: "1.0.0", capabilities: ["spaces-v1"] },
+        spaces: [
+          makeSpace({ id: "sp-today-b", name: "Today", builtin: "today", mine: true, count: 3, changed: 2, rev: 7, updatedAt: 900 }),
+          makeSpace({ id: "sp-feed-b", name: "Feed", builtin: "feed", mine: true, count: 2, changed: 1, rev: 4, updatedAt: 800 }),
+          makeSpace({ id: "sp-ideas-b", name: "Ideas", builtin: "ideas", mine: true, count: 2, rev: 3, updatedAt: 700 }),
+          makeSpace({ id: "sp-goals-b", name: "Goals", builtin: "goals", mine: true, count: 1, rev: 2, updatedAt: 650 }),
+          // Custom space named "Today" on host B stays its own space too.
+          makeSpace({ id: "sp-custom-today-b", name: "Today", builtin: undefined, mine: true, count: 5, rev: 1, updatedAt: 350 }),
+          // Another person's built-in on host B stays separate.
+          makeSpace({ id: "sp-dev-today-b", name: "Today", builtin: "today", mine: false, by: { id: "m2", name: "Dev" }, can: "view", count: 1, rev: 1, updatedAt: 260 }),
+        ],
+      },
+      "host-b",
+      "Studio Linux",
+      "host-a",
+    ) as Partial<Parts>,
+    chats: {},
+    running: {},
+    texts: {},
+  };
+
+  assert.equal(isMergeableBuiltinSpace(makeSpace({ builtin: "today", mine: true }) as any), true);
+  assert.equal(isMergeableBuiltinSpace(makeSpace({ builtin: "today", mine: false }) as any), false);
+  assert.equal(isMergeableBuiltinSpace(makeSpace({ name: "Today", builtin: undefined, mine: true }) as any), false);
+
+  const merged = mergeUnifiedParts([hostA, hostB], "host-a", "host-a");
+  const spaces = merged.spaces ?? [];
+
+  // 4 merged built-ins + 2 custom "Today" spaces + 2 other-people's built-in "Today" spaces = 8.
+  assert.equal(spaces.length, 8);
+
+  const today = spaces.find((s) => s.id === mergedBuiltinSpaceId("today"));
+  assert.ok(today);
+  assert.equal(isMergedBuiltinSpaceId(today.id), true);
+  assert.equal(parseMergedBuiltinSpaceId(today.id), "today");
+  assert.equal(today.count, 5);
+  assert.equal(today.changed, 3);
+  assert.equal(today.rev, 10);
+  assert.equal(today.updatedAt, 900);
+  assert.equal(today.merged?.offlineCount, 0);
+  assert.deepEqual(
+    today.merged?.sources.map((s) => ({ hostId: s.hostId, rawSpaceId: s.rawSpaceId })),
+    [
+      { hostId: "host-a", rawSpaceId: "sp-today-a" },
+      { hostId: "host-b", rawSpaceId: "sp-today-b" },
+    ],
+  );
+
+  // Feed/Ideas/Goals are each deduplicated to one virtual space.
+  for (const kind of ["feed", "ideas", "goals"] as const) {
+    const matches = spaces.filter((s) => s.builtin === kind && s.mine);
+    assert.equal(matches.length, 1, kind);
+    assert.equal(matches[0]?.id, mergedBuiltinSpaceId(kind));
+    assert.equal(matches[0]?.merged?.sources.length, 2);
+  }
+
+  // Custom spaces named "Today" were NOT merged by name.
+  const customTodays = spaces.filter((s) => !s.builtin && s.name === "Today");
+  assert.equal(customTodays.length, 2);
+  assert.deepEqual(customTodays.map((s) => s.id), ["sp-custom-today-a", scopeId("host-b", "sp-custom-today-b")]);
+
+  // Other people's built-ins stayed separate per host.
+  const othersTodays = spaces.filter((s) => s.builtin === "today" && !s.mine);
+  assert.equal(othersTodays.length, 2);
+  assert.deepEqual(othersTodays.map((s) => s.id), ["sp-maya-today-a", scopeId("host-b", "sp-dev-today-b")]);
+});
+
+test("unified built-in spaces: spaces.read fan-out combines panels, interleaves cards newest-first, and routes actions to source host", () => {
+  const ctx = { primaryId: "host-a", settingsHostId: "host-a", poolIds: ["host-a", "host-b"] };
+
+  // Rescope remote host-b spaces.read first (as link.ts does on fan-out).
+  const remoteRead = rescopeMobileResult(
+    "spaces.read",
+    {
+      id: "sp-feed-b",
+      rev: 4,
+      seenAt: 150,
+      seenItems: { "card-b1": 150 },
+      panels: [{ id: "pan-b1", key: "k-b", botId: "bot-b", title: "Linux Metrics", blocks: [], hidden: false, size: "small", revision: 1, updatedAt: 400, routine: null }],
+      cards: [
+        { id: "card-b1", botId: "bot-b", kind: "feed", title: "Linux alert", body: "", status: "open", read: false, createdAt: 500, updatedAt: 500 },
+        { id: "card-b2", botId: "bot-b", kind: "feed", title: "Old linux note", body: "", status: "open", read: false, createdAt: 100, updatedAt: 100 },
+      ],
+    },
+    "host-b",
+    "host-a",
+  );
+
+  const primaryRead = {
+    id: "sp-feed-a",
+    rev: 5,
+    seenAt: 200,
+    seenItems: { "card-a1": 200 },
+    panels: [{ id: "pan-a1", key: "k-a", botId: "bot-a", title: "Mac Metrics", blocks: [], hidden: false, size: "small", revision: 1, updatedAt: 300, routine: null }],
+    cards: [
+      { id: "card-a1", botId: "bot-a", kind: "feed", title: "Mac digest", body: "", status: "open", read: false, createdAt: 350, updatedAt: 350 },
+    ],
+  };
+
+  const combined = combineMergedSpaceContent(
+    mergedBuiltinSpaceId("feed"),
+    9,
+    [
+      { hostId: "host-a", hostName: "Desk Mac", content: primaryRead as any },
+      { hostId: "host-b", hostName: "Studio Linux", content: remoteRead as any },
+    ],
+    0,
+  );
+
+  assert.equal(combined.contributingHosts, 2);
+  assert.equal(combined.offlineCount, 0);
+  // Panels from both hosts carry hostId & hostName.
+  assert.deepEqual(
+    combined.panels.map((p) => ({ id: p.id, hostId: p.hostId, hostName: p.hostName })),
+    [
+      { id: "pan-a1", hostId: "host-a", hostName: "Desk Mac" },
+      { id: scopeId("host-b", "pan-b1"), hostId: "host-b", hostName: "Studio Linux" },
+    ],
+  );
+  // Cards are interleaved newest first across hosts, each tagged with its host.
+  assert.deepEqual(
+    combined.cards.map((c) => ({ id: c.id, createdAt: c.createdAt, hostId: c.hostId, hostName: c.hostName })),
+    [
+      { id: scopeId("host-b", "card-b1"), createdAt: 500, hostId: "host-b", hostName: "Studio Linux" },
+      { id: "card-a1", createdAt: 350, hostId: "host-a", hostName: "Desk Mac" },
+      { id: scopeId("host-b", "card-b2"), createdAt: 100, hostId: "host-b", hostName: "Studio Linux" },
+    ],
+  );
+
+  // Actions on merged items route to each item's own source host via existing host scoping.
+  const remoteCardId = combined.cards[0]!.id;
+  const primaryCardId = combined.cards[1]!.id;
+  const remotePanelId = combined.panels[1]!.id;
+
+  assert.deepEqual(routeMobileCall("boardAct", [remoteCardId, "done"], ctx), {
+    kind: "single",
+    hostId: "host-b",
+    args: ["card-b1", "done"],
+  });
+  assert.deepEqual(routeMobileCall("boardAct", [primaryCardId, "clear"], ctx), {
+    kind: "single",
+    hostId: "host-a",
+    args: ["card-a1", "clear"],
+  });
+  assert.deepEqual(routeMobileCall("boardAct", [remoteCardId, "delete"], ctx), {
+    kind: "single",
+    hostId: "host-b",
+    args: ["card-b1", "delete"],
+  });
+  assert.deepEqual(routeMobileCall("spaces.patchState", [remotePanelId, { ticked: true }, "Ticked"], ctx), {
+    kind: "single",
+    hostId: "host-b",
+    args: ["pan-b1", { ticked: true }, "Ticked"],
+  });
+  assert.deepEqual(routeMobileCall("changePanel", [remotePanelId, "delete"], ctx), {
+    kind: "single",
+    hostId: "host-b",
+    args: ["pan-b1", "delete"],
+  });
+});
+
+test("unified built-in spaces: offline host drops out cleanly with quiet note and never blanks the space", () => {
+  const hostOnline: PooledHostSnapshot = {
+    pairing: { serverId: "host-a", name: "Desk Mac" } as any,
+    link: "online",
+    synced: true,
+    parts: scopePartsForHost(
+      {
+        meta: { name: "Desk Mac", version: "1.0.0", capabilities: ["spaces-v1"] },
+        spaces: [makeSpace({ id: "sp-today-a", name: "Today", builtin: "today", mine: true, count: 2, rev: 3 })],
+      },
+      "host-a",
+      "Desk Mac",
+      "host-a",
+    ) as Partial<Parts>,
+    chats: {},
+    running: {},
+    texts: {},
+  };
+  const hostOffline: PooledHostSnapshot = {
+    pairing: { serverId: "host-b", name: "Studio Linux" } as any,
+    link: "offline",
+    synced: true,
+    parts: scopePartsForHost(
+      {
+        meta: { name: "Studio Linux", version: "1.0.0", capabilities: ["spaces-v1"] },
+        spaces: [makeSpace({ id: "sp-today-b", name: "Today", builtin: "today", mine: true, count: 4, rev: 9 })],
+      },
+      "host-b",
+      "Studio Linux",
+      "host-a",
+    ) as Partial<Parts>,
+    chats: {},
+    running: {},
+    texts: {},
+  };
+
+  const spaces = mergeUnifiedSpaces([hostOnline, hostOffline], "host-a");
+  assert.equal(spaces.length, 1);
+  const today = spaces[0]!;
+  assert.equal(today.id, mergedBuiltinSpaceId("today"));
+  // Only the online host is included in sources; offline host dropped out cleanly.
+  assert.equal(today.merged?.sources.length, 1);
+  assert.equal(today.merged?.sources[0]?.hostId, "host-a");
+  assert.equal(today.merged?.offlineCount, 1);
+  assert.equal(today.count, 2);
+  assert.equal(offlineComputersNote(today.merged?.offlineCount ?? 0), "1 computer offline");
+  assert.equal(offlineComputersNote(2), "2 computers offline");
+  assert.equal(offlineComputersNote(0), undefined);
+
+  // Target resolution for panel creation picks the online host.
+  assert.deepEqual(resolveMergedSpaceTarget(today, "host-b"), {
+    hostId: "host-a",
+    spaceId: "sp-today-a",
+    rawSpaceId: "sp-today-a",
+  });
+
+  // If a second host fails during spaces.read fan-out, the online host's content still renders (never blanks).
+  const partial = combineMergedSpaceContent(
+    today.id,
+    today.rev,
+    [
+      {
+        hostId: "host-a",
+        hostName: "Desk Mac",
+        content: {
+          id: "sp-today-a",
+          rev: 3,
+          seenAt: 100,
+          panels: [{ id: "pan-a1", key: "k", botId: "bot-a", title: "Still Here", blocks: [], hidden: false, size: "small", revision: 1, updatedAt: 100, routine: null }],
+          cards: [],
+        },
+      },
+      { hostId: "host-b", hostName: "Studio Linux", failed: true },
+    ],
+    0,
+  );
+  assert.equal(partial.panels.length, 1);
+  assert.equal(partial.panels[0]?.title, "Still Here");
+  assert.equal(partial.contributingHosts, 1);
+  assert.equal(partial.offlineCount, 1);
+  assert.equal(offlineComputersNote(partial.offlineCount ?? 0), "1 computer offline");
 });

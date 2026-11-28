@@ -10,6 +10,15 @@ export type SpaceBuiltin = "today" | "feed" | "ideas" | "goals";
 export type SpaceNotify = "off" | "daily" | "all";
 export type SpaceStart = "checklist" | "tracker" | "chart" | "table" | "notes" | "app";
 
+export type MergedSpaceSource = {
+  hostId: string;
+  hostName: string;
+  spaceId: string;
+  rawSpaceId: string;
+  rev: number;
+  online: boolean;
+};
+
 /** A space as one person is sent it, in that person's order (the `spaces` part). */
 export type SpaceSummary = {
   id: string;
@@ -43,6 +52,14 @@ export type SpaceSummary = {
   here: { id: string; name: string; panelId?: string }[];
   rev: number;
   updatedAt: number;
+  /** Unified multi-host metadata for single-host spaces. */
+  hostId?: string;
+  hostName?: string;
+  /** Unified multi-host merged built-in space: the per-host spaces combined into this virtual space. */
+  merged?: {
+    sources: MergedSpaceSource[];
+    offlineCount: number;
+  };
 };
 
 export type PanelNote = { id: string; by: string; name: string; text: string; at: number };
@@ -70,7 +87,16 @@ export type PanelView = ShownPanel &
 export type SpaceCard = BoardItem & { spaceId?: string };
 /** The answer of `spaces.read(id)`. `seenAt` is when the person last opened it before this read. */
 /** `seenItems`: when the person opened a panel or card on its own since `seenAt` (item id → time); absent from an older link. */
-export type SpaceContent = { id: string; rev: number; seenAt: number; seenItems?: Record<string, number>; panels: PanelView[]; cards: SpaceCard[] };
+export type SpaceContent = {
+  id: string;
+  rev: number;
+  seenAt: number;
+  seenItems?: Record<string, number>;
+  panels: PanelView[];
+  cards: SpaceCard[];
+  offlineCount?: number;
+  contributingHosts?: number;
+};
 export type SpaceGrant = { id: string; can: "view" | "edit" };
 export type SpaceShareInput = { access: SpaceAccess; grants?: SpaceGrant[]; teamCan?: "view" | "edit" };
 
@@ -299,9 +325,20 @@ export const canRemoveNote = (note: Pick<PanelNote, "by">, me: string, space: Pi
  * The spaces a panel may move to from the panel's ⋯: every other space the person can change. A
  * panel leaves a space only when the person owns that space or asked for the panel.
  */
-export function moveTargets<T extends Pick<SpaceSummary, "id" | "can">>(spaces: T[], from: Pick<SpaceSummary, "id" | "can">, panel: { createdBy?: string }, me: string) {
+export function moveTargets<T extends Pick<SpaceSummary, "id" | "can" | "hostId" | "merged">>(
+  spaces: T[],
+  from: Pick<SpaceSummary, "id" | "can">,
+  panel: { createdBy?: string; hostId?: string },
+  me: string,
+) {
   if (from.can !== "own" && panel.createdBy !== me) return [];
-  return spaces.filter((s) => s.id !== from.id && s.can !== "view");
+  const panelHost = panel.hostId;
+  return spaces.filter((s) => {
+    if (s.id === from.id || s.can === "view") return false;
+    if (!panelHost) return true;
+    if (s.merged) return s.merged.sources.some((src) => src.hostId === panelHost);
+    return !s.hostId || s.hostId === panelHost;
+  });
 }
 
 /** The spaces Attach offers on a project: the person's own, not the built-ins, and any already attached there. */
@@ -328,5 +365,31 @@ export function askBot<B extends { id: string }>(bots: B[], panels: Pick<Panel, 
   return bots.find((b) => b.id === panels[0]?.botId) ?? bots[0];
 }
 
+/** Quiet note shown in a merged built-in space when one or more included computers are offline. */
+export function offlineComputersNote(count: number | undefined): string | null {
+  if (!(count && count > 0)) return null;
+  return count === 1 ? "1 computer offline" : count + " computers offline";
+}
+
+/** Signature of a space's read version so merged spaces re-read when contributing hosts or offline count change. */
+export function spaceReadSignature(space: Pick<SpaceSummary, "rev" | "merged">): string {
+  if (!space.merged) return String(space.rev);
+  const sources = space.merged.sources.map((s) => s.hostId + ":" + s.rev).join(",");
+  return space.rev + "|" + sources + "|off:" + space.merged.offlineCount;
+}
+
+export const mergedSpaceHostPicker = (
+  space: Pick<SpaceSummary, "merged"> | undefined,
+  preferredHostId: string | null | undefined,
+  fallbackHostId?: string | null,
+): { targetHostId: string | null; needsPick: boolean; choices: NonNullable<SpaceSummary["merged"]>["sources"] } => {
+  const choices = space?.merged?.sources ?? [];
+  if (!choices.length) return { targetHostId: null, needsPick: false, choices };
+  const picked =
+    (preferredHostId && choices.some((s) => s.hostId === preferredHostId) ? preferredHostId : null) ??
+    (fallbackHostId && choices.some((s) => s.hostId === fallbackHostId) ? fallbackHostId : null) ??
+    (choices.length === 1 ? choices[0]!.hostId : null);
+  return { targetHostId: picked, needsPick: choices.length > 1 && !picked, choices };
+};
 /** Initials for a person's circle: their first letter. */
 export const initial = (name: string) => (name.trim()[0] ?? "?").toUpperCase();
