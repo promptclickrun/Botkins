@@ -122,6 +122,23 @@ export function groupProjectChats<C extends Pick<Chat, "id" | "time" | "title" |
   return { groups, total: ordered.length, shown: visible.length, older };
 }
 
+export async function confirmAndRemoveProjectArtifact(
+  ask: (options: { title: string; body: string; confirm: string; danger: true }) => Promise<string | null>,
+  remove: (projectId: string, artifactId: string) => Promise<unknown>,
+  project: Pick<Project, "id" | "name">,
+  item: Pick<Artifact, "id" | "name">,
+): Promise<boolean> {
+  const ok = await ask({
+    title: "Remove from " + project.name + "?",
+    body: item.name + " stays in its chat and on the computer.",
+    confirm: "Remove",
+    danger: true,
+  });
+  if (!ok) return false;
+  await remove(project.id, item.id);
+  return true;
+}
+
 export type DesktopIndexRowKey = "jobs" | "todos" | "chats" | "artifacts" | "panels" | "changes" | "access" | "folders";
 export type DesktopIndexTarget = "jobs" | "todos" | "chats" | "artifacts" | "panels" | "changes" | "access" | "overview";
 

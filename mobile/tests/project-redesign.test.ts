@@ -3,6 +3,7 @@
 // index row subtitles/counts/badges, and hiding rows when features are off.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { act, createElement as el, Fragment } from "react";
 import {
   buildProjectIndex,
   filterProjectArtifacts,
@@ -14,6 +15,7 @@ import {
   WEEK_MS,
 } from "../src/features/projects/logic";
 import type { Artifact, Bot, ChatSummary, Panel, Project, SpaceSummary } from "../src/link/types";
+import { mount, phoneModule } from "./render-phone";
 
 const NOW = 1_750_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -259,4 +261,288 @@ test("buildProjectIndex hides rows when features are off and handles empty state
     ["access", "All bots", undefined],
     ["folders", "No folder", undefined],
   ]);
+});
+
+// ---- Confirmation guards on phone remove handlers -------------------------------------------
+
+type AlertCall = {
+  title: string;
+  message?: string;
+  buttons?: Array<{ text?: string; style?: string; onPress?: () => void }>;
+};
+
+function makePhoneTestEnv(options: {
+  project: Project;
+  bots: Bot[];
+  chats: ChatSummary[];
+  artifacts: Artifact[];
+  spaces: SpaceSummary[];
+}) {
+  const alerts: AlertCall[] = [];
+  const apiCalls: { setChatProject: unknown[][]; removeProjectArtifact: unknown[][]; spacesSetProject: unknown[][] } = {
+    setChatProject: [],
+    removeProjectArtifact: [],
+    spacesSetProject: [],
+  };
+  let lastPanConfig: any = null;
+
+  const stub = (name: string) => (props: any) => el(name, props, props?.children);
+  const icon = (name: string) => () => el("icon", { name });
+
+  const imports: Record<string, unknown> = {
+    "expo-router": {
+      router: { push() {}, back() {} },
+      Stack: { Screen: () => null },
+      useLocalSearchParams: () => ({ id: options.project.id }),
+    },
+    "@react-native-menu/menu": {
+      MenuView: stub("MenuView"),
+    },
+    "lucide-react-native": {
+      LayoutGrid: icon("LayoutGrid"),
+      MessagesSquare: icon("MessagesSquare"),
+      Paperclip: icon("Paperclip"),
+      Plus: icon("Plus"),
+    },
+    "react-native": {
+      Alert: {
+        alert: (title: string, message?: string, buttons?: AlertCall["buttons"]) => {
+          alerts.push({ title, message, buttons });
+        },
+      },
+      ScrollView: stub("ScrollView"),
+      View: stub("View"),
+    },
+    "react-native-gesture-handler": {
+      GestureDetector: ({ children }: any) => el(Fragment, {}, children),
+      usePanGesture: (cfg: any) => {
+        lastPanConfig = cfg;
+        return cfg;
+      },
+    },
+    "react-native-reanimated": {
+      __esModule: true,
+      default: { View: stub("AnimatedView") },
+      useSharedValue: (v: unknown) => ({ value: v }),
+      useAnimatedStyle: () => ({}),
+      withSpring: (v: unknown) => v,
+    },
+    "@/features/chat/navigate": { openChat() {} },
+    "@/features/bots/projectAccess": { canUseProject: () => true },
+    "@/features/artifacts/ArtifactBits": { ArtifactRow: stub("ArtifactRow") },
+    "@/features/spaces/data": {
+      openSpace() {},
+      useSpaces: () => options.spaces,
+      useSpacesOn: () => true,
+    },
+    "@/features/spaces/logic": {
+      spaceTitle: (s: SpaceSummary) => s.name,
+      rowLine: () => "1 panel",
+    },
+    "@/features/spaces/SpaceView": { PanelCard: stub("SpacePanelCard") },
+    "@/features/today/Today": { PanelCard: stub("PanelCard") },
+    "@/state/hooks": {
+      useBots: () => options.bots,
+      useCan: () => true,
+      useCapability: () => true,
+      useChats: () => options.chats,
+      useOnline: () => true,
+      usePart: (key: string) =>
+        ({
+          live: { requests: [], streams: {}, active: [] },
+          settings: { access: { allBots: true } },
+          panels: [],
+          projectPanels: [],
+        } as Record<string, unknown>)[key],
+    },
+    "@/state/link": {
+      api: {
+        setChatProject: (...args: unknown[]) => {
+          apiCalls.setChatProject.push(args);
+          return Promise.resolve();
+        },
+        removeProjectArtifact: (...args: unknown[]) => {
+          apiCalls.removeProjectArtifact.push(args);
+          return Promise.resolve([]);
+        },
+        projectArtifacts: () => Promise.resolve({ items: options.artifacts }),
+        "spaces.setProject": (...args: unknown[]) => {
+          apiCalls.spacesSetProject.push(args);
+          return Promise.resolve();
+        },
+      },
+      attempt: (p: Promise<unknown>) => p,
+    },
+    "@/state/prefs": {
+      usePrefs: (sel: (p: { backdrop: string }) => unknown) => sel({ backdrop: "clean" }),
+    },
+    "@/state/store": {
+      useApp: (sel: (s: unknown) => unknown) => sel({ synced: true, parts: { projects: [options.project] } }),
+    },
+    "@/state/time": { ago: () => "2m" },
+    "@/ui": {
+      Badge: stub("Badge"),
+      BotAvatar: stub("BotAvatar"),
+      Button: stub("Button"),
+      Chip: stub("Chip"),
+      EmptyState: stub("EmptyState"),
+      Field: stub("Field"),
+      Group: stub("Group"),
+      HoldMenu: stub("HoldMenu"),
+      IconButton: stub("IconButton"),
+      IconTile: stub("IconTile"),
+      Label: stub("Label"),
+      Loading: stub("Loading"),
+      Page: stub("Page"),
+      Row: stub("Row"),
+      Segmented: stub("Segmented"),
+      T: stub("T"),
+      radius: { pill: 999 },
+      space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 20 },
+      useTheme: () => ({ colors: { info: "#0aa", accent: "#36f" } }),
+    },
+    "./ProjectFolders": { FolderChoice: () => null },
+  };
+
+  return { imports, alerts, apiCalls, getLastPan: () => lastPanConfig };
+}
+
+test("phone ProjectChatsPage confirms before removing a chat (both hold menu and swipe Remove)", async () => {
+  const project = mkProject({ name: "Botkins" });
+  const chat = mkChat("c1", NOW - 1000, { title: "Notification filter", botId: "glory" });
+  const env = makePhoneTestEnv({
+    project,
+    bots: [mkBot("glory", "Glory")],
+    chats: [chat],
+    artifacts: [],
+    spaces: [],
+  });
+
+  const { ProjectChatsContent } = phoneModule("../src/features/projects/ProjectChatsPage", env.imports);
+  const mounted = await mount(el(ProjectChatsContent, { project }));
+  try {
+    // 1. Hold menu removal asks first; Cancel does not call setChatProject.
+    const holdMenu = mounted.root.root.findByType("HoldMenu" as any);
+    await act(async () => {
+      holdMenu.props.onPressAction({ nativeEvent: { event: "remove" } });
+    });
+    assert.equal(env.alerts.length, 1);
+    assert.equal(env.alerts[0]!.title, "Remove from Botkins?");
+    assert.match(env.alerts[0]!.message ?? "", /Notification filter/);
+    assert.equal(env.apiCalls.setChatProject.length, 0, "API must not run before confirm");
+
+    const cancelBtn = env.alerts[0]!.buttons?.find((b) => b.style === "cancel");
+    assert.ok(cancelBtn);
+    cancelBtn.onPress?.();
+    assert.equal(env.apiCalls.setChatProject.length, 0, "Cancel must not call API");
+
+    // Confirming calls setChatProject(chatId, null).
+    const removeBtn = env.alerts[0]!.buttons?.find((b) => b.style === "destructive");
+    assert.ok(removeBtn);
+    await act(async () => {
+      removeBtn.onPress?.();
+    });
+    assert.deepEqual(env.apiCalls.setChatProject, [["c1", null]]);
+
+    // 2. Swipe-left reveal + Remove button also asks first before calling setChatProject.
+    await act(async () => {
+      env.getLastPan()?.onDeactivate({ translationX: -50 });
+    });
+    const row = mounted.root.root.findByType("Row" as any);
+    const swipeRemoveBtn = row.props.trailing;
+    assert.equal(swipeRemoveBtn.props.title, "Remove");
+    await act(async () => {
+      swipeRemoveBtn.props.onPress();
+    });
+    assert.equal(env.alerts.length, 2);
+    assert.equal(env.apiCalls.setChatProject.length, 1, "Swipe Remove must confirm before calling API");
+    await act(async () => {
+      env.alerts[1]!.buttons?.find((b) => b.style === "destructive")?.onPress?.();
+    });
+    assert.deepEqual(env.apiCalls.setChatProject, [["c1", null], ["c1", null]]);
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("phone ProjectArtifactsPage confirms before calling removeProjectArtifact", async () => {
+  const project = mkProject({ name: "Botkins", artifacts: ["a1"] });
+  const artifact = {
+    id: "a1",
+    name: "mockup.png",
+    botId: "glory",
+    chatId: "c1",
+    chatTitle: "Design",
+    kind: "image",
+    mime: "image/png",
+    size: 1024,
+    time: NOW - 1000,
+    path: "/tmp/mockup.png",
+  } as Artifact;
+  const env = makePhoneTestEnv({
+    project,
+    bots: [mkBot("glory", "Glory")],
+    chats: [],
+    artifacts: [artifact],
+    spaces: [],
+  });
+
+  const { ProjectArtifactsContent } = phoneModule("../src/features/projects/ProjectArtifactsPage", env.imports);
+  const mounted = await mount(el(ProjectArtifactsContent, { project }));
+  try {
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const holdMenu = mounted.root.root.findByType("HoldMenu" as any);
+    await act(async () => {
+      holdMenu.props.onPressAction({ nativeEvent: { event: "remove" } });
+    });
+    assert.equal(env.alerts.length, 1);
+    assert.equal(env.alerts[0]!.title, "Remove from Botkins?");
+    assert.match(env.alerts[0]!.message ?? "", /mockup\.png/);
+    assert.equal(env.apiCalls.removeProjectArtifact.length, 0, "API must not run before confirm");
+
+    const removeBtn = env.alerts[0]!.buttons?.find((b) => b.style === "destructive");
+    assert.ok(removeBtn);
+    await act(async () => {
+      removeBtn.onPress?.();
+    });
+    assert.deepEqual(env.apiCalls.removeProjectArtifact, [["p1", "a1"]]);
+  } finally {
+    await mounted.unmount();
+  }
+});
+
+test("phone ProjectSpacesPage confirms before calling spaces.setProject(spaceId, null)", async () => {
+  const project = mkProject({ name: "Botkins" });
+  const space = { id: "sp1", name: "Release board", projectId: "p1", mine: true } as SpaceSummary;
+  const env = makePhoneTestEnv({
+    project,
+    bots: [],
+    chats: [],
+    artifacts: [],
+    spaces: [space],
+  });
+
+  const { ProjectSpacesContent } = phoneModule("../src/features/projects/ProjectSpacesPage", env.imports);
+  const mounted = await mount(el(ProjectSpacesContent, { project }));
+  try {
+    const holdMenu = mounted.root.root.findByType("HoldMenu" as any);
+    await act(async () => {
+      holdMenu.props.onPressAction({ nativeEvent: { event: "remove" } });
+    });
+    assert.equal(env.alerts.length, 1);
+    assert.equal(env.alerts[0]!.title, "Remove from Botkins?");
+    assert.match(env.alerts[0]!.message ?? "", /Release board/);
+    assert.equal(env.apiCalls.spacesSetProject.length, 0, "API must not run before confirm");
+
+    const removeBtn = env.alerts[0]!.buttons?.find((b) => b.style === "destructive");
+    assert.ok(removeBtn);
+    await act(async () => {
+      removeBtn.onPress?.();
+    });
+    assert.deepEqual(env.apiCalls.spacesSetProject, [["sp1", null]]);
+  } finally {
+    await mounted.unmount();
+  }
 });

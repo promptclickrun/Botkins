@@ -5,8 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SearchField } from "glisse";
 import { File, FileAudio, FileImage, FileText, FileVideo, Folder, FolderGit2, FolderKanban, MessageCircle, Paperclip, Plus, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
-import { dateLabel } from "./Pages";
-import { filterProjectArtifacts, pageItems, PROJECT_PAGE_SIZE } from "./projectLogic";
+import { dateLabel, useAsk } from "./Pages";
+import { confirmAndRemoveProjectArtifact, filterProjectArtifacts, pageItems, PROJECT_PAGE_SIZE } from "./projectLogic";
 import { memberTeam } from "./teamAccess";
 import type { Artifact, Chat, Project, State } from "./types";
 
@@ -134,6 +134,7 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
   const [limit, setLimit] = useState(PROJECT_PAGE_SIZE);
   const [error, setError] = useState("");
   const [picking, setPicking] = useState(false);
+  const dialogs = useAsk();
   const ids = (project.artifacts ?? []).join("\n");
   useEffect(() => {
     let live = true;
@@ -204,7 +205,13 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
                         <MessageCircle size={16} />
                       </button>
                     )}
-                    <button type="button" className="icon-button" aria-label={"Remove " + item.name + " from project"} title="Remove from project" onClick={() => act(api.removeProjectArtifact(project.id, item.id))}>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={"Remove " + item.name + " from project"}
+                      title="Remove from project"
+                      onClick={() => act(confirmAndRemoveProjectArtifact(dialogs.ask, api.removeProjectArtifact, project, item))}
+                    >
                       <X size={16} />
                     </button>
                   </li>
@@ -223,6 +230,7 @@ export function ProjectArtifacts({ state, project, openChat }: { state: State; p
         <p className="group-foot">{count ? plural(count, "artifact") : "Nothing attached yet."}</p>
       </section>
       {picking && <AttachArtifactDialog state={state} project={project} close={() => setPicking(false)} />}
+      {dialogs.node}
     </div>
   );
 }

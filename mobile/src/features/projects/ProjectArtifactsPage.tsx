@@ -3,7 +3,7 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { Paperclip, Plus } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
-import { View } from "react-native";
+import { Alert, View } from "react-native";
 import { ArtifactRow } from "@/features/artifacts/ArtifactBits";
 import { openChat } from "@/features/chat/navigate";
 import type { Artifact, Project } from "@/link/types";
@@ -38,6 +38,20 @@ export function ProjectArtifactsContent({ project }: { project: Project }) {
   }, [capable, online, project.id, ids]);
 
   const openAttach = () => router.push({ pathname: "/projects/attach", params: { id: project.id } });
+  const confirmRemoveArtifact = (artifact: Artifact) => {
+    Alert.alert(
+      "Remove from " + project.name + "?",
+      artifact.name + " stays in its chat and on the computer.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => void attempt(api.removeProjectArtifact(project.id, artifact.id), "Removed from " + project.name),
+        },
+      ],
+    );
+  };
   const count = items?.length ?? project.artifacts?.length ?? 0;
 
   const filtered = useMemo(() => {
@@ -119,7 +133,7 @@ export function ProjectArtifactsContent({ project }: { project: Project }) {
                         artifact.messageIndex !== undefined ? { at: String(artifact.messageIndex) } : undefined,
                       );
                     } else if (nativeEvent.event === "remove") {
-                      void attempt(api.removeProjectArtifact(project.id, artifact.id), "Removed from " + project.name);
+                      confirmRemoveArtifact(artifact);
                     }
                   }}
                 >

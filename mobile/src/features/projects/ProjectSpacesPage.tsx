@@ -5,7 +5,7 @@ import { MenuView } from "@react-native-menu/menu";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { LayoutGrid, Plus } from "lucide-react-native";
 import { useMemo } from "react";
-import { View } from "react-native";
+import { Alert, View } from "react-native";
 import { openSpace, useSpaces, useSpacesOn } from "@/features/spaces/data";
 import { rowLine as spaceRowLine, spaceTitle } from "@/features/spaces/logic";
 import { PanelCard as SpacePanelCard } from "@/features/spaces/SpaceView";
@@ -56,6 +56,21 @@ export function ProjectSpacesContent({ project }: { project: Project }) {
   const attachSpace = (spaceId: string) => {
     if (!spaceId) return;
     void attempt(api["spaces.setProject"](spaceId, project.id));
+  };
+
+  const confirmRemoveSpace = (spaceId: string, name: string) => {
+    Alert.alert(
+      "Remove from " + project.name + "?",
+      name + " stays in Spaces, outside this project.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => void attempt(api["spaces.setProject"](spaceId, null), "Removed from " + project.name),
+        },
+      ],
+    );
   };
 
   return (
@@ -127,7 +142,7 @@ export function ProjectSpacesContent({ project }: { project: Project }) {
                     ]}
                     onPressAction={({ nativeEvent }) => {
                       if (nativeEvent.event === "remove") {
-                        void attempt(api["spaces.setProject"](one.id, null), "Removed from " + project.name);
+                        confirmRemoveSpace(one.id, spaceTitle(one));
                       }
                     }}
                   >

@@ -179,6 +179,8 @@ try {
   assert.deepEqual((await snap()).projects.find((p) => p.id === project.id).artifacts, ["seeded-plan"]);
   await shot("project-artifacts");
   await button("Remove cutover-plan.md from project", artifacts).click();
+  const confirmRemove = page.getByRole("dialog", { name: "Remove from Mail migration?" });
+  await button("Remove", confirmRemove).click();
   await expect(artifacts).toContainText("Nothing attached yet.");
   assert.equal("artifacts" in (await snap()).projects.find((p) => p.id === project.id), false);
   await page.evaluate((id) => window.botkins.addProjectArtifact(id, "seeded-plan"), project.id);

@@ -3,7 +3,7 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { MessagesSquare, Plus } from "lucide-react-native";
 import { useMemo, useState } from "react";
-import { ScrollView, View } from "react-native";
+import { Alert, ScrollView, View } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { openChat } from "@/features/chat/navigate";
@@ -174,6 +174,25 @@ export function ProjectChatsContent({ project }: { project: Project }) {
     if (id) openChat(id);
   };
 
+  const confirmRemoveChat = (chat: ChatSummary) => {
+    const label = chat.title || bots.get(chat.botId)?.name || "this chat";
+    Alert.alert(
+      "Remove from " + project.name + "?",
+      label + " stays in Chats, outside this project.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            setRevealedId(null);
+            void attempt(api.setChatProject(chat.id, null), "Removed from " + project.name);
+          },
+        },
+      ],
+    );
+  };
+
   const caption =
     mine.length === 0
       ? "None in this project"
@@ -236,10 +255,7 @@ export function ProjectChatsContent({ project }: { project: Project }) {
                       status={chatActiveStatus(live, chat.id)}
                       revealed={revealedId === chat.id}
                       onReveal={(open) => setRevealedId(open ? chat.id : null)}
-                      onRemove={() => {
-                        setRevealedId(null);
-                        void attempt(api.setChatProject(chat.id, null), "Removed from " + project.name);
-                      }}
+                      onRemove={() => confirmRemoveChat(chat)}
                     />
                   ))}
                 </Group>

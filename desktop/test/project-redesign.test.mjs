@@ -1,8 +1,10 @@
 // Unit tests for desktop Projects redesign logic: Overview index, grouping, search, paging, feature hiding.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildDesktopProjectIndex,
+  confirmAndRemoveProjectArtifact,
   filterProjectArtifacts,
   groupProjectChats,
   pageItems,
@@ -156,4 +158,50 @@ test("buildDesktopProjectIndex produces all three groups and hides disabled feat
   assert.deepEqual(minimal.work.map((r) => r.key), ["todos", "chats"]);
   assert.deepEqual(minimal.files.map((r) => [r.key, r.title]), [["panels", "Panels"]]);
   assert.equal(minimal.settings[0].subtitle, "All bots");
+});
+
+test("desktop confirmAndRemoveProjectArtifact asks before calling removeProjectArtifact", async () => {
+  const prompts = [];
+  const calls = [];
+  const remove = async (projectId, artifactId) => {
+    calls.push([projectId, artifactId]);
+  };
+  const project = { id: "p1", name: "Botkins" };
+  const item = { id: "a1", name: "cutover-plan.md" };
+
+  // Cancel skips API.
+  const cancelled = await confirmAndRemoveProjectArtifact(
+    async (opts) => {
+      prompts.push(opts);
+      return null;
+    },
+    remove,
+    project,
+    item,
+  );
+  assert.equal(cancelled, false);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].title, "Remove from Botkins?");
+  assert.match(prompts[0].body, /cutover-plan\.md/);
+  assert.equal(prompts[0].confirm, "Remove");
+  assert.equal(prompts[0].danger, true);
+  assert.equal(calls.length, 0, "Cancel must not call removeProjectArtifact");
+
+  // Confirm calls removeProjectArtifact(project.id, item.id).
+  const confirmed = await confirmAndRemoveProjectArtifact(
+    async (opts) => {
+      prompts.push(opts);
+      return "ok";
+    },
+    remove,
+    project,
+    item,
+  );
+  assert.equal(confirmed, true);
+  assert.deepEqual(calls, [["p1", "a1"]]);
+
+  // Verify ProjectExtras.tsx wires the artifact Remove button through confirmAndRemoveProjectArtifact + dialogs.ask.
+  const src = readFileSync(new URL("../src/ProjectExtras.tsx", import.meta.url), "utf8");
+  assert.match(src, /confirmAndRemoveProjectArtifact\(dialogs\.ask,\s*api\.removeProjectArtifact,\s*project,\s*item\)/);
+  assert.match(src, /\{dialogs\.node\}/);
 });
