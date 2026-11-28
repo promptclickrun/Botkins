@@ -3,11 +3,11 @@
 // apps are the computer's own catalog, and Composio is one way in on the Apps page.
 import { router } from "expo-router";
 import { BookOpen, Package, Puzzle, Search } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { View } from "react-native";
 import type { MarketAgent } from "@/link/types";
 import { useCan, useCapability } from "@/state/hooks";
-import { BotAvatar, Button, Group, IconTile, Page, radius, Row, space, T, Tap, useTheme } from "@/ui";
+import { BotAvatar, Button, Group, IconTile, Loading, LoadingGrid, Page, radius, Row, space, T, Tap, useTabReady, useTheme } from "@/ui";
 import { agentHref } from "./agents/logic";
 import { BotArt } from "./art";
 import { cardLine, landingResults, landingShelves } from "./catalog";
@@ -60,7 +60,9 @@ function HeroSkeleton() {
 }
 
 export default function Market() {
+  const ready = useTabReady();
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [refreshing, setRefreshing] = useState(false);
   const templates = useTemplates();
   const apps = useMcpCatalog();
@@ -73,9 +75,10 @@ export default function Market() {
   const agents = useMemo(() => templates.value ?? [], [templates.value]);
   const entries = useMemo(() => apps.catalog?.entries ?? [], [apps.catalog]);
   const skills = useMemo(() => featured.value ?? [], [featured.value]);
-  const searching = query.trim().length > 0;
+  const searching = deferredQuery.trim().length > 0;
+  const searchPending = deferredQuery !== query;
   const shelves = useMemo(() => landingShelves({ agents, entries, skills }), [agents, entries, skills]);
-  const results = useMemo(() => (searching ? landingResults(query, { agents, entries, skills }) : undefined), [searching, query, agents, entries, skills]);
+  const results = useMemo(() => (searching ? landingResults(deferredQuery, { agents, entries, skills }) : undefined), [searching, deferredQuery, agents, entries, skills]);
 
   const reload = async () => {
     setRefreshing(true);
@@ -90,9 +93,17 @@ export default function Market() {
 
   return (
     <Page tab title="Market" keyboard onRefresh={reload} refreshing={refreshing}>
+      {!ready ? (
+        <Loading />
+      ) : (
+        <>
       <SearchField value={query} onChange={(text) => setQuery(text.slice(0, 200))} label="Search bots, apps and skills" />
 
-      {results ? (
+      {searchPending ? (
+        <View style={{ paddingVertical: 48, alignItems: "center" }}>
+          <LoadingGrid label="Loading" />
+        </View>
+      ) : results ? (
         <>
           {results.bots.length > 0 && (
             <View>
@@ -190,6 +201,8 @@ export default function Market() {
               {canPlugins && <Row leading={<IconTile icon={Package} size={32} />} title="Pi packages" chevron onPress={() => router.push("/market/pi" as never)} />}
             </Group>
           )}
+        </>
+      )}
         </>
       )}
     </Page>

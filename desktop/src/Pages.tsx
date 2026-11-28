@@ -5,8 +5,11 @@ import { useChatDrag } from "./useChatDrag";
 import { chatGroups, chatsPageUnreadChats, hasChatSections, isVisibleInChatList, movedSection, type ChatGroup } from "./chatSections";
 import { isRoutineChat } from "../desktop/link/routine-chat.mjs";
 import {
+  memo,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -50,6 +53,7 @@ import {
 } from "lucide-react";
 import { Button, Input, SearchField } from "glisse";
 import { BotAvatar, activityLabel, botActivity, chatActivity } from "./Avatar";
+import LoadingGrid from "./LoadingGrid";
 import type { Bot, Chat, Section, State } from "./types";
 import { memberTeam, teamCan } from "./teamAccess";
 import { botUnreadChats, unreadBotIds } from "./unread";
@@ -1117,7 +1121,7 @@ function chatMenuItems(state: State, chat: Chat, actions: PageActions, ask: AskF
   ];
 }
 
-export function ChatRow({
+export const ChatRow = memo(function ChatRow({
   state,
   chat,
   open,
@@ -1245,7 +1249,7 @@ export function ChatRow({
       {dialogs.node}
     </div>
   );
-}
+});
 
 /* ----------------------------------------------------------------- pages */
 
@@ -1541,7 +1545,7 @@ function newChatSection(actions: PageActions, ask: AskFn) {
  * chats), then Today, Yesterday and Earlier, or the archived ones. Each group is an uppercase label
  * over a card of rows. The Chats page and the chat list beside an open chat both draw this.
  */
-function ChatList({
+const ChatList = memo(function ChatList({
   state,
   actions,
   query,
@@ -1562,7 +1566,11 @@ function ChatList({
   const chats = state.chats;
   // Sections are there only when the computer in use keeps them ("chat-sections-v1").
   const sections = hasChatSections(state) ? state.chatSections ?? [] : undefined;
-  const groups = chatGroups({ chats, sections, query, filter, showRoutineChats, selectedChatId, botName: (c) => state.bots.find((b) => b.id === c.botId)?.name });
+  const botNames = useMemo(() => new Map(state.bots.map((b) => [b.id, b.name])), [state.bots]);
+  const groups = useMemo(
+    () => chatGroups({ chats, sections, query, filter, showRoutineChats, selectedChatId, botName: (c) => botNames.get(c.botId) }),
+    [chats, sections, query, filter, showRoutineChats, selectedChatId, botNames],
+  );
   const matched = groups.some((group) => group.chats.length);
   // A chat is dragged into a section only where its menu could move it there.
   const movable = !!sections && filter !== "Archived" && teamCan(state, "agents", "chat");
@@ -1668,7 +1676,7 @@ function ChatList({
       {dialogs.node}
     </>
   );
-}
+});
 
 /** Chats: the person's conversations, with search, the filters, Mark all as read, New section and New chat. Bots are on Home. */
 export function ChatsPage({
@@ -1683,6 +1691,9 @@ export function ChatsPage({
   setQuery: (q: string) => void;
 }) {
   const [filter, setFilter] = useState<ChatFilterName>("All");
+  const deferredFilter = useDeferredValue(filter);
+  const deferredQuery = useDeferredValue(query);
+  const pending = deferredFilter !== filter || deferredQuery !== query;
   const dialogs = useAsk();
   const unread = chatsPageUnreadChats(state.chats).length;
   const canChat = teamCan(state, "agents", "chat");
@@ -1725,7 +1736,11 @@ export function ChatsPage({
         />
         <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} />
       </div>
-      <ChatList state={state} actions={actions} query={query} filter={filter} />
+      {pending ? (
+        <LoadingGrid label="Loading" />
+      ) : (
+        <ChatList state={state} actions={actions} query={deferredQuery} filter={deferredFilter} />
+      )}
       {dialogs.node}
     </div>
   );
@@ -1748,6 +1763,9 @@ export function ChatListColumn({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ChatFilterName>("All");
+  const deferredFilter = useDeferredValue(filter);
+  const deferredQuery = useDeferredValue(query);
+  const pending = deferredFilter !== filter || deferredQuery !== query;
   const dialogs = useAsk();
   const unread = chatsPageUnreadChats(state.chats).length;
   const canChat = teamCan(state, "agents", "chat");
@@ -1783,7 +1801,11 @@ export function ChatListColumn({
         <ChatFilterChips state={state} actions={actions} filter={filter} setFilter={setFilter} selectedChatId={selectedChatId} />
       </div>
       <div className="chatlist-scroll">
-        <ChatList state={state} actions={actions} query={query} filter={filter} selectedChatId={selectedChatId} />
+        {pending ? (
+          <LoadingGrid compact label="Loading" />
+        ) : (
+          <ChatList state={state} actions={actions} query={deferredQuery} filter={deferredFilter} selectedChatId={selectedChatId} />
+        )}
       </div>
       {dialogs.node}
     </section>

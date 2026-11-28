@@ -16,6 +16,7 @@ const size = { height: 800, width: 390 };
 const insets = { top: 0, bottom: 0, right: 0, left: 0, tabRoom: 0 };
 const theme = { colors: {} };
 const ui = { useTheme: () => theme, useShape: () => insets, space: {}, badgeColors: () => ({}),
+  useFrozenWhenHidden: <T,>(v: T) => v, Loading: "Loading",
   BackdropLayer: "Backdrop", BotAvatar, Button: "Button", Chip: "Chip", Dot: "Dot", Group: "Group", HoldMenu: "Menu", Label: "Label",
   IconButton: "IconButton", IconTile: "IconTile", LinkBanner: "Banner", Row: "Row", T: "T", Tap: "Tap" };
 const animated = { __esModule: true, default: { ScrollView: "ScrollView", View: "View" }, FadeIn: { duration: () => 0 }, FadeOut: { duration: () => 0 },

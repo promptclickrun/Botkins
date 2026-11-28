@@ -1,8 +1,7 @@
 // The chips over the Chats list. Hold one, then move, to put it in its place (the drag of
 // src/features/spaces/sortable.tsx, side by side); VoiceOver has Move left and Move right. The leftmost
 // chip is the one the Chats screen opens on. The order is this phone's (`prefs.chatChipOrder`).
-import type { ReactNode } from "react";
-import { useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useWindowDimensions } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import type { BoardScroll } from "@/features/home/BotBoard";
@@ -18,8 +17,15 @@ export function ChatChips({ chips, picked, onPick, trailing }: { chips: ChatChip
   const { width } = useWindowDimensions();
   const view = useSharedValue(0);
   const content = useSharedValue(0);
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const scrollOffset = useSharedValue(0);
+  const scrollMax = useSharedValue(0);
+  const scrollEdges = useSharedValue({ top: 0, bottom: width });
   // The row scrolls sideways: its two ends are the screen's sides.
-  const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: width }) };
+  const scroll = useMemo<BoardScroll>(
+    () => ({ ref: scrollRef, offset: scrollOffset, max: scrollMax, edges: scrollEdges }),
+    [scrollRef, scrollOffset, scrollMax, scrollEdges],
+  );
   const { offset, max } = scroll;
   const onScroll = useAnimatedScrollHandler({
     onScroll: (event) => {

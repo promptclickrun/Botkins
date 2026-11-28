@@ -5,7 +5,7 @@
 // (VoiceOver has the same actions), and share it.
 import { useScrollToTop } from "expo-router";
 import { MailOpen, Plus } from "lucide-react-native";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedRef, useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -17,7 +17,7 @@ import { api, attempt } from "@/state/link";
 import { type PanelPin, usePrefs } from "@/state/prefs";
 import { panelHeadline } from "@/state/widgetData";
 import { useApp } from "@/state/store";
-import { BackdropLayer, Dot, EmptyState, Glass, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, radius, space as gap, T, Tap, type TextPromptOptions, tint, useShape, useTextPrompt, useTheme } from "@/ui";
+import { BackdropLayer, Dot, EmptyState, Glass, HoldMenu, IconButton, IconTile, Label, LinkBanner, Loading, Page, radius, space as gap, T, Tap, type TextPromptOptions, tint, useFrozenWhenHidden, useShape, useTabReady, useTextPrompt, useTheme } from "@/ui";
 import { markSpacesRead, openPanel, openShare, openSpace, setPanelPinned, setPinned, useArranging, useSpaceContent, useSpaces, useSpacesOn } from "./data";
 import { spaceIcon } from "./icons";
 import { panelPinsHere, rowLine, spaceSections, spaceTitle, withMove } from "./logic";
@@ -270,13 +270,47 @@ function SpaceGrid({ spaces, onNew }: { spaces: SpaceSummary[]; onNew?: () => vo
   );
 }
 
+const SpacesBody = memo(function SpacesBody({
+  synced,
+  spaces,
+  canCreate,
+  onNew,
+}: {
+  synced: boolean;
+  spaces: SpaceSummary[];
+  canCreate: boolean;
+  onNew: () => void;
+}) {
+  if (!synced) return <Loading />;
+  return (
+    <>
+      {!spaces.length ? (
+        <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? onNew : undefined} />
+      ) : (
+        <SpaceGrid spaces={spaces} onNew={canCreate ? onNew : undefined} />
+      )}
+      <PinnedPanels spaces={spaces} />
+    </>
+  );
+});
+
 export default function Spaces() {
+  const ready = useTabReady();
   const on = useSpacesOn();
-  const synced = useApp((state) => state.synced);
-  const spaces = useSpaces();
+  const rawSynced = useApp((state) => state.synced);
+  const rawSpaces = useSpaces();
   const canCreate = useCan("today", "create");
   const prompt = useTextPrompt();
-  const scroll: BoardScroll = { ref: useAnimatedRef<Animated.ScrollView>(), offset: useSharedValue(0), max: useSharedValue(0), edges: useSharedValue({ top: 0, bottom: 0 }) };
+  const frozen = useFrozenWhenHidden({ synced: rawSynced, spaces: rawSpaces });
+  const { synced, spaces } = frozen;
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const scrollOffset = useSharedValue(0);
+  const scrollMax = useSharedValue(0);
+  const scrollEdges = useSharedValue({ top: 0, bottom: 0 });
+  const scroll = useMemo<BoardScroll>(
+    () => ({ ref: scrollRef, offset: scrollOffset, max: scrollMax, edges: scrollEdges }),
+    [scrollRef, scrollOffset, scrollMax, scrollEdges],
+  );
   const [dragging, setDragging] = useState(false);
   // A page left in the middle of a drag must not keep its scrolling off.
   useEffect(() => () => setDragging(false), []);
@@ -305,8 +339,7 @@ export default function Spaces() {
   return (
     <SpacesFrame scroll={scroll} scrollEnabled={!dragging} actions={headerActions}>
       {prompt.node}
-      {!synced ? <Loading /> : !spaces.length ? <EmptyState title="No spaces yet" action={canCreate ? "New space" : undefined} onAction={canCreate ? ask : undefined} /> : <SpaceGrid spaces={spaces} onNew={canCreate ? ask : undefined} />}
-      {synced && <PinnedPanels spaces={spaces} />}
+      {!ready ? <Loading /> : <SpacesBody synced={synced} spaces={spaces} canCreate={canCreate} onNew={ask} />}
     </SpacesFrame>
   );
 }

@@ -15,12 +15,37 @@ export default function TabsLayout() {
   const theme = useTheme();
   const { colors } = theme;
   const badge = badgeColors(theme);
-  const chats = usePart("chats");
-  const tasks = usePart("tasks");
-  const requests = useApp((state) => state.parts.live?.requests.length ?? 0);
-  // Both counts stay mounted across the tabs. New words in a reply change neither list.
-  const unread = useMemo(() => chats?.filter(isChatsPageUnread).length ?? 0, [chats]);
-  const waiting = requests + useMemo(() => needsYou({ tasks }), [tasks]);
+  // Compute badge counts via memoized Zustand selectors (cached by reference) so unrelated store
+  // updates like streaming texts never rescan chats/tasks, and TabsLayout only re-renders when a
+  // badge count actually changes.
+  const selectUnread = useMemo(() => {
+    let lastChats: ReturnType<typeof useApp.getState>["parts"]["chats"];
+    let lastCount = 0;
+    return (state: ReturnType<typeof useApp.getState>) => {
+      const list = state.parts.chats;
+      if (list !== lastChats) {
+        lastChats = list;
+        let count = 0;
+        if (list) for (let i = 0; i < list.length; i++) if (isChatsPageUnread(list[i]!)) count++;
+        lastCount = count;
+      }
+      return lastCount;
+    };
+  }, []);
+  const selectWaiting = useMemo(() => {
+    let lastTasks: ReturnType<typeof useApp.getState>["parts"]["tasks"];
+    let lastTaskCount = 0;
+    return (state: ReturnType<typeof useApp.getState>) => {
+      const tasks = state.parts.tasks;
+      if (tasks !== lastTasks) {
+        lastTasks = tasks;
+        lastTaskCount = needsYou({ tasks });
+      }
+      return (state.parts.live?.requests.length ?? 0) + lastTaskCount;
+    };
+  }, []);
+  const unread = useApp(selectUnread);
+  const waiting = useApp(selectWaiting);
   // A computer without spaces, or a member who may not see them, has no Spaces tab.
   const spacesOn = useSpacesOn();
   const spaces = useCan("today", "view") && spacesOn;

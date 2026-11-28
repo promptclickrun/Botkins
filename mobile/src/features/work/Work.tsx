@@ -6,7 +6,7 @@
 import { type Href, router } from "expo-router";
 import { MenuView } from "@react-native-menu/menu";
 import { Activity as ActivityIcon, CircleDashed, FolderClosed, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { Alert, ScrollView, Switch, View } from "react-native";
 import { openChat } from "@/features/chat/navigate";
 import { projectColor } from "@/features/projects/colors";
@@ -16,7 +16,7 @@ import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { ago, clockTime, upcoming } from "@/state/time";
-import { BotAvatar, Button, Chip, Dot, EmptyState, Glass, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, Mascot, Page, radius, Row, space, switchColors, T, Tap, tint, useTheme } from "@/ui";
+import { BotAvatar, Button, Chip, Dot, EmptyState, Glass, Group, haptic, HoldMenu, IconButton, IconTile, Label, Loading, LoadingGrid, Mascot, Page, radius, Row, space, switchColors, T, Tap, tint, useFrozenWhenHidden, useTabReady, useTheme } from "@/ui";
 import { isFinished, routineName, routineSubtitle, SplitRow, taskSubtitle } from "./bits";
 import { buildNotifyTargetView } from "./notifyTargets";
 import { cronLabel, scheduleLabel } from "./cron";
@@ -413,16 +413,18 @@ function ProjectShelf({ chats, bots }: { chats: ChatSummary[]; bots: Map<string,
 }
 
 /** Tasks on the overview: the chips, then the first three of the chosen one. */
-function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> }) {
+const TaskPart = memo(function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> }) {
   const [view, pick] = useState<TaskView>(lastView);
-  const setView = (next: TaskView) => {
+  const deferredView = useDeferredValue(view);
+  const setView = useCallback((next: TaskView) => {
     lastView = next;
     pick(next);
-  };
+  }, []);
   const counts = useMemo(() => taskCounts(tasks), [tasks]);
-  const shown = useMemo(() => tasksIn(tasks, view).slice(0, 3), [tasks, view]);
+  const shown = useMemo(() => tasksIn(tasks, deferredView).slice(0, 3), [tasks, deferredView]);
   const total = counts.active + counts.later + counts.done;
-  const empty = view === "active" ? "Nothing in progress" : view === "later" ? "Nothing put off" : "Nothing done yet";
+  const empty = deferredView === "active" ? "Nothing in progress" : deferredView === "later" ? "Nothing put off" : "Nothing done yet";
+  const pending = deferredView !== view;
   return (
     <View>
       <PartHead title="Tasks" more={total ? "See all " + total : undefined} onMore={() => router.push("/work/tasks" as Href)} />
@@ -433,18 +435,24 @@ function TaskPart({ tasks, bots }: { tasks: BotTask[]; bots: Map<string, Bot> })
       ) : (
         <>
           <TaskChips view={view} onChange={setView} counts={counts} />
-          <Group inset={space.lg + 40 + space.md}>
-            {shown.length ? (
-              shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
-            ) : (
-              <Row title={empty} />
-            )}
-          </Group>
+          {pending ? (
+            <View style={{ paddingVertical: 28, alignItems: "center" }}>
+              <LoadingGrid label="Loading" />
+            </View>
+          ) : (
+            <Group inset={space.lg + 40 + space.md}>
+              {shown.length ? (
+                shown.map((task) => <TaskRow key={task.id} task={task} bot={task.botId ? bots.get(task.botId) : undefined} reviewer={task.reviewerBotId ? bots.get(task.reviewerBotId) : undefined} />)
+              ) : (
+                <Row title={empty} />
+              )}
+            </Group>
+          )}
         </>
       )}
     </View>
   );
-}
+});
 
 /** One routine in "Up next": when it runs, its name and bot, and its switch. */
 function UpNextRow({ routine }: { routine: RoutineEntry }) {
@@ -560,18 +568,56 @@ function NewMenu({ member, canRoutine }: { member: boolean; canRoutine: boolean 
   );
 }
 
-export default function Work() {
-  const synced = useApp((state) => state.synced);
-  const allBots = useBots();
-  const chats = useChats();
-  const routines = useRoutines();
-  const allTasks = usePart("tasks");
-  const canToday = useCan("today", "view");
-  const canCreateToday = useCan("today", "create");
-  const member = !!useMember();
+const WorkContent = memo(function WorkContent({
+  synced,
+  allBots,
+  chats,
+  routines,
+  allTasks,
+  canToday,
+  member,
+}: {
+  synced: boolean;
+  allBots: Bot[];
+  chats: ChatSummary[];
+  routines: RoutineEntry[];
+  allTasks: BotTask[] | undefined;
+  canToday: boolean;
+  member: boolean;
+}) {
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
   const tasks = useMemo(() => (allTasks ?? []).filter((task) => task.status !== "archived"), [allTasks]);
   const needs = useNeeds(tasks, bots);
+  if (!synced) return <Loading />;
+  return (
+    <>
+      <NeedsYou needs={needs} />
+      {!member && <ProjectShelf chats={chats} bots={bots} />}
+      {!member && <TaskPart tasks={tasks} bots={bots} />}
+      {canToday && <RoutinePart routines={routines} />}
+    </>
+  );
+});
+
+export default function Work() {
+  const ready = useTabReady();
+  const rawSynced = useApp((state) => state.synced);
+  const rawBots = useBots();
+  const rawChats = useChats();
+  const rawRoutines = useRoutines();
+  const rawTasks = usePart("tasks");
+  const canToday = useCan("today", "view");
+  const canCreateToday = useCan("today", "create");
+  const member = !!useMember();
+  // Hold the last visible snapshot while another tab is active so background chat/task updates
+  // don't re-render the hidden Work tab.
+  const frozen = useFrozenWhenHidden({
+    synced: rawSynced,
+    allBots: rawBots,
+    chats: rawChats,
+    routines: rawRoutines,
+    allTasks: rawTasks,
+  });
   return (
     <Page
       tab
@@ -583,15 +629,18 @@ export default function Work() {
         </View>
       }
     >
-      {synced && <NeedsYou needs={needs} />}
-      {!synced ? (
+      {!ready ? (
         <Loading />
       ) : (
-        <>
-          {!member && <ProjectShelf chats={chats} bots={bots} />}
-          {!member && <TaskPart tasks={tasks} bots={bots} />}
-          {canToday && <RoutinePart routines={routines} />}
-        </>
+        <WorkContent
+          synced={frozen.synced}
+          allBots={frozen.allBots}
+          chats={frozen.chats}
+          routines={frozen.routines}
+          allTasks={frozen.allTasks}
+          canToday={canToday}
+          member={member}
+        />
       )}
     </Page>
   );
