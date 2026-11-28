@@ -639,6 +639,16 @@ export interface WorkflowInput {
 export type WorkflowStepStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "skipped" | "rejected";
 export type WorkflowRunStatus = "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
+export interface WorkflowGithubUncertainInfo {
+  nodeId?: string;
+  stepLabel?: string;
+  action: string;
+  repository: string;
+  number?: number | null;
+  pullRequest?: boolean | null;
+  url?: string | null;
+}
+
 export interface WorkflowStepRun {
   nodeId: string;
   kind: WorkflowNodeKind;
@@ -647,6 +657,8 @@ export interface WorkflowStepRun {
   startedAt?: number | null;
   finishedAt?: number | null;
   error?: string | null;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   summary?: string;
   branch?: string;
   decision?: "approved" | "rejected";
@@ -668,6 +680,8 @@ export interface WorkflowRun {
   finishedAt?: number | null;
   retriedAt?: number | null;
   error?: string | null;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   pendingApproval?: {
     nodeId: string;
     label: string;
@@ -1638,7 +1652,7 @@ declare global {
       workflowPause(id: string): Promise<Workflow>;
       workflowResume(id: string): Promise<Workflow>;
       workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): Promise<WorkflowRun>;
-      workflowRetryRun(runId: string, nodeId?: string): Promise<WorkflowRun>;
+      workflowRetryRun(runId: string, nodeId?: string | null, options?: { allowUncertainRetry?: boolean }): Promise<WorkflowRun>;
       workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): Promise<WorkflowRun>;
       workflowCancelRun(runId: string): Promise<WorkflowRun>;
       workflowRotateWebhookSecret(workflowId: string, nodeId: string): Promise<{ routeId: string; secret: string }>;

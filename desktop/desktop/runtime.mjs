@@ -849,7 +849,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     workflowPause: (id) => workspace.workflows.pause(id),
     workflowResume: (id) => workspace.workflows.resume(id),
     workflowRun: (id, options) => workspace.workflows.runManual(id, options ?? {}),
-    workflowRetryRun: (runId, nodeId) => workspace.workflows.retryRun(runId, nodeId ?? null),
+    workflowRetryRun: (runId, nodeId, options) => workspace.workflows.retryRun(runId, nodeId ?? null, options && typeof options === "object" ? { allowUncertainRetry: options.allowUncertainRetry === true } : {}),
     workflowRespondApproval: (runId, nodeId, decision, note) => workspace.workflows.respondApproval(runId, nodeId ?? null, decision, note ?? ""),
     workflowCancelRun: (runId) => workspace.workflows.cancelRun(runId),
     workflowRotateWebhookSecret: (workflowId, nodeId) => workspace.workflows.rotateWebhookSecret(workflowId, nodeId),

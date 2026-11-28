@@ -1915,6 +1915,8 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
   ws.workflows.retryRun(run.id);
   await ws.workflows.waitForRun(run.id);
   assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, "githubUncertain");
+  assert.equal(ws.workflows.getRun(run.id).steps.o1.errorCode, "githubUncertain");
   assert.match(ws.workflows.getRun(run.id).error, /githubUncertain/);
   assert.equal(executeCalls, 1);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
@@ -1923,6 +1925,7 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
   ws.workflows.retryRun(run.id);
   await ws.workflows.waitForRun(run.id);
   assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, "githubUncertain");
   assert.match(ws.workflows.getRun(run.id).error, /githubUncertain/);
   assert.equal(executeCalls, 1);
 
@@ -1930,6 +1933,8 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
   ws.workflows.retryRun(run.id, null, { allowUncertainRetry: true });
   await ws.workflows.waitForRun(run.id);
   assert.equal(ws.workflows.getRun(run.id).status, "completed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, null);
+  assert.equal(ws.workflows.getRun(run.id).steps.o1.errorCode, null);
   assert.equal(executeCalls, 2);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`], undefined);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:3`]?.status, "done");

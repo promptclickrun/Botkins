@@ -505,6 +505,86 @@ export function isIssueOnlyGithubTrigger(triggerNodes: ReadonlyArray<{ triggerKi
   return allEvents.every((ev) => ev.startsWith("issue."));
 }
 
+export const GITHUB_UNCERTAIN_WARNING =
+  "GitHub may already have this. Retrying could post twice.";
+
+export interface WorkflowStepLike {
+  nodeId: string;
+  kind?: string;
+  label?: string;
+  status?: string;
+  error?: string | null;
+  errorCode?: string | null;
+}
+
+export interface WorkflowRunLike {
+  id: string;
+  status?: string;
+  error?: string | null;
+  errorCode?: string | null;
+  steps?: Record<string, WorkflowStepLike> | null;
+}
+
+/** Returns true if an error code or error text indicates a `githubUncertain` failure. */
+export function isGithubUncertainError(errorCode?: string | null, errorText?: string | null): boolean {
+  if (errorCode === "githubUncertain") return true;
+  if (typeof errorText === "string" && /\bgithubUncertain\b/.test(errorText)) return true;
+  return false;
+}
+
+/** Returns true if a single workflow step failed with `githubUncertain`. */
+export function isGithubUncertainStep(step: WorkflowStepLike | null | undefined): boolean {
+  if (!step || step.status !== "failed") return false;
+  return isGithubUncertainError(step.errorCode, step.error);
+}
+
+/**
+ * Finds the failed `githubUncertain` step on a workflow run, if any.
+ * Checks failed steps first (preferring `errorCode === "githubUncertain"` or `githubUncertain` in `step.error`),
+ * and falls back to the failed output step when `githubUncertain` is recorded at the run level.
+ */
+export function findGithubUncertainStep<S extends WorkflowStepLike>(
+  run: (WorkflowRunLike & { steps?: Record<string, S> | null }) | null | undefined,
+): S | null {
+  if (!run || run.status !== "failed") return null;
+  const steps = Object.values(run.steps ?? {});
+  for (const step of steps) {
+    if (isGithubUncertainStep(step)) return step;
+  }
+  if (isGithubUncertainError(run.errorCode, run.error)) {
+    const failedOutput = steps.find((s) => s.status === "failed" && s.kind === "output");
+    if (failedOutput) return failedOutput;
+    const anyFailed = steps.find((s) => s.status === "failed");
+    if (anyFailed) return anyFailed;
+  }
+  return null;
+}
+
+/** Returns true when a failed workflow run ended with `githubUncertain`. */
+export function hasGithubUncertainFailure(run: WorkflowRunLike | null | undefined): boolean {
+  if (!run || run.status !== "failed") return false;
+  if (isGithubUncertainError(run.errorCode, run.error)) return true;
+  return Object.values(run.steps ?? {}).some((s) => isGithubUncertainStep(s));
+}
+
+/**
+ * Finds the newest failed run where a specific GitHub output node failed with `githubUncertain`.
+ * Useful for surfacing the warning and owner-only "Retry anyway" control directly on the step inspector/sheet.
+ */
+export function latestGithubUncertainRunForNode<R extends WorkflowRunLike>(
+  runs: readonly R[] | null | undefined,
+  nodeId: string | null | undefined,
+): R | null {
+  if (!nodeId || !Array.isArray(runs) || !runs.length) return null;
+  for (const run of runs) {
+    if (!run || run.status !== "failed") continue;
+    const step = run.steps?.[nodeId];
+    if (isGithubUncertainStep(step)) return run;
+    if (step?.status === "failed" && isGithubUncertainError(run.errorCode, run.error)) return run;
+  }
+  return null;
+}
+
 /** Collects target repository names relevant to a GitHub output node (explicit repository or upstream GitHub trigger repos). */
 export function resolveOutputTargetRepos(
   outputConfig: Record<string, any> | null | undefined,

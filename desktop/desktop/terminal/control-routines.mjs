@@ -396,8 +396,11 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "workflows.run"([id, options]) {
       return await handlers.workflowRun(id, options);
     },
-    async "workflows.retry"([runId, fromNodeId]) {
-      return await handlers.workflowRetryRun(runId, fromNodeId);
+    async "workflows.retry"([runId, fromNodeId, options]) {
+      const retryOpts = options && typeof options === "object" && !Array.isArray(options)
+        ? { allowUncertainRetry: options.allowUncertainRetry === true }
+        : {};
+      return await handlers.workflowRetryRun(runId, fromNodeId ?? null, retryOpts);
     },
     async "workflows.approve"([runId, nodeId, decision, note]) {
       return await handlers.workflowRespondApproval(runId, nodeId, decision, note);
