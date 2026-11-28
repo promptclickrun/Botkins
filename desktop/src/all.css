@@ -1,0 +1,115 @@
+/*
+ * The All page: every place as a tile, and what the side menu shows while a place is dragged onto
+ * it. Built on the shared page parts (ui.css). Theme tokens only.
+ */
+.all-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
+  gap: 12px;
+}
+.all-tile {
+  position: relative;
+  min-width: 0;
+  border-radius: 16px;
+  background: var(--card);
+  transition: background-color 120ms ease;
+}
+.all-tile:hover,
+.all-tile:focus-within {
+  background: var(--hover);
+}
+.all-tile.dragging {
+  opacity: 0.45;
+}
+.all-open {
+  width: 100%;
+  min-height: 104px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.all-icon {
+  height: 22px;
+  margin-bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-2);
+}
+.all-name {
+  font-size: calc(15px * var(--text-scale));
+  line-height: 1.35;
+  font-weight: 600;
+}
+.all-line {
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.4;
+  color: var(--muted);
+}
+.all-line.waiting {
+  color: var(--warning);
+}
+/* The pin: quiet until the tile is pointed at or it has the keyboard; a tile on the menu always says so. */
+.all-pin {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+  opacity: 0;
+  cursor: pointer;
+}
+.all-pin.on,
+.all-tile:hover .all-pin,
+.all-pin:focus-visible {
+  opacity: 1;
+}
+.all-pin:hover {
+  background: var(--active);
+  color: var(--ink);
+}
+.all-status {
+  flex: none;
+}
+/* A row of the side menu held over the page: the page is where it comes off. */
+.all-page.taking .all-grid {
+  outline: 1.5px dashed var(--line-strong, var(--line));
+  outline-offset: 10px;
+  border-radius: 16px;
+}
+.all-page.taking.over .all-grid {
+  outline-color: var(--ink);
+}
+
+/* ---- The side menu while a place is dragged --------------------------------------------------- */
+.shell > aside > nav button.dragging {
+  opacity: 0.45;
+}
+/* Where the place would land: a line above the row. */
+.shell > aside > nav button.drop-before {
+  box-shadow: 0 -2px 0 0 var(--ink);
+}
+.shell > aside > nav.taking-place {
+  border-radius: 10px;
+  outline: 1.5px dashed var(--line-strong, var(--line));
+  outline-offset: 3px;
+}

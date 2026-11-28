@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { REMOTE_METHODS } from "../link-host/methods.mjs";
 import { MockBackend } from "../link-host/mock-backend.mjs";
 import { liveTurnDisplay } from "../src/features/chat/liveDisplay";
-import { clockToDate, dateToClock, desktopFonts, desktopFontShown, everyBotAllowed, grantSummary, isHexColor, isUsualOrder, megabytes, movePlace, PLACES, placeOrder, platformName, shareLine, tokens, usageDays, cachePercent } from "../src/features/settings/computer";
+import { clockToDate, dateToClock, desktopFonts, desktopFontShown, everyBotAllowed, grantSummary, isHexColor, isUsualMenu, isUsualOrder, megabytes, menuOf, movePlace, placeMoved, PLACES, placeOrder, placeShown, spacesShown, usualMenu, platformName, shareLine, tokens, usageDays, cachePercent } from "../src/features/settings/computer";
 import { filterSkills, folderName, skillOrigin, skillsIn } from "../src/features/skills/shared";
 import { importText, keyHeaderOf, listText } from "../src/features/tools/shared";
 import type { SkillInfo, UsageReport } from "../src/link/types";
@@ -17,14 +17,55 @@ test("every call the new controls make is one a phone may make", () => {
 });
 
 test("the side menu's order is made whole, and a place moves one step at a time", () => {
+  assert.deepEqual([...PLACES], ["Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"]);
   assert.deepEqual(placeOrder(undefined), [...PLACES]);
-  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]), ["Wiki", "Home", "Today", "Chats", "Work", "Market"]);
+  assert.deepEqual(placeOrder(["Wiki", "Nope", "Home", "Wiki"]).slice(0, 4), ["Wiki", "Home", "Today", "Chats"]);
+  assert.equal(placeOrder(["Wiki", "Nope", "Home", "Wiki"]).length, PLACES.length);
   const order = placeOrder();
-  assert.deepEqual(movePlace(order, "Today", -1), ["Today", "Home", "Chats", "Work", "Wiki", "Market"]);
-  assert.deepEqual(movePlace(order, "Market", 1), order);
+  assert.deepEqual(movePlace(order, "Today", -1).slice(0, 3), ["Today", "Home", "Chats"]);
+  assert.deepEqual(movePlace(order, "Usage", 1), order);
   assert.deepEqual(movePlace(order, "Home", -1), order);
   assert.equal(isUsualOrder(order), true);
   assert.equal(isUsualOrder(movePlace(order, "Chats", 1)), false);
+});
+
+test("the computer's side menu: the places on it in its order, then the ones on its All page", () => {
+  const usual = usualMenu();
+  assert.deepEqual(usual.hidden, ["Projects", "Tasks", "Routines", "Wiki", "Market", "Activity", "Usage"]);
+  // Without spaces Today is a place. With them it is a space, and the section of spaces is its own switch.
+  assert.deepEqual(menuOf(usual, false), { menu: ["Home", "Today", "Chats", "Work"], off: ["Projects", "Tasks", "Routines", "Wiki", "Market", "Activity", "Usage"] });
+  assert.deepEqual(menuOf(usual, true).menu, ["Home", "Chats", "Work"]);
+  assert.equal(spacesShown(usual), true);
+  assert.equal(isUsualMenu(usual, true), true);
+  assert.equal(isUsualMenu(usual, false), true);
+
+  // A place switched on joins the end of the menu, and keeps that position in what is saved.
+  const withWiki = placeShown(usual, true, "Wiki", true);
+  assert.deepEqual(withWiki.order?.slice(0, 4), ["Home", "Chats", "Work", "Wiki"]);
+  assert.equal(withWiki.hidden.includes("Wiki"), false);
+  assert.deepEqual(menuOf(withWiki, true).menu, ["Home", "Chats", "Work", "Wiki"]);
+  assert.equal(isUsualMenu(withWiki, true), false);
+  // Switched off, it is on the All page again, and the order is left alone.
+  assert.deepEqual(placeShown(withWiki, true, "Wiki", false), { hidden: usual.hidden });
+  // A move is among the places on the menu; the ones off it are not steps on the way.
+  assert.deepEqual(menuOf({ ...withWiki, ...placeMoved(withWiki, true, "Wiki", -1) }, true).menu, ["Home", "Chats", "Wiki", "Work"]);
+  assert.equal(placeMoved(withWiki, true, "Wiki", 1), undefined);
+  assert.equal(placeMoved(withWiki, true, "Home", -1), undefined);
+  assert.equal(placeMoved(withWiki, true, "Usage", -1), undefined, "a place off the menu has no position");
+  assert.equal(isUsualMenu({ ...usual, ...placeMoved(usual, false, "Chats", -1) }, false), false);
+  // The section of spaces goes on and off without a position.
+  const noSpaces = placeShown(usual, true, "Spaces", false);
+  assert.deepEqual(noSpaces, { hidden: ["Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"] });
+  assert.equal(spacesShown(noSpaces), false);
+  assert.equal(isUsualMenu({ ...usual, ...noSpaces }, true), false);
+  assert.deepEqual(placeShown({ ...usual, ...noSpaces }, true, "Spaces", true), { hidden: usual.hidden });
+
+  // A computer from before places could be taken off the menu sends an order alone: its six places, all on the menu.
+  const before = { order: ["Home", "Today", "Chats", "Work", "Wiki", "Market"] };
+  assert.deepEqual(menuOf(before, false), { menu: ["Home", "Today", "Chats", "Work", "Wiki", "Market"], off: [] });
+  assert.equal(isUsualMenu(before, false), true);
+  assert.deepEqual(placeMoved(before, false, "Wiki", -1), { order: ["Home", "Today", "Chats", "Wiki", "Work", "Market"] });
+  assert.equal(isUsualMenu({ order: ["Wiki", "Home"] }, false), false);
 });
 
 test("the computer's fonts are the desktop's, with Windows' own names and faces", () => {
@@ -132,11 +173,16 @@ test("skills show where they come from, and the filter finds by name, words or o
 
 test("the demo computer keeps part of the side menu and Background, and can refuse startup", async () => {
   const backend = new MockBackend();
+  const off = ["Projects", "Tasks", "Routines", "Wiki", "Market", "Activity", "Usage"];
+  assert.deepEqual(backend.state.settings.sidebar.hidden, off);
   await backend.call("setPreferences", [{ sidebar: { order: ["Wiki"] } }]);
-  assert.deepEqual(backend.state.settings.sidebar, { order: ["Wiki", "Home", "Today", "Chats", "Work"], collapsed: true });
+  assert.deepEqual(backend.state.settings.sidebar, { order: ["Wiki", "Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Market", "Activity", "Usage"], hidden: off, collapsed: true });
+  await backend.call("setPreferences", [{ sidebar: { hidden: ["Usage", "Nope", "Home"] } }]);
+  assert.deepEqual(backend.state.settings.sidebar.hidden, ["Home", "Usage"]);
   await backend.call("setPreferences", [{ sidebar: { collapsed: false } }]);
   assert.equal(backend.state.settings.sidebar.collapsed, false);
   assert.equal(backend.state.settings.sidebar.order[0], "Wiki");
+  assert.deepEqual(backend.state.settings.sidebar.hidden, ["Home", "Usage"]);
 
   await backend.call("setPreferences", [{ appearance: { colorTheme: "fern" } }]);
   assert.equal(backend.state.settings.appearance.themePicked, true);

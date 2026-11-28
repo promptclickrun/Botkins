@@ -18,7 +18,7 @@ import {
   X,
   ShieldCheck,
 } from "lucide-react";
-import { MOD, placeOrder } from "./places";
+import { MOD, PLACES, menuPlaces, type Arranged, type Place } from "./places";
 import { PlaceIcon } from "./PlaceIcon";
 import Composer from "./Composer";
 import Today from "./Today";
@@ -45,6 +45,8 @@ import NewChat from "./NewChat";
 import ProjectsPage, { type ProjectsTarget } from "./Projects";
 import WikiPage, { type WikiTarget } from "./Wiki";
 import { AllSpaces, SidebarSpaces, SpacePage } from "./SpacePage";
+import AllPage from "./AllPage";
+import { MenuPlaces } from "./MenuPlaces";
 import { hasSpaces } from "./spaces";
 import Welcome from "./Welcome";
 import FirstBot from "./FirstBot";
@@ -76,7 +78,8 @@ const SETUP_KEY = "botkins.setupPath";
 const CHAT_LIST_KEY = "botkins.chatList";
 // Work is three pages with tabs between them (Routines, Projects, Tasks); Activity and Usage open from its top.
 // With Spaces ("spaces-v1"), a space's page and All spaces take the Today page's place (src/SpacePage.tsx).
-type Page = "Home" | "Today" | "Chats" | "Wiki" | "Market" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces";
+// All is the side menu's last place: every place as a tile (src/AllPage.tsx).
+type Page = "Home" | "Today" | "Chats" | "Wiki" | "Market" | WorkTab | "Activity" | "Usage" | "Space" | "AllSpaces" | "All";
 const WORK_PAGES: Page[] = [...WORK_TABS, "Activity", "Usage"];
 type Modal = "" | "bot" | "chat" | "account" | "settings" | "model";
 const personalChat = (chat: Chat) =>
@@ -224,6 +227,21 @@ function App() {
     setSettingsBot(botId);
     setModal("settings");
   }
+  // The window opens on the person's bot: a workspace that is already set up starts in the primary
+  // bot's Main chat, where the computer keeps one, and not on Home. Decided once, when the first
+  // state arrives: a chat a notification opened meanwhile stays, a first run goes its own way
+  // (Welcome, then the first bot's chat), and Home is one click away in the side menu.
+  // What the last change to the side menu did, for the All page and a screen reader.
+  const [arranged, setArranged] = useState("");
+  const launched = useRef(false);
+  useEffect(() => {
+    if (launched.current || !state) return;
+    launched.current = true;
+    const primary = state.bots[0];
+    const keeps = !state.remote?.using || state.remote.using.capabilities.includes("main-chat-v1");
+    if (!state.settings.onboarded || !primary || !keeps || !teamCan(state, "agents", "chat") || chatId || page !== "Home" || modal || profileId) return;
+    void mainChat(primary.id).catch(() => {});
+  }, [!!state]);
   // The model providers, shared with the pickers and Settings (src/providers.ts); asked again when they change.
   const { providers } = useProviders();
   const { models } = useModelCatalog();
@@ -905,14 +923,29 @@ function App() {
   const memberHost = !!member || state.remote?.using?.member === true;
   const canViewAgents = teamCan(state, "agents");
   const canChat = teamCan(state, "agents", "chat");
-  const placeAllowed = (place: string) => {
+  const placeAllowed = (place: string): boolean => {
     // The Market adds apps, bots and skills: whoever may manage plugins sees it.
     if (place === "Market") return teamCan(state, "plugins");
+    // With Spaces, Today is a space, not a place; without them there is no section of spaces.
+    if (place === "Today" && spaces) return false;
+    if (place === "Spaces") return spaces && (!memberHost || teamCan(state, "today"));
     if (!memberHost) return true;
     if (place === "Home" || place === "Chats") return canViewAgents;
     if (place === "Today") return teamCan(state, "today");
-    if (place === "Work") return teamCan(state, "today", "view") || teamCan(state, "today", "use");
+    if (place === "Work" || place === "Tasks" || place === "Routines" || place === "Activity") return teamCan(state, "today", "view") || teamCan(state, "today", "use");
+    // Projects, the wiki and usage belong to the computer's owner.
     return false;
+  };
+  // The places this person may open, in their order: All's tiles. The menu's rows are the ones on
+  // the menu; its section of spaces is drawn under them.
+  // All keeps one order, so a tile is where it was after it is pinned or moved on the menu.
+  const allowedPlaces = PLACES.filter(placeAllowed);
+  const menuRows = menuPlaces(state.settings.sidebar).filter((p) => p !== "Spaces" && placeAllowed(p));
+  const goPlace = (p: Place | "All") =>
+    p === "Work" ? openWork() : p === "Wiki" ? wiki() : p === "Projects" ? projects() : p === "Routines" ? routines() : p === "Spaces" ? nav("AllSpaces") : nav(p);
+  const arrange = (next: Arranged, said: string) => {
+    setArranged(said);
+    void api.setPreferences({ sidebar: next } as Parameters<typeof api.setPreferences>[0]).catch(fail);
   };
   // Projects belong to the computer's owner; a team member's Work has the other two tabs.
   const work: WorkNav = {
@@ -954,40 +987,45 @@ function App() {
             )}
           </span>
         </div>
-        <nav aria-label="Workspace">
-          {placeOrder(state.settings.sidebar?.order).filter((p) => placeAllowed(p) && !(spaces && p === "Today")).map((p) => {
+        <MenuPlaces
+          rows={menuRows}
+          sidebar={state.settings.sidebar}
+          collapsed={collapsed}
+          // Work is the place of every page under it, unless that page is on the menu itself.
+          selected={page === "All" ? "All" : menuRows.includes(page as Place) ? (page as Place) : WORK_PAGES.includes(page) && menuRows.includes("Work") ? "Work" : ""}
+          go={goPlace}
+          arrange={arrange}
+          notes={(p) => {
             const working = p === "Work" && Object.keys(state.streams).length > 0;
-            const selected = p === "Work" ? WORK_PAGES.includes(page) : p === page;
             const unreadChats = p === "Chats" ? allUnreadChats(state.chats).length : 0;
-            return (
-              <button
-                key={p}
-                className={selected ? "selected" : ""}
-                aria-current={selected ? "page" : undefined}
-                aria-description={working ? "Bots are working" : unreadChats ? unreadChats + " unread" : undefined}
-                onClick={() => (p === "Work" ? openWork() : p === "Wiki" ? wiki() : nav(p))}
-              >
-                <PlaceIcon place={p} size={collapsed ? 24 : 18} />
-                {/* With icons only, the name shows beside the icon on hover and on keyboard focus. */}
-                <span className="nav-label">
-                  {p}
-                  {working && (
-                    <span className="nav-note" aria-hidden="true">
-                      {" · bots are working"}
+            return {
+              described: working ? "Bots are working" : unreadChats ? unreadChats + " unread" : undefined,
+              label: working && (
+                <span className="nav-note" aria-hidden="true">
+                  {" · bots are working"}
+                </span>
+              ),
+              after: (
+                <>
+                  {working && <i />}
+                  {unreadChats > 0 && !collapsed && (
+                    <span className="count-badge" aria-hidden="true">
+                      {unreadChats}
                     </span>
                   )}
-                </span>
-                {working && <i />}
-                {unreadChats > 0 && !collapsed && (
-                  <span className="count-badge" aria-hidden="true">
-                    {unreadChats}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-        {spaces && placeAllowed("Today") && (
+                </>
+              ),
+            };
+          }}
+        />
+        {/* Off the All page, a change to the menu is still said to a screen reader. */}
+        {page !== "All" && (
+          <span className="visually-hidden" role="status">
+            {arranged}
+          </span>
+        )}
+        {/* The menu's section of spaces is a place too: taken off the menu, its spaces are on the Spaces tile of All. */}
+        {placeAllowed("Spaces") && menuPlaces(state.settings.sidebar).includes("Spaces") && (
           <SidebarSpaces
             state={state}
             collapsed={collapsed}
@@ -1159,6 +1197,7 @@ function App() {
           />
         ) : (
           <div className="content">
+            {deferredPage === "All" && <AllPage state={state} places={allowedPlaces} go={goPlace} arrange={arrange} said={arranged} />}
             {deferredPage === "AllSpaces" && <AllSpaces state={state} openSpace={openSpace} fail={fail} />}
             {/* The Market: apps, bots, skills, plugins and Pi packages to add (Settings › Marketplace has the same). */}
             {deferredPage === "Market" && <MarketPage state={state} bots={state.bots} createBot={createBot} />}

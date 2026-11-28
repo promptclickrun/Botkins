@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron, expect } from "@playwright/test";
-import { home } from "./welcome-helper.mjs";
+import { home, pinPlaces } from "./welcome-helper.mjs";
 import { seedApp } from "./starter.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "botkins-market-agents-"));
@@ -58,6 +58,8 @@ try {
   const expand = page.getByRole("button", { name: "Expand side menu", exact: true });
   if (await expand.count()) await expand.click();
   await page.waitForTimeout(600);
+  // The Market is a tile on the All page of a new menu: pinned, it is a place on the side menu.
+  await pinPlaces(page, "Market");
   await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "Market", exact: true }).click();
   await page.getByRole("heading", { name: "Market", exact: true }).waitFor();
   await shot(page, "market-page");

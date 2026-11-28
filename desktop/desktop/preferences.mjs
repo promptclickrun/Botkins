@@ -76,30 +76,57 @@ export function canvasColor(appearance, dark) {
   return theme[dark ? "dark" : "light"].canvas;
 }
 
-/** The places in the side menu, in their usual order. The person can rearrange them (Settings › Side menu). Projects are a tab of Work, so an order saved with them loses that name. The Market (apps, bots and skills to add) is last. */
-export const SIDEBAR = ["Home", "Today", "Chats", "Work", "Wiki", "Market"];
+/**
+ * Every place the side menu can hold, in the usual order. The menu shows the ones a person keeps on
+ * it (pins), in their order, and always ends with All: the page where every place is a tile. The
+ * rest are `hidden`: off the menu, and still a tile there. "Spaces" is the menu's own section of
+ * spaces, on a computer that has them. The person arranges all of it by dragging a tile onto the
+ * menu, or in Settings › Side menu.
+ */
+export const SIDEBAR = ["Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"];
+/** The places a new side menu shows. Today is a place only on a computer without spaces. */
+export const SIDEBAR_USUAL = ["Home", "Today", "Chats", "Work", "Spaces"];
+/** The six places of a side menu from before places could be taken off it: it showed them all, and the spaces. */
+const SIDEBAR_BEFORE = ["Home", "Today", "Chats", "Work", "Wiki", "Market"];
 /** The usual side menu shows icons only; a person opens it with its button, the shortcut or Settings › Side menu. */
 const ICONS_ONLY = true;
+const places = (list) => [...new Set(list.filter((item) => SIDEBAR.includes(item)))];
+
+/**
+ * The places off the menu for a setting saved before `hidden` was kept. A person who had put the
+ * six places in their own order keeps all six on the menu; one who never did gets the usual, shorter
+ * menu. Either way the places added since start off the menu.
+ */
+function hiddenBefore(order) {
+  const six = places(order).filter((item) => SIDEBAR_BEFORE.includes(item));
+  const whole = [...six, ...SIDEBAR_BEFORE.filter((item) => !six.includes(item))];
+  const kept = whole.join() === SIDEBAR_BEFORE.join() ? SIDEBAR_USUAL : [...SIDEBAR_BEFORE, "Spaces"];
+  return SIDEBAR.filter((item) => !kept.includes(item));
+}
+
 /**
  * A side menu setting made whole: every known place once, in the given order (places it doesn't
- * name keep their usual position after the named ones), and whether the menu is collapsed to icons.
- * `picked` says the person chose open or collapsed themselves. Without it the menu is the usual
- * one: a menu saved open before the choice was recorded was only the usual menu of its day.
+ * name keep their usual position after the named ones), the places kept off the menu, and whether
+ * the menu is collapsed to icons. `picked` says the person chose open or collapsed themselves.
+ * Without it the menu is the usual one: a menu saved open before the choice was recorded was only
+ * the usual menu of its day.
  */
 export function sidebarField(value, current = { order: SIDEBAR, collapsed: ICONS_ONLY }) {
   value ??= {};
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid side menu setting");
-  let order = current.order;
-  if (value.order !== undefined) {
-    if (!Array.isArray(value.order) || value.order.length > 50 || value.order.some((item) => typeof item !== "string")) throw new Error("Invalid side menu order");
-    order = value.order;
-  }
+  const list = (items, what) => {
+    if (!Array.isArray(items) || items.length > 50 || items.some((item) => typeof item !== "string")) throw new Error("Invalid side menu " + what);
+    return items;
+  };
+  const order = value.order !== undefined ? list(value.order, "order") : current.order;
+  const hidden = value.hidden !== undefined ? list(value.hidden, "places") : current.hidden;
   if (value.collapsed !== undefined && typeof value.collapsed !== "boolean") throw new Error("Choose whether the side menu is collapsed");
   if (value.picked !== undefined && typeof value.picked !== "boolean") throw new Error("Invalid side menu setting");
   const picked = value.picked ?? current.picked === true;
-  const named = [...new Set(order.filter((item) => SIDEBAR.includes(item)))];
+  const named = places(order);
   return {
     order: [...named, ...SIDEBAR.filter((item) => !named.includes(item))],
+    hidden: Array.isArray(hidden) ? SIDEBAR.filter((item) => hidden.includes(item)) : hiddenBefore(order),
     collapsed: picked ? (value.collapsed ?? !!current.collapsed) : ICONS_ONLY,
     ...(picked ? { picked: true } : {}),
   };
@@ -165,7 +192,7 @@ export const defaultSettings = {
   longPromptCache: true,
   // Turns between a chat's summaries into a new title: 5 to 30, or 0 for off (desktop/summaries.mjs).
   autoSummarize: AUTO_SUMMARIZE_DEFAULT,
-  sidebar: { order: [...SIDEBAR], collapsed: ICONS_ONLY },
+  sidebar: { order: [...SIDEBAR], hidden: SIDEBAR.filter((item) => !SIDEBAR_USUAL.includes(item)), collapsed: ICONS_ONLY },
   // iMessage and Mail as bot tools, on a Mac only: "off", "read" or "interact" each (desktop/mactools.mjs).
   // Changed only by the app's own window (setMacTool), never by a phone.
   macTools: { imessage: "off", mail: "off" },

@@ -6,9 +6,20 @@ import type { Appearance, Bot, Preferences, Project, UsageReport, UsageTotals } 
 
 // ---- The side menu (desktop src/places.ts) ----
 
-// Projects is a tab of Work now, on the computer and on the phone, so it is not a place of its own.
-export const PLACES = ["Home", "Today", "Chats", "Work", "Wiki", "Market"] as const;
+// Every place the computer's side menu can show. A place kept off it is a tile on the computer's
+// All page. "Spaces" is the menu's section of spaces: it sits under the places, so it is on the
+// menu or off it, and has no position among them.
+export const PLACES = ["Home", "Today", "Chats", "Work", "Projects", "Tasks", "Routines", "Spaces", "Wiki", "Market", "Activity", "Usage"] as const;
 export type Place = (typeof PLACES)[number];
+/** The places a new side menu shows. */
+export const USUAL_MENU: readonly Place[] = ["Home", "Today", "Chats", "Work", "Spaces"];
+/** The six places of a computer from before places could be taken off its menu: it shows them all. */
+export const PLACES_BEFORE: readonly Place[] = ["Home", "Today", "Chats", "Work", "Wiki", "Market"];
+
+/** The side menu setting as a computer sends it. One from before places could be taken off the menu sends no `hidden`. */
+export type Sidebar = NonNullable<Preferences["sidebar"]> & { hidden?: string[] };
+/** The part of it that says which places are on the menu, and in what order. */
+type Arranged = { order?: string[]; hidden?: string[] };
 
 /** The person's order made whole: every place once. Unknown names are dropped; missing places keep their usual position at the end. */
 export function placeOrder(order?: string[]): Place[] {
@@ -28,6 +39,51 @@ export function movePlace(order: Place[], place: Place, by: -1 | 1): Place[] {
 }
 
 export const isUsualOrder = (order: Place[]) => order.join() === PLACES.join();
+
+/** Whether this computer keeps places off its menu (it sends which ones). An older one shows its six places always. */
+export const pinsPlaces = (sidebar?: Arranged) => Array.isArray(sidebar?.hidden);
+
+/**
+ * The side menu as the settings list it: the places on it, in its order, then the ones kept off
+ * it. `spaces` says the computer has spaces: Today is a space there, not a place. The section of
+ * spaces is in neither list (spacesShown). An older computer has its six places, all on the menu.
+ */
+export function menuOf(sidebar: Arranged | undefined, spaces: boolean): { menu: Place[]; off: Place[] } {
+  const order = placeOrder(sidebar?.order).filter((place) => place !== "Spaces" && !(spaces && place === "Today"));
+  if (!pinsPlaces(sidebar)) return { menu: order.filter((place) => PLACES_BEFORE.includes(place)), off: [] };
+  const hidden = sidebar!.hidden!;
+  return { menu: order.filter((place) => !hidden.includes(place)), off: order.filter((place) => hidden.includes(place)) };
+}
+
+/** Whether the menu shows its section of spaces. */
+export const spacesShown = (sidebar?: Arranged) => !sidebar?.hidden?.includes("Spaces");
+
+/** What to save to move a place of the menu up (-1) or down (1) among the places on it, or nothing at either end. */
+export function placeMoved(sidebar: Arranged | undefined, spaces: boolean, place: Place, by: -1 | 1): { order: Place[] } | undefined {
+  const { menu, off } = menuOf(sidebar, spaces);
+  const next = movePlace(menu, place, by);
+  return next === menu ? undefined : { order: [...next, ...off] };
+}
+
+/** What to save to put a place on the menu (at its end, as a tile pinned on the computer does) or to take it off. */
+export function placeShown(sidebar: Arranged | undefined, spaces: boolean, place: Place, on: boolean): { order?: Place[]; hidden: Place[] } {
+  const was = sidebar?.hidden ?? [];
+  const hidden = PLACES.filter((item) => (item === place ? !on : was.includes(item)));
+  if (!on || place === "Spaces") return { hidden };
+  const { menu, off } = menuOf(sidebar, spaces);
+  return { order: [...menu.filter((item) => item !== place), place, ...off.filter((item) => item !== place)], hidden };
+}
+
+/** The usual menu and order. */
+export const usualMenu = (): { order: Place[]; hidden: Place[] } => ({ order: [...PLACES], hidden: PLACES.filter((place) => !USUAL_MENU.includes(place)) });
+
+/** Whether the menu is the usual one: its places, their order, and its section of spaces. */
+export function isUsualMenu(sidebar: Arranged | undefined, spaces: boolean): boolean {
+  const now = menuOf(sidebar, spaces);
+  if (!pinsPlaces(sidebar)) return now.menu.join() === PLACES_BEFORE.filter((place) => !(spaces && place === "Today")).join();
+  const usual = menuOf(usualMenu(), spaces);
+  return spacesShown(sidebar) && now.menu.join() === usual.menu.join() && now.off.length === usual.off.length;
+}
 
 // ---- Fonts and text sizes on the computer (desktop desktop/themes.json, src/themes.ts) ----
 
