@@ -77,35 +77,48 @@ export const TRIGGER_FIELDS: Record<WorkflowTriggerKind, Array<{ name: string; t
     { name: "received_at", type: "string", description: "ISO timestamp received" },
   ],
   github: [
-    { name: "repo", type: "string", description: "Repository (owner/repo)" },
     {
       name: "event",
       type: "string",
-      description: "Event type",
+      description: "Canonical event type",
       choices: [
-        "pr_opened",
-        "pr_updated",
-        "pr_review",
-        "ci_status",
-        "issue_opened",
-        "issue_updated",
-        "issue_comment",
-        "user_mentioned",
-        "bot_mentioned",
+        "issue.opened",
+        "issue.closed",
+        "issue.labeled",
+        "pr.opened",
+        "pr.updated",
+        "pr.reviewRequested",
+        "pr.reviewSubmitted",
+        "pr.checksFailed",
+        "pr.merged",
+        "comment",
+        "mention",
+        "assigned",
       ],
     },
+    { name: "repository", type: "string", description: "Repository (owner/repo)" },
     { name: "number", type: "number", description: "Issue or pull request number" },
+    { name: "pull_request", type: "boolean", description: "True when the item is a pull request" },
     { name: "title", type: "string", description: "Issue or pull request title" },
     { name: "body", type: "string", description: "Issue, pull request, or comment body" },
-    { name: "author", type: "string", description: "Item or comment author" },
     { name: "url", type: "string", description: "GitHub URL" },
-    { name: "branch", type: "string", description: "Head branch name (PRs)" },
     { name: "state", type: "string", description: "Open, closed, or merged state" },
-    { name: "review_state", type: "string", description: "PR review decision" },
-    { name: "ci_status", type: "string", description: "PR CI rollup status" },
-    { name: "item_type", type: "string", description: "Source item kind", choices: ["pr", "issue", "comment"] },
+    { name: "author", type: "string", description: "Item or comment author login" },
+    { name: "sender", type: "string", description: "Actor login who triggered the event" },
+    { name: "author_association", type: "string", description: "Author's repository association (e.g. FIRST_TIME_CONTRIBUTOR, MEMBER)" },
+    { name: "labels", type: "list", description: "List of current label names" },
+    { name: "added_label", type: "string", description: "Label added on issue.labeled events" },
+    { name: "assignees", type: "list", description: "List of assignee logins" },
+    { name: "base_branch", type: "string", description: "Target base branch name (PRs)" },
+    { name: "head_branch", type: "string", description: "Source head branch name (PRs)" },
+    { name: "head_sha", type: "string", description: "Head commit SHA (PRs)" },
+    { name: "merged", type: "boolean", description: "True when the pull request is merged" },
+    { name: "review_state", type: "string", description: "PR review state or decision" },
+    { name: "review_body", type: "string", description: "PR review body text" },
+    { name: "comment_body", type: "string", description: "Comment body text" },
+    { name: "comment_url", type: "string", description: "Direct URL to the comment" },
+    { name: "check_conclusion", type: "string", description: "Check suite or CI conclusion" },
     { name: "mention", type: "string", description: "Matched @mention handle" },
-    { name: "labels", type: "string", description: "Comma-separated labels" },
   ],
   channel: [
     { name: "channel", type: "string", description: "Channel kind", choices: ["slack", "telegram", "discord", "imessage"] },
@@ -270,6 +283,19 @@ function nodeTemplates(node: WorkflowNode): Array<{ prop: string; value: string 
   else if (node.kind === "output") {
     push("template", cfg.template);
     push("title", cfg.title);
+    if (cfg.destination === "github") {
+      push("body", cfg.body);
+      push("repository", cfg.repository);
+      push("repo", cfg.repo);
+      push("item", cfg.item);
+      push("itemNumber", cfg.itemNumber);
+      push("labels", cfg.labels);
+      push("assignees", cfg.assignees);
+      push("reviewers", cfg.reviewers);
+      push("person", cfg.person);
+      push("reason", cfg.reason);
+      push("stateReason", cfg.stateReason);
+    }
     pushCardTemplates(cfg.card, push);
     if (cfg.a2ui !== undefined && cfg.a2ui !== null) pushA2uiTemplates(cfg.a2ui, "a2ui", push);
   } else if (node.kind === "condition") {
@@ -321,7 +347,10 @@ export function analyzeWorkflowFields(workflow: Pick<Workflow, "nodes" | "edges"
 
     for (const up of upstream) {
       const seenInPath = new Map<string, string[]>();
+      let pathHasGithubTrigger = false;
       for (const id of up) {
+        const upNode = byId.get(id);
+        if (upNode?.kind === "trigger" && upNode.triggerKind === "github") pathHasGithubTrigger = true;
         for (const f of fieldsByNode.get(id) ?? []) {
           if (!fieldSources.has(f.name)) fieldSources.set(f.name, []);
           const arr = fieldSources.get(f.name)!;
@@ -330,7 +359,27 @@ export function analyzeWorkflowFields(workflow: Pick<Workflow, "nodes" | "edges"
           seenInPath.get(f.name)!.push(f.sourceLabel);
         }
       }
-      pathSets.push(new Set(seenInPath.keys()));
+      const pathSet = new Set(seenInPath.keys());
+      if (pathHasGithubTrigger) {
+        for (const alias of ["repo", "branch", "ci_status", "item_type"]) {
+          pathSet.add(alias);
+          if (!fieldSources.has(alias)) {
+            fieldSources.set(alias, [
+              {
+                name: alias,
+                type: "string",
+                choices: undefined,
+                description: undefined,
+                sourceNodeId: up[0],
+                sourceLabel: "GitHub trigger",
+                sourceKind: "trigger",
+                triggerKind: "github",
+              },
+            ]);
+          }
+        }
+      }
+      pathSets.push(pathSet);
       for (const [name, labels] of seenInPath.entries()) {
         if (labels.length > 1) {
           if (!ambiguous.has(name)) ambiguous.set(name, new Set());
@@ -342,10 +391,12 @@ export function analyzeWorkflowFields(workflow: Pick<Workflow, "nodes" | "edges"
     const guaranteed = new Set<string>();
     const partial = new Set<string>();
     const available: AvailableField[] = [];
+    const legacyAliases = new Set(["repo", "branch", "ci_status", "item_type"]);
     for (const [name, metas] of fieldSources.entries()) {
       const onAll = pathSets.length > 0 && pathSets.every((s) => s.has(name));
       if (onAll) guaranteed.add(name);
       else partial.add(name);
+      if (legacyAliases.has(name) && metas.every((m) => m.triggerKind === "github")) continue;
       available.push({
         ...metas[0],
         guaranteed: onAll,
