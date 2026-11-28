@@ -3,7 +3,7 @@
 // the earlier shape are in proactive-team.test.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Workspace } from "./starter.mjs";
@@ -578,7 +578,13 @@ test("a persisted in-flight check resumes once after restart, and refuses a late
   seen.reply = async (prompt) => { started.resolve(); await finish.promise; return proposal("A French rehearsal")(prompt); };
   const pending = tick(ws, "pip");
   await started.promise;
-  const restarted = setup(t, { before: (other) => copyFileSync(join(dir, "workspace.json"), join(other, "workspace.json")) });
+  const copyWorkspace = (fromDir, toDir) => {
+    for (const name of ["workspace.db", "workspace.db-wal", "workspace.db-shm", "workspace.json"]) {
+      const src = join(fromDir, name);
+      if (existsSync(src)) copyFileSync(src, join(toDir, name));
+    }
+  };
+  const restarted = setup(t, { before: (other) => copyWorkspace(dir, other) });
   restarted.ws.memory.write("pip", ws.memory.read("pip"));
   restarted.seen.reply = proposal("A French rehearsal");
   await Promise.all(restarted.ws.resumeActive());
@@ -642,7 +648,12 @@ test("delivery into a busy Main chat survives restart and reaches the queued fol
     await assert.rejects(ws.changeMainFork(id, "reset"), /Finish the reply/);
     await tick(ws, "pip");
     assert.equal(ws.chat(id).messages.filter(m => m.alert).length, 1);
-    const restored = setup(t, { before: other => copyFileSync(join(dir, "workspace.json"), join(other, "workspace.json")) });
+    const restored = setup(t, { before: other => {
+      for (const name of ["workspace.db", "workspace.db-wal", "workspace.db-shm", "workspace.json"]) {
+        const src = join(dir, name);
+        if (existsSync(src)) copyFileSync(src, join(other, name));
+      }
+    } });
     assert.equal(restored.ws.mainChat("pip"), id);
     assert.equal(restored.ws.queues.get(id)[0].text, "Follow up");
     restored.seen.reply = "Done.";

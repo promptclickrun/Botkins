@@ -24,10 +24,17 @@ export function requireRemoteTurn(ws, bot, chat, run, task) {
     throw new Error("Cross-host Teamwork is available in a private owner chat with Teamwork and access enabled.");
 }
 
+export function normalizeHostId(hostId) {
+  if (typeof hostId !== "string") return undefined;
+  const trimmed = hostId.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export async function peerRoster(peers, hostId) {
-  const hosts = await peers.hosts(hostId !== undefined);
-  if (hostId === undefined) return { hosts };
-  const host = hosts.find((item) => item.serverId === hostId);
+  const target = normalizeHostId(hostId);
+  const hosts = await peers.hosts(target !== undefined);
+  if (target === undefined) return { hosts };
+  const host = hosts.find((item) => item.serverId === target);
   if (!host) throw new Error("Choose a computer from list_host_teammates.");
   const bots = await peers.call(host.serverId, "list", {}, host.pin);
   if (!Array.isArray(bots)) throw new Error("That computer could not list its teammates.");
@@ -39,9 +46,10 @@ export async function peerRoster(peers, hostId) {
  * A sleeping or unreachable host is reported as unavailable rather than failing discovery.
  */
 export async function peerCapabilities(peers, hostId) {
+  const target = normalizeHostId(hostId);
   const hosts = await peers.hosts(true);
-  if (hostId !== undefined) {
-    const host = hosts.find((item) => item.serverId === hostId);
+  if (target !== undefined) {
+    const host = hosts.find((item) => item.serverId === target);
     if (!host) throw new Error("Choose a computer from list_node_hosts.");
     try {
       const capabilities = await peers.call(host.serverId, "capabilities", {}, host.pin);

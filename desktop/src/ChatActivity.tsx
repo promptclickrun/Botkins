@@ -289,52 +289,70 @@ function DiffLinesView({ lines, truncated }: { lines: NonNullable<ParsedStepInpu
   );
 }
 
-export function StepDetailBody({ step, parsed = parseStepInput(step) }: { step: Step; parsed?: ParsedStepInput }) {
-  const output = (step.output || "").trim();
-  const progress = (step.progress || "").trim();
-  if (parsed.command) {
+export function useStepDetail(step: Step, chatId?: string, runId?: string, active = true): Step {
+  const [detail, setDetail] = useState<{ input?: string; output?: string } | null>(null);
+  const needs = active && !!step.more && !!chatId && !!runId && typeof window !== "undefined" && typeof window.botkins?.stepDetail === "function";
+  useEffect(() => {
+    if (!needs || !chatId || !runId) return;
+    let live = true;
+    void window.botkins.stepDetail?.(chatId, runId, step.id).then(
+      (res) => { if (live && res) setDetail(res); },
+      () => {},
+    );
+    return () => { live = false; };
+  }, [needs, chatId, runId, step.id, step.finished]);
+  if (!detail) return step;
+  return { ...step, input: detail.input ?? step.input, output: detail.output ?? step.output };
+}
+
+export function StepDetailBody({ step, parsed, chatId, runId }: { step: Step; parsed?: ParsedStepInput; chatId?: string; runId?: string }) {
+  const hydrated = useStepDetail(step, chatId, runId, true);
+  const effectiveParsed = hydrated !== step ? parseStepInput(hydrated) : (parsed ?? parseStepInput(hydrated));
+  const output = (hydrated.output || "").trim();
+  const progress = (hydrated.progress || "").trim();
+  if (effectiveParsed.command) {
     return (
       <div className="step-detail structured">
         <div className="step-cmd-line">
           <span className="cmd-prompt">$</span>
-          <code>{parsed.command}</code>
+          <code>{effectiveParsed.command}</code>
         </div>
-        {progress && step.status === "Running" && <pre className="step-out">{progress}</pre>}
+        {progress && hydrated.status === "Running" && <pre className="step-out">{progress}</pre>}
         {output && <pre className="step-out">{output}</pre>}
-        {!output && !progress && step.status !== "Running" && <p className="muted step-empty">No output</p>}
+        {!output && !progress && hydrated.status !== "Running" && <p className="muted step-empty">No output</p>}
       </div>
     );
   }
-  if (parsed.diff) {
+  if (effectiveParsed.diff) {
     return (
       <div className="step-detail structured">
-        {parsed.filePath && <div className="step-filepath">{parsed.filePath}</div>}
-        <DiffLinesView lines={parsed.diff.lines} truncated={parsed.diff.truncated} />
-        {output && step.status === "Failed" && <pre className="step-out">{output}</pre>}
+        {effectiveParsed.filePath && <div className="step-filepath">{effectiveParsed.filePath}</div>}
+        <DiffLinesView lines={effectiveParsed.diff.lines} truncated={effectiveParsed.diff.truncated} />
+        {output && hydrated.status === "Failed" && <pre className="step-out">{output}</pre>}
       </div>
     );
   }
   return (
     <div className="step-detail">
-      {step.input && (
+      {hydrated.input && (
         <>
           <b>Input</b>
-          <pre>{step.input}</pre>
+          <pre>{hydrated.input}</pre>
         </>
       )}
-      {step.progress && <p>{step.progress}</p>}
-      {step.output && (
+      {hydrated.progress && <p>{hydrated.progress}</p>}
+      {hydrated.output && (
         <>
           <b>Output</b>
-          <pre>{step.output}</pre>
+          <pre>{hydrated.output}</pre>
         </>
       )}
-      {!step.input && !step.progress && !step.output && <p className="muted step-empty">No details</p>}
+      {!hydrated.input && !hydrated.progress && !hydrated.output && <p className="muted step-empty">No details</p>}
     </div>
   );
 }
 
-export function StepList({ steps }: { steps: Step[] }) {
+export function StepList({ steps, chatId, runId }: { steps: Step[]; chatId?: string; runId?: string }) {
   return (
     <ol>
       {steps.map((s) => (
@@ -351,7 +369,7 @@ export function StepList({ steps }: { steps: Step[] }) {
                 {s.finished ? " · " + stepSeconds(s) : ""}
               </em>
             </summary>
-            <StepDetailBody step={s} />
+            <StepDetailBody step={s} chatId={chatId} runId={runId} />
           </details>
           {s.status === "Running" && (s.progress || s.output) && (
             <div className="live-output">
@@ -491,20 +509,26 @@ function CommandCard({
   step,
   parsed,
   live,
+  chatId,
+  runId,
   onToggle,
 }: {
   step: Step;
   parsed: ParsedStepInput;
   live?: boolean;
+  chatId?: string;
+  runId?: string;
   onToggle?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const running = step.status === "Running";
-  const failed = step.status === "Failed";
-  const cmd = parsed.command || stepHeadline(step, parsed);
-  const rawOut = (step.output || step.progress || "").trim();
+  const hydrated = useStepDetail(step, chatId, runId, expanded);
+  const effectiveParsed = hydrated !== step ? parseStepInput(hydrated) : parsed;
+  const running = hydrated.status === "Running";
+  const failed = hydrated.status === "Failed";
+  const cmd = effectiveParsed.command || stepHeadline(hydrated, effectiveParsed);
+  const rawOut = (hydrated.output || hydrated.progress || "").trim();
   const clipped = clipLines(rawOut, 4, true);
-  const took = stepSeconds(step);
+  const took = stepSeconds(hydrated);
   const toggle = () => {
     onToggle?.();
     setExpanded(!expanded);
@@ -512,7 +536,7 @@ function CommandCard({
   return (
     <div className={"coding-card command-card" + (running ? " running" : "") + (failed ? " failed" : "")}>
       <button className="coding-card-head" aria-expanded={expanded} onClick={toggle}>
-        <StepGlyph step={step} />
+        <StepGlyph step={hydrated} />
         <span className="cmd-prompt" aria-hidden="true">$</span>
         <code className="coding-cmd" title={cmd}>
           {cmd}
@@ -547,21 +571,27 @@ function CommandCard({
 function DiffCard({
   step,
   parsed,
+  chatId,
+  runId,
   onToggle,
 }: {
   step: Step;
   parsed: ParsedStepInput;
   live?: boolean;
+  chatId?: string;
+  runId?: string;
   onToggle?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const running = step.status === "Running";
-  const failed = step.status === "Failed";
-  const diff = parsed.diff;
+  const hydrated = useStepDetail(step, chatId, runId, expanded);
+  const effectiveParsed = hydrated !== step ? parseStepInput(hydrated) : parsed;
+  const running = hydrated.status === "Running";
+  const failed = hydrated.status === "Failed";
+  const diff = effectiveParsed.diff;
   const previewLimit = 8;
   const previewClipped = !!diff && diff.lines.length > previewLimit;
   const shownLines = diff ? (expanded ? diff.lines : diff.lines.slice(0, previewLimit)) : [];
-  const label = parsed.fileName || stepHeadline(step, parsed);
+  const label = effectiveParsed.fileName || stepHeadline(hydrated, effectiveParsed);
   const toggle = () => {
     onToggle?.();
     setExpanded(!expanded);
@@ -569,8 +599,8 @@ function DiffCard({
   return (
     <div className={"coding-card diff-card" + (running ? " running" : "") + (failed ? " failed" : "")}>
       <button className="coding-card-head" aria-expanded={expanded} onClick={toggle}>
-        {running ? <span className="activity-pulse" /> : <KindIcon kind={parsed.kind} size={13} />}
-        <span className="coding-file" title={parsed.filePath || label}>
+        {running ? <span className="activity-pulse" /> : <KindIcon kind={effectiveParsed.kind} size={13} />}
+        <span className="coding-file" title={effectiveParsed.filePath || label}>
           {label}
         </span>
         {diff && (
@@ -594,7 +624,7 @@ function DiffCard({
       )}
       {!diff && expanded && (
         <div className="coding-card-body">
-          <StepDetailBody step={step} parsed={parsed} />
+          <StepDetailBody step={hydrated} parsed={effectiveParsed} chatId={chatId} runId={runId} />
         </div>
       )}
     </div>
@@ -602,7 +632,7 @@ function DiffCard({
 }
 
 /** T3 Code Open-mode single expandable step inside a multi-step work group. */
-function OpenStepRow({ step, onToggle }: { step: Step; onToggle?: () => void }) {
+function OpenStepRow({ step, chatId, runId, onToggle }: { step: Step; chatId?: string; runId?: string; onToggle?: () => void }) {
   const [open, setOpen] = useState(false);
   const parsed = parseStepInput(step);
   const took = stepSeconds(step);
@@ -629,7 +659,7 @@ function OpenStepRow({ step, onToggle }: { step: Step; onToggle?: () => void }) 
       </button>
       {open && (
         <div className="open-step-detail">
-          <StepDetailBody step={step} parsed={parsed} />
+          <StepDetailBody step={step} parsed={parsed} chatId={chatId} runId={runId} />
         </div>
       )}
     </li>
@@ -637,7 +667,7 @@ function OpenStepRow({ step, onToggle }: { step: Step; onToggle?: () => void }) 
 }
 
 /** T3 Code Open-mode frameless inline work-group row: [icon] [summary] [chevron]. */
-function OpenWorkGroupRow({ group, onToggle }: { group: OpenWorkGroup; onToggle?: () => void }) {
+function OpenWorkGroupRow({ group, chatId, runId, onToggle }: { group: OpenWorkGroup; chatId?: string; runId?: string; onToggle?: () => void }) {
   const [open, setOpen] = useState(false);
   const single = group.steps.length === 1 ? group.steps[0] : undefined;
   const singleParsed = single ? parseStepInput(single) : undefined;
@@ -679,11 +709,11 @@ function OpenWorkGroupRow({ group, onToggle }: { group: OpenWorkGroup; onToggle?
       {open && (
         <div className="open-work-body">
           {single ? (
-            <StepDetailBody step={single} parsed={singleParsed} />
+            <StepDetailBody step={single} parsed={singleParsed} chatId={chatId} runId={runId} />
           ) : (
             <ul className="open-work-steps">
               {group.steps.map((s) => (
-                <OpenStepRow key={s.id} step={s} onToggle={onToggle} />
+                <OpenStepRow key={s.id} step={s} chatId={chatId} runId={runId} onToggle={onToggle} />
               ))}
             </ul>
           )}
@@ -696,9 +726,13 @@ function OpenWorkGroupRow({ group, onToggle }: { group: OpenWorkGroup; onToggle?
 /** Compact non-coding group inside an expanded OpenBot Fold view. */
 function FoldGroupRow({
   block,
+  chatId,
+  runId,
   onToggle,
 }: {
   block: Extract<FoldBlock, { kind: "group" }>;
+  chatId?: string;
+  runId?: string;
   onToggle?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -721,11 +755,11 @@ function FoldGroupRow({
       {open && (
         <div className="fold-group-body">
           {single ? (
-            <StepDetailBody step={single} />
+            <StepDetailBody step={single} chatId={chatId} runId={runId} />
           ) : (
             <ul className="open-work-steps">
               {block.steps.map((s) => (
-                <OpenStepRow key={s.id} step={s} onToggle={onToggle} />
+                <OpenStepRow key={s.id} step={s} chatId={chatId} runId={runId} onToggle={onToggle} />
               ))}
             </ul>
           )}
@@ -806,17 +840,17 @@ export function TimelineFold({
   );
 }
 
-function FoldBlockList({ blocks, onToggle }: { blocks: FoldBlock[]; onToggle?: () => void }) {
+function FoldBlockList({ blocks, chatId, runId, onToggle }: { blocks: FoldBlock[]; chatId?: string; runId?: string; onToggle?: () => void }) {
   return (
     <div className="fold-blocks">
       {blocks.map((b) => {
         if (b.kind === "command") {
-          return <CommandCard key={b.id} step={b.step} parsed={b.parsed} onToggle={onToggle} />;
+          return <CommandCard key={b.id} step={b.step} parsed={b.parsed} chatId={chatId} runId={runId} onToggle={onToggle} />;
         }
         if (b.kind === "diff") {
-          return <DiffCard key={b.id} step={b.step} parsed={b.parsed} onToggle={onToggle} />;
+          return <DiffCard key={b.id} step={b.step} parsed={b.parsed} chatId={chatId} runId={runId} onToggle={onToggle} />;
         }
-        return <FoldGroupRow key={b.id} block={b} onToggle={onToggle} />;
+        return <FoldGroupRow key={b.id} block={b} chatId={chatId} runId={runId} onToggle={onToggle} />;
       })}
     </div>
   );
@@ -896,7 +930,7 @@ export function ToolTrail({
     return (
       <section className="tool-trail tool-trail-open" aria-label="Tool activity">
         {groups.map((g) => (
-          <OpenWorkGroupRow key={g.id} group={g} onToggle={onToggle} />
+          <OpenWorkGroupRow key={g.id} group={g} chatId={run.chatId} runId={run.id} onToggle={onToggle} />
         ))}
       </section>
     );
@@ -944,15 +978,15 @@ export function ToolTrail({
               <span className="fold-line-meta">{duration(now - run.time)}</span>
               <ChevronRight size={14} className="fold-chevron" />
             </button>
-            {expanded && <FoldBlockList blocks={partitionForFoldMode(foldedSteps)} onToggle={onToggle} />}
+            {expanded && <FoldBlockList blocks={partitionForFoldMode(foldedSteps)} chatId={run.chatId} runId={run.id} onToggle={onToggle} />}
           </>
         )}
         {liveCodingSteps.map((s) => {
           const parsed = parseStepInput(s);
           return parsed.kind === "command" ? (
-            <CommandCard key={s.id} step={s} parsed={parsed} live onToggle={onToggle} />
+            <CommandCard key={s.id} step={s} parsed={parsed} chatId={run.chatId} runId={run.id} live onToggle={onToggle} />
           ) : (
-            <DiffCard key={s.id} step={s} parsed={parsed} live onToggle={onToggle} />
+            <DiffCard key={s.id} step={s} parsed={parsed} chatId={run.chatId} runId={run.id} live onToggle={onToggle} />
           );
         })}
       </section>
@@ -980,7 +1014,7 @@ export function ToolTrail({
       </button>
       {expanded &&
         (blocks.length > 0 ? (
-          <FoldBlockList blocks={blocks} onToggle={onToggle} />
+          <FoldBlockList blocks={blocks} chatId={run.chatId} runId={run.id} onToggle={onToggle} />
         ) : (
           <div className="fold-blocks">
             <ul className="open-work-steps">

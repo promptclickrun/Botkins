@@ -232,6 +232,7 @@ export function headlessBackend(rawRequest, version, { team = () => null, log = 
       release,
       snapshot: (id, options) => spaces("snapshot", id, options),
     },
+    stepDetail: (chatId, runId, stepId) => request("stepDetail", [chatId, runId, stepId]),
     async setLook(...args) { await request("setLook", args); await refresh(); },
     frames: { page: (id) => request("framePage", [id]), chatFor: (id) => request("frameChat", [id]) },
     extras: {

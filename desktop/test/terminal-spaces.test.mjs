@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { COMMANDS, describe } from "../cli/commands/index.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
@@ -52,7 +53,7 @@ async function service(t) {
     return { exit, out, err, json: () => JSON.parse(out) };
   };
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("Changed from the command line")).map((text) => text.split("Changed from the command line: ")[1]);
-  const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
+  const everything = () => [readPersistedWorkspaceText(paths.dataDir), readFileSync(paths.logFile, "utf8")].join("\n");
   /** A panel as a bot would have published it (the host's own `write` needs a running turn). */
   const seed = (spaceId, title, extra = {}) => {
     const bot = workspace.state.bots[0];

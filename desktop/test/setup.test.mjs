@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Workspace } from "../desktop/workspace.mjs";
+import { readPersistedWorkspace } from "./starter.mjs";
 import { ModelProvider, Providers, SETUP_ORDER } from "../desktop/providers/index.mjs";
 import { tempDir, tick } from "./fake-copilot.mjs";
 
@@ -30,7 +31,7 @@ const open = (t, list, options) => {
   const dir = join(tempDir(t), "data");
   return { dir, ws: new Workspace(dir, new Providers(list, options), () => {}) };
 };
-const saved = (dir) => JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).settings;
+const saved = (dir) => readPersistedWorkspace(dir).settings;
 
 test("the three are offered in the order ChatGPT, Claude, GitHub Copilot", () => {
   assert.deepEqual(SETUP_ORDER, ["codex", "claude", "copilot"]);

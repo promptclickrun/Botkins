@@ -20,11 +20,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 INSTRUCTIONS_MAX = 30000  # Botkins bot instructions
 PROFILE_PROMPT_MAX = 4000  # desktop/bot-profile-files.mjs promptChars: what a turn sees of each file
@@ -408,8 +410,12 @@ def _bundle_readme(clone: Clone) -> str:
 
 # Loading into Botkins ----------------------------------------------------------------------
 
+def _has_workspace(folder: Path) -> bool:
+    return (folder / "workspace.db").is_file() or (folder / "workspace.json").is_file()
+
+
 def botkins_data_dir() -> Path | None:
-    """The Botkins data folder (the one holding workspace.json), or None when none is found."""
+    """The Botkins data folder (holding workspace.db or workspace.json), or None when none is found."""
     if os.environ.get("BOTKINS_DATA"):
         return Path(os.environ["BOTKINS_DATA"]).expanduser()
     home = Path.home()
@@ -420,21 +426,58 @@ def botkins_data_dir() -> Path | None:
     share = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
     candidates += [home / "Library" / "Application Support" / "Botkins" / "data",
                    config / "Botkins" / "data", share / "botkins" / "data"]
-    return next((c for c in candidates if (c / "workspace.json").is_file()), None)
+    return next((c for c in candidates if _has_workspace(c)), None)
 
 
-def find_bot(agent_path: Path, data_dir: Path | None = None) -> dict | None:
-    """The Botkins bot made from this agent file, read from workspace.json (never written)."""
-    data_dir = data_dir or botkins_data_dir()
-    if data_dir is None:
+def _read_bots_sqlite(db_path: Path) -> list[dict] | None:
+    """Read bots from Botkins' workspace.db read-only (never creates or modifies files)."""
+    if not db_path.is_file():
         return None
+    uri = f"file:{quote(str(db_path.resolve()), safe='/:')}?mode=ro"
+    conn = None
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+        rows = conn.execute("SELECT data FROM bots ORDER BY sort_order").fetchall()
+        bots = []
+        for (raw,) in rows:
+            if not isinstance(raw, str):
+                continue
+            bot = json.loads(raw)
+            if isinstance(bot, dict):
+                bots.append(bot)
+        return bots
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
+
+def _read_bots(data_dir: Path) -> list[dict]:
+    """Read Botkins' bot list from workspace.db (read-only), falling back to workspace.json."""
+    bots = _read_bots_sqlite(data_dir / "workspace.db")
+    if bots is not None:
+        return bots
     try:
         state = json.loads((data_dir / "workspace.json").read_text("utf-8"))
     except (OSError, ValueError):
+        return []
+    raw_bots = state.get("bots", [])
+    return [b for b in raw_bots if isinstance(b, dict)] if isinstance(raw_bots, list) else []
+
+
+def find_bot(agent_path: Path, data_dir: Path | None = None) -> dict | None:
+    """The Botkins bot made from this agent file, read from workspace.db or workspace.json (never written)."""
+    data_dir = data_dir or botkins_data_dir()
+    if data_dir is None:
         return None
-    for bot in state.get("bots", []):
+    target = agent_path.resolve()
+    for bot in _read_bots(data_dir):
         origin = bot.get("origin") or {}
-        if origin.get("file") and Path(origin["file"]).resolve() == agent_path.resolve():
+        if origin.get("file") and Path(origin["file"]).resolve() == target:
             return bot
     return None
 

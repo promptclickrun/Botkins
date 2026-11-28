@@ -563,11 +563,11 @@ export default function A2uiSurface({
     );
   }
 
-  function renderChildren(children: unknown, ctx: RenderCtx, depth: number): ReactNode {
+  function renderChildren(children: unknown, ctx: RenderCtx, depth: number, inline = false): ReactNode {
     if (Array.isArray(children)) {
       return children.map((cid, idx) => (
         <span key={`${String(cid)}-${idx}`} style={{ display: "contents" }}>
-          {renderNode(String(cid), ctx, depth + 1)}
+          {renderNode(String(cid), ctx, depth + 1, inline)}
         </span>
       ));
     }
@@ -580,7 +580,7 @@ export default function A2uiSurface({
         : `${ctx.scopePath.replace(/\/$/, "")}/${tpl.path}`;
       return arr.slice(0, 50).map((_, idx) => (
         <span key={`${tpl.componentId}-${idx}`} style={{ display: "contents" }}>
-          {renderNode(tpl.componentId, { scopePath: `${base}/${idx}`, itemIndex: idx }, depth + 1)}
+          {renderNode(tpl.componentId, { scopePath: `${base}/${idx}`, itemIndex: idx }, depth + 1, inline)}
         </span>
       ));
     }
@@ -896,7 +896,7 @@ export default function A2uiSurface({
     }
   }
 
-  function renderNode(id: string, ctx: RenderCtx, depth: number): ReactNode {
+  function renderNode(id: string, ctx: RenderCtx, depth: number, inline = false): ReactNode {
     if (depth > 24) return null;
     const comp = byId.get(id);
     if (!comp) return null;
@@ -917,8 +917,9 @@ export default function A2uiSurface({
       case "Text": {
         const text = resolveDynamicString(comp.text, dataModel, ctx);
         const variant = typeof comp.variant === "string" ? comp.variant : "body";
+        const Tag = inline ? "span" : "p";
         return (
-          <p
+          <Tag
             className={`a2ui-text ${variant}`}
             style={weightStyle}
             aria-label={a11yLabel}
@@ -926,7 +927,7 @@ export default function A2uiSurface({
             aria-live={a11yLive}
           >
             {text}
-          </p>
+          </Tag>
         );
       }
       case "Icon": {
@@ -974,10 +975,11 @@ export default function A2uiSurface({
           ...(typeof comp.justify === "string" && JUSTIFY_MAP[comp.justify] ? { justifyContent: JUSTIFY_MAP[comp.justify] } : {}),
           ...(typeof comp.align === "string" && ALIGN_MAP[comp.align] ? { alignItems: ALIGN_MAP[comp.align] } : {}),
         };
+        const Tag = inline ? "span" : "div";
         return (
-          <div className="a2ui-row" style={style} aria-label={a11yLabel} aria-live={a11yLive}>
-            {renderChildren(comp.children, ctx, depth)}
-          </div>
+          <Tag className="a2ui-row" style={style} aria-label={a11yLabel} aria-live={a11yLive}>
+            {renderChildren(comp.children, ctx, depth, inline)}
+          </Tag>
         );
       }
       case "Column": {
@@ -1019,6 +1021,7 @@ export default function A2uiSurface({
         const isOpenUrl = (comp.action as any)?.functionCall?.["@call"] === "openUrl";
         const checkErrs = evaluateChecks(comp, dataModel, ctx);
         const disabled = (!isOpenUrl && readOnly) || busyId !== null || checkErrs.length > 0;
+        const childNode = typeof comp.child === "string" ? renderNode(comp.child, ctx, depth + 1, true) : null;
         return (
           <button
             type="button"
@@ -1028,7 +1031,7 @@ export default function A2uiSurface({
             aria-label={a11yLabel}
             onClick={() => void triggerAction(comp, comp.action, ctx)}
           >
-            {busyId === comp.id ? "Working…" : typeof comp.child === "string" ? renderNode(comp.child, ctx, depth + 1) : "Action"}
+            {busyId === comp.id ? "Working…" : childNode ?? "Action"}
           </button>
         );
       }

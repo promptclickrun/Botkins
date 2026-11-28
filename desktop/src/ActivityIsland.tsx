@@ -64,7 +64,7 @@ function Line({ line }: { line: IslandLine | WaitLine }) {
 }
 
 /** Every line, each opening the side pane's Activity on it (or, without `onOpen`, its details in place). Stays pinned to the newest. */
-function FullList({ lines, close, onToggle, onOpen }: { lines: IslandLine[]; close: () => void; onToggle?: () => void; onOpen?: (key?: string) => void }) {
+function FullList({ lines, chatId, runId, close, onToggle, onOpen }: { lines: IslandLine[]; chatId?: string; runId?: string; close: () => void; onToggle?: () => void; onOpen?: (key?: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   useLayoutEffect(() => {
@@ -98,7 +98,7 @@ function FullList({ lines, close, onToggle, onOpen }: { lines: IslandLine[]; clo
               {line.kind === "step" && <span className="island-seconds">{stepSeconds(line.step)}</span>}
               <ChevronRight size={13} className="island-item-chevron" aria-hidden="true" />
             </summary>
-            {line.kind === "step" ? <StepDetailBody step={line.step} /> : <p className="island-thought">{line.kind === "update" ? line.text : line.snippet || line.heading}</p>}
+            {line.kind === "step" ? <StepDetailBody step={line.step} chatId={chatId} runId={runId} /> : <p className="island-thought">{line.kind === "update" ? line.text : line.snippet || line.heading}</p>}
           </details>
         ))}
       </div>
@@ -208,7 +208,7 @@ export const ActivityIsland = memo(function ActivityIsland({ run, who, avatar, w
         <ChevronRight size={14} className="island-chevron" aria-hidden="true" />
       </button>
       {open ? (
-        <FullList lines={all} close={toggle} onToggle={onToggle} onOpen={onOpen} />
+        <FullList lines={all} chatId={run.chatId} runId={run.id} close={toggle} onToggle={onToggle} onOpen={onOpen} />
       ) : view ? (
         !!view.shown.length && (
           <div className={"island-window" + (view.clipped ? " clipped" : "")} aria-hidden="true">
@@ -262,7 +262,7 @@ export const IslandReceipt = memo(function IslandReceipt({ run, thoughts, update
         <span className="island-label">{label}</span>
         <ChevronRight size={14} className="island-chevron" aria-hidden="true" />
       </button>
-      <FullList lines={all} close={toggle} onToggle={onToggle} onOpen={onOpen} />
+      <FullList lines={all} chatId={run.chatId} runId={run.id} close={toggle} onToggle={onToggle} onOpen={onOpen} />
     </section>
   );
 }, (a, b) => a.run === b.run && a.thoughts === b.thoughts && a.extra === b.extra && a.onToggle === b.onToggle && a.onOpen === b.onOpen && sameUpdates(a.updates, b.updates));

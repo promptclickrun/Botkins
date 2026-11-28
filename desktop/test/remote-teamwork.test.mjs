@@ -154,3 +154,60 @@ test("a restarted source withdraws a request even if its original Stop could not
   assert.equal(cancellations.length, 1);
   assert.equal(restored.snapshot().outgoingDispatches, undefined);
 });
+
+test("empty or whitespace host is treated as unset across ask_teammate, list_host_teammates, list_node_hosts, and node_* tools", async (t) => {
+  const localCalls = [];
+  const ws = setup(t, async (sessionId, _options, session) => {
+    if (sessionId.includes("-team-")) {
+      localCalls.push(sessionId);
+      return { data: { content: "local scout reply" } };
+    }
+    const allHostsEmpty = JSON.parse(await session.tool("list_host_teammates", { host: "" }));
+    assert.deepEqual(allHostsEmpty.hosts, [host]);
+    const allHostsSpaces = JSON.parse(await session.tool("list_host_teammates", { host: "   " }));
+    assert.deepEqual(allHostsSpaces.hosts, [host]);
+
+    const allNodesEmpty = JSON.parse(await session.tool("list_node_hosts", { host: "" }));
+    assert.equal(allNodesEmpty.hosts.length, 1);
+    assert.equal(allNodesEmpty.hosts[0].serverId, host.serverId);
+    const allNodesSpaces = JSON.parse(await session.tool("list_node_hosts", { host: "  \t " }));
+    assert.equal(allNodesSpaces.hosts.length, 1);
+    assert.equal(allNodesSpaces.hosts[0].serverId, host.serverId);
+
+    const localFromEmpty = JSON.parse(await session.tool("ask_teammate", {
+      host: "", teammate: "Scout", message: "Handle locally with empty host",
+    }));
+    assert.deepEqual(localFromEmpty, { teammate: "Scout", reply: "local scout reply" });
+
+    const localFromSpaces = JSON.parse(await session.tool("ask_teammate", {
+      host: "   ", teammate: "Scout", message: "Handle locally with whitespace host",
+    }));
+    assert.deepEqual(localFromSpaces, { teammate: "Scout", reply: "local scout reply" });
+
+    await assert.rejects(
+      session.tool("list_node_files", { host: "", project: "p1" }),
+      /Choose a node host ID from list_node_hosts/,
+    );
+    await assert.rejects(
+      session.tool("node_read_file", { host: "", path: "README.md" }),
+      /Choose a node host ID from list_node_hosts/,
+    );
+    await assert.rejects(
+      session.tool("node_exec", { host: "   ", command: "uname -a" }),
+      /Choose a node host ID from list_node_hosts/,
+    );
+
+    return { data: { content: "All empty-host checks passed" } };
+  }, (op) => {
+    if (op === "capabilities") {
+      return { name: "Studio", role: "standard", online: true, version: 1, bots: [], operations: ["fs.read"], projects: [] };
+    }
+    throw new Error("Unexpected remote call: " + op);
+  });
+
+  const chatId = ws.createChat("pip");
+  await ws.send(chatId, "Verify empty host handling");
+  assert.equal(ws.chat(chatId).messages.at(-1).text, "All empty-host checks passed");
+  assert.equal(localCalls.length, 2, "ask_teammate with empty/whitespace host ran locally both times");
+  assert.equal(ws.state.runs[0].teamwork.every((ask) => !ask.remote), true);
+});

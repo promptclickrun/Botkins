@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { voiceCommands, VOICE_KINDS } from "../cli/commands/voice.mjs";
 import { ADDRESS_NEEDS_A_YES, VOICE_PROVIDERS } from "../desktop/terminal/control-voice.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
@@ -50,7 +51,7 @@ async function service(t) {
   const lines = async (first) => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.startsWith(first)).map((text) => text.slice(first.length));
   const changes = () => lines("Changed from the command line: ");
   const tried = () => lines("Tried from the command line: ");
-  const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
+  const everything = () => [readPersistedWorkspaceText(paths.dataDir), readFileSync(paths.logFile, "utf8")].join("\n");
   return { dir, paths, running, client, botkins, changes, tried, everything };
 }
 const SECRET = "sk-VOICE-key-that-must-not-show";

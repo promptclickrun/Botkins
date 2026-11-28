@@ -411,6 +411,7 @@ for (const name of [
   "send",
   "stop",
   "stopHelper",
+  "stepDetail",
   "warmChat",
   "recordVoiceLine",
   "chooseFiles",

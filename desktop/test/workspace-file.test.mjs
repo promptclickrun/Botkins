@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Workspace } from "../desktop/workspace.mjs";
 import { readWorkspace } from "../desktop/workspace-file.mjs";
+import { readPersistedWorkspace } from "./starter.mjs";
 
 function fixture(t, state) {
   const dir = mkdtempSync(join(tmpdir(), "botkins-workspace-"));
@@ -26,7 +27,7 @@ test("opening an early workspace preserves direct and inherited project access a
   // Reopening before the first save also reuses the archive.
   readWorkspace(file);
   const ws = new Workspace(dir, async () => ({}), () => {});
-  const saved = JSON.parse(readFileSync(file, "utf8"));
+  const saved = readPersistedWorkspace(dir);
   for (const state of [saved, ws.snapshot()]) {
     assert.ok(!Object.hasOwn(state, "groups"));
     assert.ok(state.projects.every((p) => !Object.hasOwn(p, "groupId")));

@@ -231,6 +231,18 @@ test("a message is cut at its MEDIA: attachments, so each picture is drawn where
   // A code block is never cut: MEDIA: is not read inside one.
   const fenced = "```\nMEDIA:/tmp/a.png\n```";
   assert.deepEqual(messageParts(fenced, detectPaths(fenced), { "/tmp/a.png": a }), [{ kind: "text", text: fenced }]);
+
+  // macOS Application Support and Windows paths with spaces on bare MEDIA: lines render as media without raw text.
+  const macPath = "/Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png";
+  const winPath = "C:\\Users\\Alice Smith\\AppData\\Local\\Botkins\\shot 1.png";
+  const macArt = art({ id: "mac", path: macPath, name: "botkins-a2ui-desktop.png", kind: "image" });
+  const winArt = art({ id: "win", path: winPath, name: "shot 1.png", kind: "image" });
+  const spaced = `Ready.\nMEDIA: ${macPath}\nMEDIA: ${winPath}`;
+  assert.deepEqual(messageParts(spaced, detectPaths(spaced), { [macPath]: macArt, [winPath]: winArt }), [
+    { kind: "text", text: "Ready." },
+    { kind: "media", artifact: macArt },
+    { kind: "media", artifact: winArt },
+  ]);
 });
 
 test("paths are asked 20 at a time, once per chat and path, and a failed call can be asked again", async () => {

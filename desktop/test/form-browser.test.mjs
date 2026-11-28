@@ -12,7 +12,7 @@ import { screenBrowserExecutable } from "../desktop/host/form-browser.mjs";
 import { headlessHost } from "../desktop/host/headless.mjs";
 import { createRuntime } from "../desktop/runtime.mjs";
 import { LinkClient, pair, parsePairingUrl } from "../desktop/remote/link-client.mjs";
-import { seedBots } from "./starter.mjs";
+import { seedBots, readPersistedWorkspaceText } from "./starter.mjs";
 
 test("Linux screen hosts prefer packaged Chrome when a Chromium snapshot is also installed", t => {
   const dir = mkdtempSync(join(tmpdir(), "botkins-browser-path-"));
@@ -135,7 +135,7 @@ async function browserLogin(t, split) {
   await phone.call("respond", request.id, { action: "accept", content: { password: { $credential: credential } } });
   const grant = await asked;
   assert.deepEqual(await invoke("use_secure_input", { handles: Object.values(grant.handles) }), { applied: true });
-  for (const surface of [grant, ws.snapshot(), readFileSync(join(dataDir, "workspace.json"), "utf8")]) assert.ok(!JSON.stringify(surface).includes(canary));
+  for (const surface of [grant, ws.snapshot(), readPersistedWorkspaceText(dataDir)]) assert.ok(!JSON.stringify(surface).includes(canary));
   assert.equal(await received.promise, true);
   assert.deepEqual(await browser.inspect(chat.id), page);
   await browser.open(chat.id, url + "?state=second");

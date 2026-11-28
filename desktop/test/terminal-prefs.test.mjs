@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { prefsCommands, PREFERENCE_KEYS } from "../cli/commands/prefs.mjs";
 import { MAC_TOOL_NAMES, PREFERENCES } from "../desktop/terminal/control-prefs.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
@@ -56,7 +57,7 @@ async function service(t) {
   const lines = async (first) => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.startsWith(first)).map((text) => text.slice(first.length));
   const changes = () => lines("Changed from the command line: ");
   const tried = () => lines("Tried from the command line: ");
-  const everything = () => [readFileSync(join(paths.dataDir, "workspace.json"), "utf8"), readFileSync(paths.logFile, "utf8")].join("\n");
+  const everything = () => [readPersistedWorkspaceText(paths.dataDir), readFileSync(paths.logFile, "utf8")].join("\n");
   return { dir, paths, running, client, botkins, put, changes, tried, everything, workspace: running.runtime.workspace };
 }
 

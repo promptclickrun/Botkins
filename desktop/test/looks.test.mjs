@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
 import { Workspace } from "../desktop/workspace.mjs";
+import { readPersistedWorkspace } from "./starter.mjs";
 import { CUSTOM, EYES, HEADS, HEADS_CAPABILITY, LOOKS_CAPABILITY, PALETTES, cleanLook, linkLooks, lookField, migrateLooks, nextLook, templateLook } from "../desktop/looks.mjs";
 import { cleanLook as linkCleanLook } from "../desktop/link/store.mjs";
 import { parseTemplateFile, templateFields, templateFile } from "../desktop/templates.mjs";
@@ -115,7 +116,7 @@ test("every bot gets a look on load, and the looks a phone saved in link.json mo
   assert.ok(!["luna", "muse", "tinker"].includes(odd.head), "by a character no other bot has");
 
   // The fields earlier versions drew from are still in the file, untouched, and nothing depends on them.
-  const saved = JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8"));
+  const saved = readPersistedWorkspace(dir);
   assert.deepEqual(saved.bots.map((b) => b.look), ws.state.bots.map((b) => b.look), "the looks are saved with the bots");
   assert.equal(saved.bots[0].face, "idle");
   assert.deepEqual(saved.bots[1].avatar, { body: "bighelp.scout", main: "#3E9B5E" });
@@ -193,7 +194,7 @@ test("a phone changes a bot's look on the bot itself, and the link keeps no look
   const chosen = { head: "wisp", palette: "bluebell", eyes: "curious" };
   await link.dispatch({}, { m: "link.setLook", a: ["pip", chosen] });
   assert.deepEqual(ws.bot("pip").look, chosen);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots[0].look, chosen, "saved with the bot");
+  assert.deepEqual(readPersistedWorkspace(dir).bots[0].look, chosen, "saved with the bot");
   assert.deepEqual(ws.bot("scout").look, before, "the other bot is untouched");
   // A character the kit doesn't have is refused by the app, and nothing changes.
   await assert.rejects(link.dispatch({}, { m: "link.setLook", a: ["pip", { head: "unicorn", palette: "original" }] }), /Unknown character/);
@@ -284,7 +285,7 @@ test("looks from before eyes and custom colors are unchanged", (t) => {
   ws.updateBot("a", { look: { head: "sprig", palette: "custom", colors: FOUR } });
   assert.deepEqual(ws.bot("a").look, { head: "sprig", palette: "custom", colors: four });
   assert.throws(() => ws.updateBot("a", { look: { head: "sprig", palette: "custom", colors: FOUR.slice(1) } }), /four colors/);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots[0].look, { head: "sprig", palette: "custom", colors: four });
+  assert.deepEqual(readPersistedWorkspace(dir).bots[0].look, { head: "sprig", palette: "custom", colors: four });
   const id = ws.addBot({ name: "Nova", role: "R", instructions: "I", look: { head: "toast", palette: "honey", eyes: "button", colors: FOUR } });
   assert.deepEqual(ws.bot(id).look, { head: "toast", palette: "honey", eyes: "button" });
 });

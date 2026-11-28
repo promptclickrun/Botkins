@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Readable, Writable } from "node:stream";
 import { main } from "../cli/main.mjs";
+import { readPersistedWorkspaceText } from "./starter.mjs";
 import { terminalPaths } from "../desktop/terminal/paths.mjs";
 import { startService } from "../desktop/terminal/serve.mjs";
 import { controlClient } from "../desktop/terminal/socket.mjs";
@@ -49,7 +50,7 @@ async function service(t) {
   const changes = async () => (await client.call("logs.read", { tail: 400 })).entries.map((entry) => entry.text).filter((text) => text.includes("Changed from the command line")).map((text) => text.split("Changed from the command line: ")[1]).filter((line) => line.startsWith("team."));
   /** Every text this host keeps in files that the workspace and the log use, and the link's own store. */
   const everything = () => {
-    const files = [join(paths.dataDir, "workspace.json"), paths.logFile];
+    const files = [join(paths.dataDir, "workspace.db"), paths.logFile];
     return files.map((file) => readFileSync(file, "utf8")).join("\n");
   };
   /** A person who asked to join with an invite, as the link would have kept the request. */

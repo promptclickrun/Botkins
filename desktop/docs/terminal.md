@@ -1071,8 +1071,21 @@ botkins channels remove <connection> --yes
 ```
 
 - **Owner-only.** Only the owner configures channels (Desktop **Settings › Channels**, the owner's Phone for status/pairings/pause/resume, or the CLI at a terminal). No bot tool can create, re-bind, approve pairings for, or widen a channel.
-- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in `workspace.json`, logs, tool results, or transcripts.
+- **Secrets never go on the command line.** `botkins channels add` reads tokens from a hidden prompt at a terminal, or from standard input (`--secrets -` as JSON, e.g. `{"appToken":"…","botToken":"…"}`). Tokens are stored in the encrypted vault and never appear in the workspace store (`workspace.db` / `workspace.json`), logs, tool results, or transcripts.
 - **Safe defaults.** Every new channel starts with `--dm pairing` (strangers get a one-time code and no bot turn until approved), `--groups off`, `--notify-phone off`, and `--tool-profile restricted` (read-only knowledge tools only).
+
+## Workspace store (`workspace.db`)
+
+Workspace state is stored in SQLite (`data/workspace.db`, WAL mode with `synchronous=NORMAL` and `foreign_keys=ON`) using Node's built-in `node:sqlite`. On first start, any existing `data/workspace.json` (and pending `turn-checkpoints/`) is imported in a single transaction, verified by row counts, and renamed to `data/workspace.json.migrated-<timestamp>`. If migration fails, Botkins logs the error and continues on `workspace.json`.
+
+```sh
+botkins workspace status --json
+botkins workspace migrate --dry-run
+botkins workspace migrate
+botkins workspace export [--out <path>]
+```
+
+- **Downgrading to an older build:** stop Botkins, run `botkins workspace export` (writes `data/workspace.json` from `data/workspace.db`), then move or remove `data/workspace.db` (`-wal`/`-shm`) before starting the older build.
 
 ## Scripts and JSON
 
