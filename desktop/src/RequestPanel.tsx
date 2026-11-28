@@ -4,6 +4,7 @@ import { decisionText } from "./pluginStarts";
 import { DETACHED_LINE } from "./keep";
 import type { AgentRequest, FormField } from "./types";
 import { CredentialChoice, isSecretField, looksSecret, useSavedCredentials, type Picked } from "./CredentialPicker";
+import { HostChip } from "./RemoteHosts";
 
 function SchemaInput({
   name,
@@ -154,6 +155,11 @@ export default function RequestPanel({
         )}
         <strong>
           {bot}{" "}
+          {req.hostName && (
+            <>
+              <HostChip name={req.hostName} local={req.hostId === "local"} />{" "}
+            </>
+          )}
           {secure ? "requests secure input" : req.kind === "permission" ? "needs approval" : "has a question"}
         </strong>
         {count > 1 && <small>1 of {count}</small>}

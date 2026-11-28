@@ -2,7 +2,7 @@
 // the computer's name on Home, and from the list on the computer's page.
 import { router } from "expo-router";
 import { computerChoice } from "@/state/computers";
-import { switchComputer } from "@/state/link";
+import { setUnifiedHosts, switchComputer } from "@/state/link";
 import { selectProfileHost, useProfile } from "@/state/profile";
 import { showToast, useApp } from "@/state/store";
 
@@ -13,6 +13,12 @@ export function switchTo(serverId: string) {
   if (!next) return;
   void switchComputer(serverId);
   showToast("Now using " + (next.name || "that computer"), "success");
+}
+
+/** Brings all paired computers together in one unified view. */
+export function useAllComputers() {
+  setUnifiedHosts(true);
+  showToast("Operating all computers in one view", "success");
 }
 
 /** Connecting one more computer ("Connect a computer"). The ones the phone has stay paired. */
@@ -27,6 +33,7 @@ export function runComputerChoice(event: string) {
   const choice = computerChoice(event);
   if (!choice) return;
   setTimeout(() => {
+    if (choice === "all") return useAllComputers();
     if (choice === "add") return addComputer();
     if (choice.profile) {
       const host = useProfile.getState().home?.hosts.find((item) => item.serverId === choice.use);

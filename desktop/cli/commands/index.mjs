@@ -23,11 +23,12 @@ import { piCommands } from "./pi.mjs";
 import { appsCommands } from "./apps.mjs";
 import { profileCommands } from "./profile.mjs";
 import { nodeCommands } from "./node.mjs";
+import { hostsCommands } from "./hosts.mjs";
 import { feedbackCommands } from "./feedback.mjs";
 import { marketplaceCommands } from "./marketplace.mjs";
 import { channelsCommands } from "./channels.mjs";
 
-export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings, ...profileCommands, ...nodeCommands, ...feedbackCommands, ...marketplaceCommands };
+export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings, ...profileCommands, ...nodeCommands, ...hostsCommands, ...feedbackCommands, ...marketplaceCommands };
 // What one bot has of the tools and skills is said under the bot: `botkins bots tools <bot>`.
 Object.assign(COMMANDS.bots.commands, botTools);
 // Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).

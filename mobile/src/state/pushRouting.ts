@@ -31,9 +31,11 @@ export type NotificationRoutingDecision = {
   route: NotificationRouteTarget | null;
 };
 
+import { unscopeId } from "./unified";
+
 /** Synthetic chat ids created by a node host for remote operation approvals (not backed by a chat). */
 export function isNodeJobChat(chatId: string | undefined): boolean {
-  return typeof chatId === "string" && chatId.startsWith("node-job-");
+  return typeof chatId === "string" && unscopeId(chatId).startsWith("node-job-");
 }
 
 /** True when a notification or pending request belongs to a node-host job rather than a real chat. */

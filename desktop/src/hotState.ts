@@ -126,7 +126,7 @@ export function applyHot(state: State, hot: HotMessage): State | null {
   return changed ? (next as State) : state;
 }
 
-const hostOf = (state?: State) => state?.remote?.using?.id ?? "local";
+const hostOf = (state?: State) => (state?.remote?.unified ? "unified" : (state?.remote?.using?.id ?? "local"));
 type Listener = () => void;
 
 /** One IPC sequence for the window. The workspace reads activity (absent, empty, or writing);

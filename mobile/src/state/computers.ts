@@ -118,17 +118,19 @@ export function startupProfilePairing(primary: string | null, last: string | nul
   return profile[current] ?? (bound.includes(current) ? local.find(host => host.serverId === current) : undefined);
 }
 
-export function computerActions(list: Pairing[], current: string | null | undefined, directory: ReadonlyArray<ProfileHost> = [], order: readonly string[] = []): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
+export function computerActions(list: Pairing[], current: string | null | undefined, directory: ReadonlyArray<ProfileHost> = [], order: readonly string[] = [], unified = false): { id: string; title: string; state?: "on" | "off"; image?: string }[] {
   const local = new Set(list.map(pairing => pairing.serverId));
   const rows = orderedComputers(list, directory, order).map(host => ({
     id: (local.has(host.serverId) ? "use:" : "profile:") + host.serverId,
     title: host.name || (host.member ? "Team" : "Computer"),
-    state: host.serverId === current ? ("on" as const) : ("off" as const),
+    state: !unified && host.serverId === current ? ("on" as const) : ("off" as const),
   }));
-  return [...rows, { id: "add", title: "Connect a computer…", image: "plus" }];
+  const allRow = list.length > 1 ? [{ id: "all", title: "All computers", state: unified ? ("on" as const) : ("off" as const), image: "square.grid.2x2" }] : [];
+  return [...allRow, ...rows, { id: "add", title: "Connect a computer…", image: "plus" }];
 }
-/** What a tap in that menu asks for: use a computer, add one, or nothing. */
-export function computerChoice(event: string): { use: string; profile?: boolean } | "add" | null {
+/** What a tap in that menu asks for: use a computer, all computers, add one, or nothing. */
+export function computerChoice(event: string): { use: string; profile?: boolean } | "all" | "add" | null {
+  if (event === "all") return "all";
   if (event === "add") return "add";
   if (event.startsWith("profile:") && event.length > 8) return { use: event.slice(8), profile: true };
   return event.startsWith("use:") && event.length > 4 ? { use: event.slice(4) } : null;

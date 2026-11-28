@@ -223,9 +223,12 @@ export type Bot = {
   starter?: string;
   /** Made from a starter that should be offered the Proactive agent (link-host/starters.mjs). */
   suggestProactive?: boolean;
+  /** Unified multi-host metadata when viewing bots across connected computers. */
+  hostId?: string;
+  hostName?: string;
 };
 /** `starter` names the starter the bot was made from; an older computer leaves it out. */
-export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "starter" | "bundle">>;
+export type BotInput = Pick<Bot, "name" | "role" | "instructions" | "face"> & Partial<Pick<Bot, "avatar" | "summary" | "starter" | "bundle">> & { hostId?: string };
 /** An agent the person already has in a provider's own tool (a Copilot or Codex agent), which can become a bot. */
 export type ImportableAgent = {
   key: string;
@@ -740,6 +743,8 @@ export type ChatSummary = {
   schedules?: ChatSchedule[];
   count: number;
   last?: { role: Message["role"]; text: string; time?: number; botId?: string };
+  hostId?: string;
+  hostName?: string;
 };
 /** A job ("project-jobs-v1"): a prompt that started its own chat, on its own branch in a git worktree, or in the checkout. Never a path on the computer. */
 export type JobSummary = {
@@ -1077,6 +1082,8 @@ export type AgentRequest = {
   time?: number;
   /** A question that waited ten minutes: its turn went on without an answer. It stays open as waiting, and an answer starts a new turn that quotes it. */
   detached?: true;
+  hostId?: string;
+  hostName?: string;
 };
 export type QueuedMessage = { clientMessageId?: string; id: string; text: string };
 /** What is happening right now, per chat. */
@@ -1231,6 +1238,8 @@ export type BotTask = {
   problem?: string;
   pendingNote?: { text: string; by: string; byName?: string; from: TaskStatus | "archived"; at: number };
   history?: TaskHistoryEntry[];
+  hostId?: string;
+  hostName?: string;
 };
 export type TaskInput = { id?: string; title: string; body?: string; botId?: string | null; priority?: TaskPriority; status?: "later" | "ready"; review?: TaskReviewMode };
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };

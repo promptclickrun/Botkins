@@ -49,7 +49,8 @@ export const ALERT_ACTIONS = [
 export function decide(event, { settings, focused, now = new Date(), timeZone, mine = true, resolved } = {}) {
   const prefs = { ...defaultSettings.notifications, ...settings?.notifications };
   if (inQuietHours(prefs.quietHours, now, timeZone)) return null;
-  const botName = event.bot?.name ?? "Botkins";
+  const rawBotName = event.bot?.name ?? "Botkins";
+  const botName = event.hostName ? rawBotName + " (" + event.hostName + ")" : rawBotName;
   if (event.type === "joinRequest") {
     if (!prefs.requests || focused) return null;
     return {
@@ -198,7 +199,8 @@ export class Notifier {
   }
   consider(event) {
     try {
-      if (event.run?.proactive) {
+      const fromRemote = Boolean(event.hostId && event.hostId !== "local");
+      if (!fromRemote && event.run?.proactive) {
         const { chat } = event;
         const person = chat?.createdBy ?? "owner";
         if (!chat || !this.ws.proactive.eligible(person, chat.botId) || person !== "owner") return;
@@ -212,9 +214,9 @@ export class Notifier {
             : event.type === "mention"
               ? event.mention?.chatId
               : event.request?.chatId;
-      const mine = !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
+      const mine = fromRemote || !chatId || typeof this.ws.notifiesOwner !== "function" || this.ws.notifiesOwner(chatId);
       const resolved =
-        event.type === "turn" && typeof this.ws.resolveRoutineTargets === "function"
+        !fromRemote && event.type === "turn" && typeof this.ws.resolveRoutineTargets === "function"
           ? this.ws.resolveRoutineTargets(event.chat, event.run)
           : undefined;
       const note = decide(event, { settings: this.ws.state.settings, focused: this.focused(), mine, resolved });

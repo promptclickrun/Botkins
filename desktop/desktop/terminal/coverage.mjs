@@ -781,6 +781,10 @@ export const CHANGES = {
   "node.convert.run": (args, value) => levelOf(value?.job?.nodeName ?? args?.[0]?.nodeName, value?.job?.status ?? "run"),
   "node.convert.undo": (args, value) => value?.snapshotId ?? args?.[0] ?? "latest",
   "node.remote.control": (args, value) => levelOf(value?.hostName ?? args?.[0], args?.[1]),
+  // ── Connected computers & unified multi-host view (control-hosts.mjs) ──
+  "hosts.unified": (args) => (args?.[0] === true ? "on" : "off"),
+  "hosts.include": (args) => levelOf(args?.[0], args?.[1] === true ? "included" : "excluded"),
+  "hosts.focus": (args) => args?.[0] || "local",
   // Channel Hooks: log connection label/id only, never tokens or message bodies.
   "channels.add": (args, value) => value?.label ?? args?.[0]?.label ?? args?.[0]?.kind,
   "channels.update": (args, value) => value?.label ?? args?.[0],
@@ -814,6 +818,8 @@ export const MORE_READS = {
   apps: ["apps.list", "apps.connected", "apps.accounts", "apps.card"], // (`apps.card` looks at a chat's Connect card again; when the app is connected, the chat goes on as it would for the window.)
   // (Node host, control-node.mjs)
   node: ["node.status", "node.approvals", "node.audit", "node.convert.inspect", "node.convert.plan", "node.convert.status", "node.remote.status"],
+  // (Connected computers & unified view, control-hosts.mjs)
+  hosts: ["hosts.status"],
   // (Channel Hooks, control-channels.mjs)
   channels: ["channels.list", "channels.pair.list", "channels.test", "channels.logs"],
 };

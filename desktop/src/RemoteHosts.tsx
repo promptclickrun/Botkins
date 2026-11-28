@@ -4,8 +4,9 @@
 // steps, src/SetupChoice.tsx) and Settings › Computers and teams.
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { Check, ChevronsUpDown, Monitor, MonitorSmartphone, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { Check, ChevronsUpDown, Layers, Monitor, MonitorSmartphone, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
 import type { ProfileHost, RemoteHost, State, TeamJoinState, TeamJoinTarget } from "./types";
+import { Switch } from "glisse";
 import { Group, errorText } from "./SettingsRows";
 import "./remotehosts.css";
 
@@ -38,6 +39,16 @@ function useDismiss(open: boolean, close: () => void, box: RefObject<HTMLElement
   }, [open]);
 }
 
+/** A quiet tag showing which computer an item belongs to when operating all computers in one view. */
+export function HostChip({ name, local }: { name?: string; local?: boolean }) {
+  if (!name) return null;
+  return (
+    <span className={"host-chip" + (local ? " local" : "")} title={"On " + name}>
+      {name}
+    </span>
+  );
+}
+
 /** The model providers as the side menu's computer row shows them: its quiet line and a row of its menu. */
 export type HostModels = { label: string; line: string; on: boolean; icons: ReactNode; open: () => void };
 
@@ -67,6 +78,8 @@ export function HostSwitcher({
   const box = useRef<HTMLDivElement>(null);
   const remote = state.remote;
   const using = remote?.using ?? null;
+  const unified = remote?.unified === true;
+  const unifiedHosts = remote?.unifiedHosts ?? [];
   useDismiss(open, () => setOpen(false), box);
   const hosts = remote?.hosts ?? [];
   const use = (id: string | null) => {
@@ -74,15 +87,28 @@ export function HostSwitcher({
     setError("");
     void api.useRemoteHost(id).catch((e) => setError(said(e)));
   };
-  const name = using ? using.name : "This computer";
+  const useUnified = () => {
+    setOpen(false);
+    setError("");
+    void api.setUnifiedHosts(true).catch((e) => setError(said(e)));
+  };
+  const onlineCount = unifiedHosts.filter((h) => h.state === "online").length;
+  const totalCount = unifiedHosts.length || hosts.filter((h) => h.included !== false).length + 1;
+  const unifiedState = unifiedHosts.some((h) => h.state === "revoked")
+    ? "revoked"
+    : unifiedHosts.some((h) => h.state === "offline" || h.state === "connecting")
+      ? "connecting"
+      : "online";
+  const unifiedSubtitle = onlineCount === totalCount ? totalCount + " computers online" : onlineCount + " of " + totalCount + " online";
+  const name = unified ? "All computers" : using ? using.name : "This computer";
   return (
     <div className="host-switch" ref={box}>
       <button
         type="button"
-        className={"account host-button" + (using ? " remote" : "")}
+        className={"account host-button" + (using || unified ? " remote" : "")}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={"Computer: " + name + (state.adminMode ? ". Admin mode" : "") + (using ? ". " + hostLine(using) : "") + ". Switch computer"}
+        aria-label={"Computer: " + name + (state.adminMode ? ". Admin mode" : "") + (unified ? ". " + unifiedSubtitle : using ? ". " + hostLine(using) : "") + ". Switch computer"}
         title={collapsed ? name : undefined}
         onClick={(e) => {
           const at = e.currentTarget.getBoundingClientRect();
@@ -91,8 +117,8 @@ export function HostSwitcher({
         }}
       >
         <span className="host-glyph" aria-hidden="true">
-          {using ? <MonitorSmartphone size={16} /> : <Monitor size={16} />}
-          <i className="host-dot" data-state={using ? using.state : models.on ? "online" : "offline"} />
+          {unified ? <Layers size={16} /> : using ? <MonitorSmartphone size={16} /> : <Monitor size={16} />}
+          <i className="host-dot" data-state={unified ? unifiedState : using ? using.state : models.on ? "online" : "offline"} />
         </span>
         <span className="nav-label">
           <span className="host-name">
@@ -100,7 +126,7 @@ export function HostSwitcher({
             {/* While Admin mode is on, the computer's name says so. */}
             {state.adminMode && <span className="admin-tag">Admin</span>}
           </span>
-          <small>{using ? (using.member ? memberLabel(using.team) : hostLine(using)) : models.line}</small>
+          <small>{unified ? unifiedSubtitle : using ? (using.member ? memberLabel(using.team) : hostLine(using)) : models.line}</small>
         </span>
         <ChevronsUpDown size={14} className="host-chevron" aria-hidden="true" />
       </button>
@@ -111,19 +137,28 @@ export function HostSwitcher({
       )}
       {open && (
         <div className="host-menu" role="menu" aria-label="Computers" style={place}>
-          <button type="button" role="menuitemradio" aria-checked={!using} onClick={() => use(null)}>
+          <button type="button" role="menuitemradio" aria-checked={unified} onClick={useUnified}>
+            <Layers size={15} aria-hidden="true" />
+            <span>
+              All computers
+              <small>Operate all bots in one view</small>
+            </span>
+            {unified && <Check size={14} aria-hidden="true" />}
+          </button>
+          <hr />
+          <button type="button" role="menuitemradio" aria-checked={!using && !unified} onClick={() => use(null)}>
             <Monitor size={15} aria-hidden="true" />
             <span>This computer</span>
-            {!using && <Check size={14} aria-hidden="true" />}
+            {!using && !unified && <Check size={14} aria-hidden="true" />}
           </button>
           {hosts.map((host) => (
-            <button type="button" role="menuitemradio" aria-checked={host.current} key={host.id} onClick={() => use(host.id)}>
+            <button type="button" role="menuitemradio" aria-checked={!unified && host.current} key={host.id} onClick={() => use(host.id)}>
               <MonitorSmartphone size={15} aria-hidden="true" />
               <span>
                 {host.name}
-                {host.member && host.team ? <small>{memberLabel(host.team)}</small> : host.current && host.state && <small>{STATES[host.state] ?? ""}</small>}
+                {host.member && host.team ? <small>{memberLabel(host.team)}</small> : host.state && (host.current || unified) && <small>{STATES[host.state] ?? ""}</small>}
               </span>
-              {host.current && <Check size={14} aria-hidden="true" />}
+              {!unified && host.current && <Check size={14} aria-hidden="true" />}
             </button>
           ))}
           <hr />
@@ -179,10 +214,37 @@ export function HostSwitcher({
   );
 }
 
-/** The line across the top while another computer is in use: whose bots these are, and the way back. */
+/** The line across the top while another computer is in use, or when an included unified host is offline/revoked. */
 export function HostBanner({ state, pairAgain }: { state: State; pairAgain: () => void }) {
   const using = state.remote?.using;
+  const unified = state.remote?.unified === true;
+  const unifiedHosts = state.remote?.unifiedHosts ?? [];
   const [busy, setBusy] = useState(false);
+  if (unified) {
+    const troubled = unifiedHosts.filter((h) => !h.local && h.state !== "online");
+    if (!troubled.length) return null;
+    const revoked = troubled.some((h) => h.state === "revoked");
+    const names = troubled.map((h) => h.name).join(", ");
+    return (
+      <div className="host-banner" data-state={revoked ? "revoked" : "offline"} role="status" aria-label="Connected computers status">
+        <Layers size={15} aria-hidden="true" />
+        <span className="host-banner-text">
+          {revoked ? (
+            <>
+              <strong>{names}</strong> no longer knows this computer. Pair again to include its bots.
+            </>
+          ) : (
+            <>
+              <strong>{names}</strong> {troubled.length === 1 ? "is" : "are"} currently offline or connecting. Other computers remain available.
+            </>
+          )}
+        </span>
+        <button type="button" className="secondary" onClick={pairAgain}>
+          Manage computers
+        </button>
+      </div>
+    );
+  }
   // While the other computer answers, the side menu's computer row already says whose bots these
   // are, and its menu has "This computer". The line across the top is for trouble only.
   if (!using || using.state === "online") return null;
@@ -581,6 +643,8 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
   const hosts: RemoteHost[] = state.remote?.hosts ?? [];
   const profileHosts: ProfileHost[] = state.profile?.hosts ?? [];
   const using = state.remote?.using ?? null;
+  const unified = state.remote?.unified === true;
+  const unifiedEnabled = state.remote?.unifiedEnabled === true;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -616,59 +680,76 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
       In use
     </span>
   );
-  const bots = state.bots.length;
-  const row = (host: RemoteHost) => (
-    <div className="set-row host-row" key={host.id}>
-      <span className={"host-row-glyph " + (host.member ? "team" : "computer")} aria-hidden="true">
-        {host.member ? <Users size={17} /> : <MonitorSmartphone size={17} />}
-      </span>
-      <div className="set-label">
-        {renaming?.id === host.id ? (
-          <form
-            className="host-rename"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run(() => api.renameRemoteHost(host.id, renaming.name)).then(() => setRenaming(null));
-            }}
-          >
-            <input aria-label={"Name for " + host.name} value={renaming.name} maxLength={60} autoFocus onChange={(e) => setRenaming({ id: host.id, name: e.target.value })} />
-            <button type="submit" className="set-button" disabled={busy || !renaming.name.trim()}>
-              Save
+  const localBots = unified ? state.bots.filter((b) => !b.hostId || b.hostId === "local").length : state.bots.length;
+  const row = (host: RemoteHost) => {
+    const included = host.included !== false;
+    const statusText = (host.current || (unified && included)) && host.state ? STATES[host.state] : "";
+    return (
+      <div className="set-row host-row" key={host.id}>
+        <span className={"host-row-glyph " + (host.member ? "team" : "computer")} aria-hidden="true">
+          {host.member ? <Users size={17} /> : <MonitorSmartphone size={17} />}
+        </span>
+        <div className="set-label">
+          {renaming?.id === host.id ? (
+            <form
+              className="host-rename"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void run(() => api.renameRemoteHost(host.id, renaming.name)).then(() => setRenaming(null));
+              }}
+            >
+              <input aria-label={"Name for " + host.name} value={renaming.name} maxLength={60} autoFocus onChange={(e) => setRenaming({ id: host.id, name: e.target.value })} />
+              <button type="submit" className="set-button" disabled={busy || !renaming.name.trim()}>
+                Save
+              </button>
+              <button type="button" className="set-button" onClick={() => setRenaming(null)}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <span className="set-name">{rowName(host)}</span>
+          )}
+          <small className="int-line">
+            {[
+              host.member ? "Member" + (host.team && host.team !== host.name ? " · on " + host.name : "") : "",
+              statusText,
+              unified && !included ? "Excluded from unified view" : "",
+              !host.member && !statusText && (!unified || included) ? "Paired " + new Date(host.addedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </small>
+        </div>
+        <div className="set-control">
+          {unified ? (
+            <>
+              <Switch
+                checked={included}
+                disabled={busy}
+                aria-label={"Include " + rowName(host) + " in unified view"}
+                onCheckedChange={(next: boolean) => void run(() => api.setUnifiedHostIncluded(host.id, next))}
+              />
+              <button type="button" className="set-button" disabled={busy} aria-label={"Focus only " + rowName(host)} onClick={() => void run(() => api.useRemoteHost(host.id))}>
+                Focus
+              </button>
+            </>
+          ) : host.current ? (
+            inUse
+          ) : (
+            <button type="button" className="set-button" disabled={busy} aria-label={"Use " + rowName(host)} onClick={() => void run(() => api.useRemoteHost(host.id))}>
+              Use
             </button>
-            <button type="button" className="set-button" onClick={() => setRenaming(null)}>
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <span className="set-name">{rowName(host)}</span>
-        )}
-        <small className="int-line">
-          {[
-            host.member ? "Member" + (host.team && host.team !== host.name ? " · on " + host.name : "") : "",
-            host.current ? STATES[host.state ?? ""] : "",
-            !host.member && !host.current ? "Paired " + new Date(host.addedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </small>
+          )}
+          <MoreMenu
+            host={host}
+            busy={busy}
+            rename={() => setRenaming({ id: host.id, name: host.name })}
+            forget={() => void run(() => api.forgetRemoteHost(host.id), host.member ? "Removed." : "Unpaired.")}
+          />
+        </div>
       </div>
-      <div className="set-control">
-        {host.current ? (
-          inUse
-        ) : (
-          <button type="button" className="set-button" disabled={busy} aria-label={"Use " + rowName(host)} onClick={() => void run(() => api.useRemoteHost(host.id))}>
-            Use
-          </button>
-        )}
-        <MoreMenu
-          host={host}
-          busy={busy}
-          rename={() => setRenaming({ id: host.id, name: host.name })}
-          forget={() => void run(() => api.forgetRemoteHost(host.id), host.member ? "Removed." : "Unpaired.")}
-        />
-      </div>
-    </div>
-  );
+    );
+  };
   const profileRow = (host: ProfileHost) => (
     <div className="set-row host-row" key={"profile-" + host.serverId}>
       <span className={"host-row-glyph " + (host.member ? "team" : "computer")} aria-hidden="true">
@@ -686,7 +767,32 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
   const listedOnly = profileHosts.filter((host) => !hosts.some((paired) => paired.id === host.serverId));
   return (
     <>
-      <p className="host-lede">Choose whose bots this window shows. Each one keeps its own bots and chats.</p>
+      <p className="host-lede">Choose whose bots this window shows, or bring bots from all connected computers together into one unified view.</p>
+      {hosts.length > 0 && (
+        <Group footer="When on, bots, chats, notifications, and approvals from this computer and your included computers appear together so you never have to switch hosts.">
+          <div className="set-row host-row">
+            <span className="host-row-glyph computer" aria-hidden="true">
+              <Layers size={17} />
+            </span>
+            <div className="set-label">
+              <span className="set-name">Operate all bots in one view</span>
+              <small className="int-line">
+                {unified
+                  ? "Showing bots, notifications, and approvals from all included computers together"
+                  : "Combine bots, notifications, and approvals across connected computers"}
+              </small>
+            </div>
+            <div className="set-control">
+              <Switch
+                checked={unifiedEnabled}
+                disabled={busy}
+                aria-label="Operate all bots in one view"
+                onCheckedChange={(next: boolean) => void run(() => api.setUnifiedHosts(next), next ? "All connected computers are now in one view." : "Switched back to single-computer view.")}
+              />
+            </div>
+          </div>
+        </Group>
+      )}
       <Group footer="Using another computer or a team changes nothing in this computer's own workspace. You can switch back at any time, here or in the side menu.">
         <div className="set-row host-row">
           <span className="host-row-glyph" aria-hidden="true">
@@ -694,10 +800,20 @@ export function ComputersAndTeams({ state, initialJoin }: { state: State; initia
           </span>
           <div className="set-label">
             <span className="set-name">This computer</span>
-            <small className="int-line">{using ? "Its own bots and chats" : bots === 1 ? "1 bot" : bots + " bots"}</small>
+            <small className="int-line">{using ? "Its own bots and chats" : localBots === 1 ? "1 bot" : localBots + " bots"}</small>
           </div>
           <div className="set-control">
-            {using ? (
+            {unified ? (
+              <>
+                <span className="host-in-use">
+                  <Check size={15} aria-hidden="true" />
+                  Included
+                </span>
+                <button type="button" className="set-button" disabled={busy} aria-label="Focus only this computer" onClick={() => void run(() => api.useRemoteHost(null))}>
+                  Focus
+                </button>
+              </>
+            ) : using ? (
               <button type="button" className="set-button" disabled={busy} aria-label="Use this computer" onClick={() => void run(() => api.useRemoteHost(null))}>
                 Use
               </button>

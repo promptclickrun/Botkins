@@ -97,7 +97,7 @@ function App() {
   const [display, setDisplay] = useState(readChatDisplay);
   const position = useRef(settleChatDisplay(display).completionPosition);
   function observeQueue(next: State) {
-    const box = outboxes.get(next.remote?.using?.id ?? "local");
+    const box = outboxes.get(next.remote?.unified ? "unified" : (next.remote?.using?.id ?? "local"));
     if (box) for (const id of box.chatIds()) {
       const chat = next.chats.find(chat => chat.id === id);
       box.observe(id, chat?.loaded?.from ?? 0, chat?.messages ?? [], next.queued?.[id] ?? []);
@@ -105,7 +105,7 @@ function App() {
   }
   function receiveSnapshot(received: State) {
     updates.whole(received, next => {
-      const hostId = next.remote?.using?.id ?? "local";
+      const hostId = next.remote?.unified ? "unified" : (next.remote?.using?.id ?? "local");
       const scroll = completionByHost.get(hostId) ?? new CompletionScroll();
       completionByHost.set(hostId, scroll);
       scroll.observe(next.chats, next.runs, position.current);
@@ -158,7 +158,7 @@ function App() {
   useEffect(() => {
     if (spaceAbout) openSpaceRef.current(spaceAbout.spaceId);
   }, [spaceAbout?.n]);
-  const host = state?.remote?.using?.id ?? "local";
+  const host = state?.remote?.unified ? "unified" : (state?.remote?.using?.id ?? "local");
   const box = outbox(host);
   const pending = useSyncExternalStore(box.subscribe, () => box.rows(chatId));
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
