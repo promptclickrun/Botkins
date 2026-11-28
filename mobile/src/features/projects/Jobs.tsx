@@ -14,7 +14,7 @@ import { api, attempt } from "@/state/link";
 import { BotAvatar, Button, Chip, Field, Group, IconButton, IconTile, Label, Row, Segmented, space, T, useTheme } from "@/ui";
 import { FolderChoice } from "./ProjectFolders";
 import { baseName, jobCounts, jobStage, launchable, launchLabel, projectJobs, STAGE_LABELS, toggleBot, type Draft } from "./jobLogic";
-import { MODES } from "./logic";
+import { MODES, orderJobsRunningFirst } from "./logic";
 
 const WHERE = [
   { value: "worktree" as const, label: "Own worktree" },
@@ -44,7 +44,7 @@ const askYolo = (count: number) =>
     ]),
   );
 
-export function Jobs({ project }: { project: Project }) {
+export function Jobs({ project, standalone = false }: { project: Project; standalone?: boolean }) {
   const { colors } = useTheme();
   const settings = usePart("settings");
   const live = usePart("live");
@@ -52,7 +52,7 @@ export function Jobs({ project }: { project: Project }) {
   const allBots = useBots();
   const bots = allBots.filter((bot) => canUseProject(settings, bot, project));
   const chats = useChats();
-  const jobs = projectJobs(chats, project.id);
+  const jobs = orderJobsRunningFirst(projectJobs(chats, project.id), live);
   const [folder, setFolder] = useState<string>();
   const chosenFolder = project.folders?.includes(folder ?? "") ? folder : undefined;
   const broughtIn = jobs.filter((chat) => chat.job?.state === "brought-in").length;
@@ -105,7 +105,7 @@ export function Jobs({ project }: { project: Project }) {
   return (
     <View style={{ gap: space.md }}>
       <View>
-        <Label>{counts ? "Jobs · " + counts : "Jobs"}</Label>
+        {!standalone && <Label>{counts ? "Jobs · " + counts : "Jobs"}</Label>}
         <Group>
           {!!project.folder && (
             <Row

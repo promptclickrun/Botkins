@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Button } from "glisse";
+import { Button, SearchField } from "glisse";
 import {
   ArrowDown,
   ArrowUp,
@@ -17,18 +17,21 @@ import {
   ShieldCheck,
   SquarePen,
   Trash2,
+  Users,
   X,
   Info,
   Rocket,
+  Zap,
 } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { Block } from "./Today";
-import { ChatRow, dateLabel, useAsk, type PageActions } from "./Pages";
+import { ChatRow, dateLabel, shortTime, useAsk, type PageActions } from "./Pages";
 import ProjectChanges, { modeLabels } from "./ProjectChanges";
 import { accessVia, canUseProject, globalAccess, grantOf } from "./access";
-import type { Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from "./types";
+import type { Artifact, Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from "./types";
 import "./records.css";
 import "./workspaces.css";
+import "./projects.css";
 
 import { WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
@@ -38,6 +41,13 @@ import ProjectSpaces from "./ProjectSpaces";
 import ProjectJobs from "./ProjectJobs";
 import { jobStage, projectJobs } from "./jobs";
 import { hasSpaces } from "./spaces";
+import {
+  buildDesktopProjectIndex,
+  groupProjectChats,
+  PROJECT_PAGE_SIZE,
+  type DesktopIndexRow,
+  type DesktopIndexRowKey,
+} from "./projectLogic";
 const api = window.botkins;
 const COLORS: ProjectColor[] = ["coral", "amber", "green", "teal", "blue", "violet", "pink", "gray"];
 const clean = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
@@ -260,6 +270,8 @@ function ProjectPage({
   // A project opens on its Jobs: the place to start work in it (src/ProjectJobs.tsx).
   const [section, setSection] = useState<Section>("jobs");
   const [repo, setRepo] = useState(false);
+  const [changedFiles, setChangedFiles] = useState<number | null>(null);
+  const [artifactsPreview, setArtifactsPreview] = useState<Artifact[]>();
   const chats = state.chats.filter((c) => c.projectId === project.id && !c.archived).sort((a, b) => b.time - a.time);
   const panels = state.panels.filter((p) => p.projectId === project.id);
   const open = project.todos.filter((t) => !t.done).length;
@@ -270,17 +282,38 @@ function ProjectPage({
   // Changes shows only for a folder that is a git repository.
   useEffect(() => {
     setRepo(false);
-    if ((project.folders?.length ?? 0) > 1) { setRepo(true); return; }
+    setChangedFiles(null);
     if (!project.folder) return;
     let live = true;
     api
       .projectChanges(project.id)
-      .then((c) => live && setRepo(c.repo))
-      .catch(() => {});
+      .then((c) => {
+        if (!live) return;
+        setRepo(c.repo || (project.folders?.length ?? 0) > 1);
+        setChangedFiles(c.repo ? c.files.length : null);
+      })
+      .catch(() => {
+        if (live && (project.folders?.length ?? 0) > 1) setRepo(true);
+      });
     return () => {
       live = false;
     };
   }, [project.id, project.folder, project.folders?.length]);
+  const artifactIds = (project.artifacts ?? []).join("\n");
+  useEffect(() => {
+    if (!hasProjectArtifacts(state) || !(project.artifacts?.length)) {
+      setArtifactsPreview(undefined);
+      return;
+    }
+    let live = true;
+    api
+      .projectArtifacts(project.id)
+      .then((ans) => live && setArtifactsPreview(ans.items))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [project.id, artifactIds, state.artifacts?.revision]);
   useEffect(() => {
     if (section === "changes" && !repo) setSection("overview");
   }, [repo]);
@@ -331,7 +364,20 @@ function ProjectPage({
         </nav>
         <div className="project-section">
           {section === "jobs" && <ProjectJobs key={project.id} state={state} project={project} openChat={openChat} manageAccess={() => setSection("access")} fail={fail} />}
-          {section === "overview" && <Overview key={project.id} state={state} project={project} deleted={back} fail={fail} />}
+          {section === "overview" && (
+            <Overview
+              key={project.id}
+              state={state}
+              project={project}
+              repo={repo}
+              changedFiles={changedFiles}
+              artifacts={artifactsPreview}
+              selectSection={setSection}
+              openChat={openChat}
+              deleted={back}
+              fail={fail}
+            />
+          )}
           {section === "chats" && <ProjectChats state={state} project={project} chats={chats} actions={actions} openChat={openChat} botPage={botPage} />}
           {section === "panels" && !spaces && <ProjectPanels state={state} panels={panels} />}
           {section === "panels" && spaces && (
@@ -390,14 +436,61 @@ function Card({
   );
 }
 
+function OverviewIndexRow({
+  row,
+  onClick,
+}: {
+  row: DesktopIndexRow;
+  onClick: () => void;
+}) {
+  const icons: Record<DesktopIndexRowKey, { icon: typeof Zap; cls: string }> = {
+    jobs: { icon: Zap, cls: "amber" },
+    todos: { icon: ListTodo, cls: "green" },
+    chats: { icon: MessagesSquare, cls: "blue" },
+    artifacts: { icon: Paperclip, cls: "coral" },
+    panels: { icon: LayoutDashboard, cls: "teal" },
+    changes: { icon: GitCompareArrows, cls: "gray" },
+    access: { icon: Users, cls: "gray" },
+    folders: { icon: FolderOpen, cls: "gray" },
+  };
+  const { icon: Icon, cls } = icons[row.key];
+  return (
+    <button type="button" className="record-row project-index-row" onClick={onClick}>
+      <span className={"project-index-tile project-color " + cls} aria-hidden="true">
+        <Icon size={16} />
+      </span>
+      <span className="row-main">
+        <span className="row-title">{row.title}</span>
+        {row.subtitle && <span className="row-sub">{row.subtitle}</span>}
+      </span>
+      {row.badge ? (
+        <span className={"project-index-badge " + row.badge.tone}>{row.badge.label}</span>
+      ) : (
+        row.count !== undefined && <span className="row-value">{row.count}</span>
+      )}
+      <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+    </button>
+  );
+}
+
 function Overview({
   state,
   project,
+  repo: isGitRepo,
+  changedFiles,
+  artifacts,
+  selectSection,
+  openChat,
   deleted,
   fail,
 }: {
   state: State;
   project: Project;
+  repo: boolean;
+  changedFiles: number | null;
+  artifacts?: Artifact[];
+  selectSection: (section: Section) => void;
+  openChat: (id: string, messageIndex?: number) => void;
   deleted: () => void;
   fail: (e: unknown) => void;
 }) {
@@ -413,12 +506,33 @@ function Overview({
   const [parent, setParent] = useState("");
   const [browsing, setBrowsing] = useState(false);
   const [cloning, setCloning] = useState(false);
+  const foldersRef = useRef<HTMLDivElement>(null);
   const dialogs = useAsk();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   useEffect(() => {
     if (!dirty) setDraft(initial);
   }, [initial]);
   const chats = state.chats.filter((c) => c.projectId === project.id).length;
+
+  const index = useMemo(
+    () =>
+      buildDesktopProjectIndex({
+        state,
+        project,
+        artifacts,
+        changedFiles,
+        features: {
+          jobs: true,
+          artifacts: hasProjectArtifacts(state),
+          spaces: hasSpaces(state),
+          changes: isGitRepo,
+        },
+      }),
+    [state, project, artifacts, changedFiles, isGitRepo],
+  );
+  const recentChat = index.recentChat;
+  const recentBot = recentChat ? state.bots.find((b) => b.id === recentChat.botId) : undefined;
+
   async function save() {
     setBusy(true);
     setError("");
@@ -436,8 +550,64 @@ function Overview({
     }
   }
   const run = (p: Promise<unknown>) => void p.catch((e) => setError(clean(e)));
+  const handleRowClick = (row: DesktopIndexRow) => {
+    if (row.key === "folders") {
+      foldersRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    selectSection(row.target);
+  };
   return (
     <div className="record-detail">
+      {recentChat && (
+        <Card title="Pick up where you left off" label="overview-recent" rows>
+          <ul className="edit-list project-index-list">
+            <li className="link-row">
+              <button type="button" className="record-row project-index-row" onClick={() => openChat(recentChat.id)}>
+                {recentBot && <BotAvatar bot={recentBot} size={32} />}
+                <span className="row-main">
+                  <span className="row-title">{recentChat.title || recentBot?.name || "Chat"}</span>
+                  <span className="row-sub">
+                    {[recentBot?.name, shortTime(recentChat.time)].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <ChevronRight size={15} className="row-chevron" aria-hidden="true" />
+              </button>
+            </li>
+          </ul>
+        </Card>
+      )}
+
+      <Card title="Work" label="overview-work" rows>
+        <ul className="edit-list project-index-list">
+          {index.work.map((row) => (
+            <li key={row.key} className="link-row">
+              <OverviewIndexRow row={row} onClick={() => handleRowClick(row)} />
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Card title="Files and views" label="overview-files" rows>
+        <ul className="edit-list project-index-list">
+          {index.files.map((row) => (
+            <li key={row.key} className="link-row">
+              <OverviewIndexRow row={row} onClick={() => handleRowClick(row)} />
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      <Card title="Settings" label="overview-settings" rows>
+        <ul className="edit-list project-index-list">
+          {index.settings.map((row) => (
+            <li key={row.key} className="link-row">
+              <OverviewIndexRow row={row} onClick={() => handleRowClick(row)} />
+            </li>
+          ))}
+        </ul>
+      </Card>
+
       <Card title="Details" label="overview-details">
         <div className="field-grid">
           <label className="field">
@@ -487,31 +657,33 @@ function Overview({
           </div>
         )}
       </Card>
-      <Card title={projectCapability(state, "project-folders-v1") ? "Folders" : "Folder"}>
-        <ul className="edit-list">
-          {(project.folders ?? (project.folder ? [project.folder] : [])).map((path, index) => (
-            <li key={path}>
-              <span className="grow mono">{path}{!index && project.folders && " · Default"}</span>
-              <button aria-label="Reveal folder" onClick={() => run(api.revealProject(project.id, path))}><FolderOpen size={16} /></button>
-              {!!index && <button onClick={() => run(api.editProjectFolder(project.id, "default", path))}>Make default</button>}
-              <button onClick={async () => {
-                if (await dialogs.ask({ title: "Remove folder?", body: path + " stays on the computer.", confirm: "Remove folder", danger: true }))
-                  run(project.folders ? api.editProjectFolder(project.id, "remove", path) : api.updateProject(project.id, { folder: null }));
-              }}>Remove folder</button>
-            </li>
-          ))}
-        </ul>
-        <button onClick={() => state.remote?.using ? setBrowsing(true) : run(api.chooseProjectFolder(project.id, !!project.folders))}><FolderOpen size={15} /> {project.folders ? "Add folder…" : "Choose folder…"}</button>
-        {browsing && <FolderBrowserSheet project close={() => setBrowsing(false)} choose={(path) => {
-          setBrowsing(false);
-          run(project.folders ? api.editProjectFolder(project.id, "add", path) : api.updateProject(project.id, { folder: path }));
-        }} />}
-        {projectCapability(state, "project-clone-v1") && <CloneFields {...{ repo, parent, setRepo, setParent }} />}
-        {repo.trim() && <button disabled={cloning} onClick={() => {
-          setCloning(true);
-          run(api.cloneProjectRepository(repo, parent, project.id).then(() => setRepo("")).finally(() => setCloning(false)));
-        }}>{cloning ? "Cloning…" : "Clone repository"}</button>}
-      </Card>
+      <div ref={foldersRef}>
+        <Card title={projectCapability(state, "project-folders-v1") ? "Folders" : "Folder"}>
+          <ul className="edit-list">
+            {(project.folders ?? (project.folder ? [project.folder] : [])).map((path, index) => (
+              <li key={path}>
+                <span className="grow mono">{path}{!index && project.folders && " · Default"}</span>
+                <button aria-label="Reveal folder" onClick={() => run(api.revealProject(project.id, path))}><FolderOpen size={16} /></button>
+                {!!index && <button onClick={() => run(api.editProjectFolder(project.id, "default", path))}>Make default</button>}
+                <button onClick={async () => {
+                  if (await dialogs.ask({ title: "Remove folder?", body: path + " stays on the computer.", confirm: "Remove folder", danger: true }))
+                    run(project.folders ? api.editProjectFolder(project.id, "remove", path) : api.updateProject(project.id, { folder: null }));
+                }}>Remove folder</button>
+              </li>
+            ))}
+          </ul>
+          <button onClick={() => state.remote?.using ? setBrowsing(true) : run(api.chooseProjectFolder(project.id, !!project.folders))}><FolderOpen size={15} /> {project.folders ? "Add folder…" : "Choose folder…"}</button>
+          {browsing && <FolderBrowserSheet project close={() => setBrowsing(false)} choose={(path) => {
+            setBrowsing(false);
+            run(project.folders ? api.editProjectFolder(project.id, "add", path) : api.updateProject(project.id, { folder: path }));
+          }} />}
+          {projectCapability(state, "project-clone-v1") && <CloneFields {...{ repo, parent, setRepo, setParent }} />}
+          {repo.trim() && <button disabled={cloning} onClick={() => {
+            setCloning(true);
+            run(api.cloneProjectRepository(repo, parent, project.id).then(() => setRepo("")).finally(() => setCloning(false)));
+          }}>{cloning ? "Cloning…" : "Clone repository"}</button>}
+        </Card>
+      </div>
       <Card title="Delete project" note={(chats === 1 ? "Its chat stays" : chats ? "Its " + chats + " chats stay" : "Nothing in Chats changes") + (chats ? " in Chats, outside any project." : ".") + " Its to-do list is deleted."}>
         <div className="actionrow">
           <button
@@ -561,10 +733,22 @@ function ProjectChats({
   const savesMode = projectCapability(state, "project-mode-v1");
   const mode = savesMode ? project.mode ?? "default" : localMode;
   const [folder, setFolder] = useState<string>();
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PROJECT_PAGE_SIZE);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [adding, setAdding] = useState(false);
   const visible = state.bots.filter((b) => !b.hidden || canUseProject(state, b, project));
+  const botNames = useMemo(() => new Map(state.bots.map((b) => [b.id, b.name])), [state.bots]);
+  const grouped = useMemo(
+    () =>
+      groupProjectChats(chats, state, {
+        query,
+        botName: (botId) => botNames.get(botId),
+        limit,
+      }),
+    [chats, state, query, botNames, limit],
+  );
   async function start(bot: Bot) {
     setBusy(bot.id);
     setError("");
@@ -589,10 +773,37 @@ function ProjectChats({
         }
       >
         {chats.length > 0 && (
-          <div className="project-chats">
-            {chats.map((c) => (
-              <ChatRow key={c.id} state={state} chat={c} open={openChat} actions={actions} />
-            ))}
+          <div className="project-list-tools">
+            <SearchField
+              className="lg-search-compact project-search-field"
+              aria-label="Search chats"
+              placeholder="Search chats"
+              value={query}
+              onValueChange={(next) => {
+                setQuery(next);
+                setLimit(PROJECT_PAGE_SIZE);
+              }}
+            />
+          </div>
+        )}
+        {chats.length > 0 && grouped.groups.length === 0 && (
+          <p className="muted project-list-empty">No chats match.</p>
+        )}
+        {grouped.groups.map((bucket) => (
+          <div key={bucket.key} className="project-chat-bucket">
+            <div className="project-bucket-label">{bucket.title}</div>
+            <div className="project-chats">
+              {bucket.chats.map((c) => (
+                <ChatRow key={c.id} state={state} chat={c} open={openChat} actions={actions} />
+              ))}
+            </div>
+          </div>
+        ))}
+        {grouped.older > 0 && (
+          <div className="project-list-more">
+            <button type="button" className="textbutton" onClick={() => setLimit((n) => n + PROJECT_PAGE_SIZE)}>
+              Show {grouped.older} older
+            </button>
           </div>
         )}
       </Card>
@@ -693,7 +904,7 @@ function ProjectPanels({ state, panels }: { state: State; panels: State["panels"
 function TodoList({ project, fail }: { project: Project; fail: (e: unknown) => void }) {
   const [text, setText] = useState("");
   const [editing, setEditing] = useState<{ id: string; text: string }>();
-  const [showDone, setShowDone] = useState(true);
+  const [showDone, setShowDone] = useState(false);
   const dialogs = useAsk();
   const open = project.todos.filter((t) => !t.done);
   const done = project.todos.filter((t) => t.done).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0));
@@ -795,7 +1006,7 @@ function TodoList({ project, fail }: { project: Project; fail: (e: unknown) => v
         {done.length > 0 && (
           <>
             <button className="textbutton todo-done-toggle" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
-              <ChevronRight size={14} style={{ transform: showDone ? "rotate(90deg)" : undefined }} /> Done · {done.length}
+              <ChevronRight size={14} style={{ transform: showDone ? "rotate(90deg)" : undefined }} /> {done.length} done
             </button>
             {showDone && (
               <ul className="edit-list todo-list" aria-label="Done to-dos">

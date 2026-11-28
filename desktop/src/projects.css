@@ -178,3 +178,106 @@
   color: var(--danger);
   margin-top: 1px;
 }
+
+/* Channels-style Overview index + Chats/Artifacts search, grouping and paging. */
+.project-index-list > li.link-row {
+  padding: 0;
+}
+.project-index-list > li.link-row + li.link-row {
+  border-top: 1px solid var(--line);
+}
+.project-index-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 52px;
+  border-radius: 0;
+}
+.project-index-row:hover {
+  background: var(--hover);
+}
+.project-index-tile {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+.project-index-row .row-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.project-index-row .row-title {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-index-row .row-sub {
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-index-row .row-value {
+  font-size: calc(13px * var(--text-scale));
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.project-index-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 600;
+  flex: none;
+}
+.project-index-badge.accent {
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 14%, transparent));
+  color: var(--accent-text, var(--accent));
+}
+.project-index-badge.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.project-list-tools {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.project-search-field {
+  width: 100%;
+}
+.project-chat-bucket + .project-chat-bucket {
+  border-top: 1px solid var(--line);
+}
+.project-bucket-label {
+  padding: 10px 14px 4px;
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.project-list-empty {
+  padding: 18px 14px;
+  margin: 0;
+  text-align: center;
+  font-size: calc(13px * var(--text-scale));
+}
+.project-list-more {
+  display: flex;
+  justify-content: center;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+

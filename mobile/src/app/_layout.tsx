@@ -166,7 +166,14 @@ export default function RootLayout() {
               <Stack.Screen name="work/activity" />
               <Stack.Screen name="work/tasks" />
               <Stack.Screen name="work/routines" />
-              <Stack.Screen name="projects/[id]" />
+              <Stack.Screen name="projects/[id]/index" />
+              <Stack.Screen name="projects/[id]/chats" />
+              <Stack.Screen name="projects/[id]/todos" />
+              <Stack.Screen name="projects/[id]/jobs" />
+              <Stack.Screen name="projects/[id]/artifacts" />
+              <Stack.Screen name="projects/[id]/spaces" />
+              <Stack.Screen name="projects/[id]/access" />
+              <Stack.Screen name="projects/[id]/folders" />
               <Stack.Screen name="projects/add-chats" options={tall} />
               <Stack.Screen name="projects/attach" options={tall} />
               <Stack.Screen name="projects/job" options={tall} />
