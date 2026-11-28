@@ -2,7 +2,7 @@
 // Every choice applies at once.
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router } from "expo-router";
-import { Check, ChevronsUpDown, Monitor, Moon, PanelBottom, SunMoon, Sun, Vibrate } from "lucide-react-native";
+import { Check, ChevronsUpDown, Monitor, Moon, PanelBottom, Sun, SunMoon, Tag, Vibrate } from "lucide-react-native";
 import { Platform, StyleSheet, View } from "react-native";
 import { useMember, useSettings } from "@/state/hooks";
 import { AVATAR_ANIMATIONS_WARNING } from "@/state/avatarPrefs";
@@ -374,6 +374,7 @@ export default function Appearance() {
   const textSize = usePrefs((prefs) => prefs.textSize);
   const controlSize = usePrefs((prefs) => prefs.controlSize);
   const haptics = usePrefs((prefs) => prefs.haptics);
+  const nameTag = usePrefs((prefs) => prefs.nameTag);
   const avatarAnimations = usePrefs((prefs) => prefs.avatarAnimations);
   const paired = !!useSettings();
   const member = useMember();
@@ -462,6 +463,14 @@ export default function Appearance() {
           onToggle={(next) => setPrefs({ avatarAnimations: next })}
         />
         <Row leading={<IconTile icon={Vibrate} color={brand.rose} />} title="Haptics" toggled={haptics} onToggle={(next) => setPrefs({ haptics: next })} />
+        <Row
+          leading={<IconTile icon={Tag} color={brand.rose} />}
+          title="Name tag"
+          subtitle={nameTag ? "Your bot's name stays under it on the first tab" : "Shows while you change bots, then fades"}
+          subtitleLines={2}
+          toggled={nameTag}
+          onToggle={(next) => setPrefs({ nameTag: next })}
+        />
         <Row leading={<IconTile icon={PanelBottom} color={brand.rose} />} title="Tabs" subtitle="Their order in the bar" chevron onPress={() => router.push("/settings/tabs" as Href)} />
       </Group>
 

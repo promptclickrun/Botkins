@@ -8,7 +8,16 @@ import { Alert, View } from "react-native";
 import type { GithubAgentRepoConfig, GithubAgentStatus } from "@/link/types";
 import { useBots, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Button, Field, Group, Label, Page, Row, space, T } from "@/ui";
+import { showToast } from "@/state/store";
+import { Button, EmptyState, Field, Group, Label, Page, Row, space, T } from "@/ui";
+
+/**
+ * What a computer from before the Botkins Agent says to its calls: its link has never heard of
+ * them, and refuses anything it doesn't know with a sentence about phones. That is no fault of the
+ * phone's: the computer's app needs an update (the calls came with 0.17.25).
+ */
+const UNKNOWN_CALL = /unknown method|not supported|unsupported|not a function|can't be done from a phone/i;
+export const computerLacksGithub = (error: unknown) => error instanceof Error && UNKNOWN_CALL.test(error.message);
 
 function formatShortTime(iso?: string | null): string {
   if (!iso) return "None yet";
@@ -28,15 +37,23 @@ export default function GithubSettings() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [allowDrafts, setAllowDrafts] = useState<Record<string, string>>({});
+  // The computer's app is from before it could connect GitHub: nothing here can work until it is updated.
+  const [old, setOld] = useState(false);
 
   const load = useCallback(async (refreshFromRelay = false) => {
     if (!owner) {
       setLoading(false);
       return;
     }
-    const next = await attempt(
-      refreshFromRelay ? api.githubAgentRefresh() : api.githubAgentStatus(),
-    );
+    let next: GithubAgentStatus | undefined;
+    try {
+      next = await (refreshFromRelay ? api.githubAgentRefresh() : api.githubAgentStatus());
+      setOld(false);
+    } catch (error) {
+      // An older computer is said once, on the page, in words a person can act on; anything else as before.
+      if (computerLacksGithub(error)) setOld(true);
+      else showToast(error instanceof Error ? error.message : "That didn't work.", "error");
+    }
     if (next) {
       setStatus(next);
       setAllowDrafts((prev) => {
@@ -69,6 +86,14 @@ export default function GithubSettings() {
       </Page>
     );
   }
+
+  if (old)
+    return (
+      <Page>
+        <Stack.Screen options={{ title: "GitHub" }} />
+        <EmptyState title="Update the app on your computer" text="Connecting GitHub needs Botkins 0.17.25 or later on your computer. Update it there, then open this page again." action="Check again" onAction={() => void load(true)} />
+      </Page>
+    );
 
   const hasInstallations = (status?.installations?.length ?? 0) > 0;
   const appSlug = status?.appSlug || "botkins-agent";

@@ -115,6 +115,7 @@ const MOVING_FACES = [
   "src/features/chat/ChatScreen.tsx", // the chat's header face (one bot, or a group's two)
   "src/features/voice/VoiceDock.tsx", // live voice
   "src/features/bots/LookStage.tsx", // the look editor's preview: part of the bot's own page, as on the desktop
+  "src/features/home/BotHome.tsx", // the first tab's row of bots is its chat's header: the bot on show is the header face
 ];
 const root = new URL("..", import.meta.url).pathname;
 function sources(dir: string): string[] {
@@ -144,6 +145,9 @@ test("in a chat only the header face and live voice move", () => {
   assert.deepEqual([...asking.keys()].sort(), [...MOVING_FACES].sort());
   assert.equal(asking.get("src/features/chat/ChatScreen.tsx"), 2, "the header's group face and single face");
   assert.equal(asking.get("src/features/voice/VoiceDock.tsx"), 2, "the dock's face and its quiet row");
+  // One face tag in the row, and it asks only for the bot on show: the others beside it hold still.
+  assert.equal(asking.get("src/features/home/BotHome.tsx"), 1);
+  assert.match(readFileSync(join(root, "src/features/home/BotHome.tsx"), "utf8"), /<BotAvatar bot=\{bot\} state=\{state\} size=\{STRIP\.face\} animated=\{on\} \/>/);
 });
 
 test("a moving avatar still yields to the phone's setting and Reduce Motion", () => {
