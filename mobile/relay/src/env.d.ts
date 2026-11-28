@@ -19,10 +19,14 @@ interface Env {
   GITHUB_APP_INSTALLATION_ID?: string;
   /** PEM text of the app's PKCS#8 private key. */
   GITHUB_APP_KEY?: string;
+  /** Webhook secret for the "Botkins Agent" GitHub App (`POST /v1/github/events`). Route answers 503 github_off when unset. */
+  GITHUB_WEBHOOK_SECRET?: string;
   /** The website form's Turnstile secret. Website reports are refused without it. */
   TURNSTILE_SECRET?: string;
   /** Tests only: replaces both Apple hosts, and adds an `x-botkins-apns-env` header. Unset in wrangler.jsonc. */
   APNS_HOST?: string;
+  /** Tests only: replaces `https://api.github.com` when checking repo read authorization on subscribe. Unset in wrangler.jsonc. */
+  GITHUB_API_BASE?: string;
 }
 
 // The shared-space page's scripts are plain files, bundled as text (wrangler's own rule for *.txt).

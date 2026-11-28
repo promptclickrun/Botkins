@@ -25,6 +25,14 @@ import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex
 import { PendingRequests } from "../src/pending.ts";
 import { spaceFrame, spacePage } from "../src/space.ts";
 import {
+  GITHUB_DELIVERY_DEDUPE_MAX,
+  GITHUB_DELIVERY_DEDUPE_TTL_MS,
+  GITHUB_EVENTS_PATH,
+  authorizeSubscribedRepos,
+  checkGitHubWebhookRequest,
+  verifyGitHubSubscribe,
+} from "../src/github.ts";
+import {
   BASE64URL_22,
   BASE64URL_43,
   INVITE_ROUTE,
@@ -69,7 +77,7 @@ import {
 const MAX_PUSH_BODY = 64 * 1024;
 const DEFAULT_PUSH_UPSTREAM = "https://relay.botkins.app";
 // The Worker's limits (wrangler.jsonc), per network and per minute.
-const LIMITS = { sockets: 30, requests: 120, invites: 20, spaces: 60 };
+const LIMITS = { sockets: 30, requests: 120, invites: 20, spaces: 60, githubIp: 120, githubInstall: 240 };
 const WINDOW_MS = 60_000;
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
@@ -326,12 +334,67 @@ function loadQrSource(file) {
  *   botkinsDir     the folder of Botkin pictures a shared space's page shows (the phone app's assets/botkins)
  *   spaceBytesMax  how much all copies of shared spaces may take together (1 GiB)
  */
-export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, spaceBytesMax, fetch = globalThis.fetch } = {}) {
+export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, clientIpHeader, limits = true, qrFile, botkinsDir, spaceBytesMax, githubWebhookSecret, githubApiBase, fetch = globalThis.fetch } = {}) {
   const invites = new Invites(dataDir ? join(dataDir, "invites.json") : null);
   const spaces = new Spaces(dataDir || null, spaceBytesMax);
-  const sweeper = setInterval(() => (invites.sweep(), spaces.sweep()), WINDOW_MS);
+  /** repoLower -> Map<room, expiresAtMs> */
+  const githubSubsByRepo = new Map();
+  /** room -> Set<repoLower> */
+  const githubReposByRoom = new Map();
+  /** deliveryId -> expiresAtMs */
+  const githubSeenDeliveries = new Map();
+  const sweepGithub = () => {
+    const now = Date.now();
+    for (const [id, until] of githubSeenDeliveries) if (until <= now) githubSeenDeliveries.delete(id);
+    for (const [repo, byRoom] of githubSubsByRepo) {
+      for (const [room, until] of byRoom) if (until <= now) byRoom.delete(room);
+      if (!byRoom.size) githubSubsByRepo.delete(repo);
+    }
+  };
+  const activeRoomGithubSubs = (room, minUntil) => {
+    const now = Date.now();
+    const out = new Set();
+    const prev = githubReposByRoom.get(room);
+    if (!prev) return out;
+    for (const repo of prev) {
+      const until = githubSubsByRepo.get(repo)?.get(room) ?? 0;
+      if (until > now && until >= minUntil) out.add(repo);
+    }
+    return out;
+  };
+  const setRoomGithubSubs = (room, repos, expiresAt) => {
+    const prev = githubReposByRoom.get(room);
+    if (prev) {
+      for (const repo of prev) {
+        const map = githubSubsByRepo.get(repo);
+        if (map) {
+          map.delete(room);
+          if (!map.size) githubSubsByRepo.delete(repo);
+        }
+      }
+      githubReposByRoom.delete(room);
+    }
+    if (!repos.length || expiresAt <= Date.now()) return;
+    const next = new Set();
+    for (const repo of repos) {
+      const lower = repo.toLowerCase();
+      next.add(lower);
+      let map = githubSubsByRepo.get(lower);
+      if (!map) githubSubsByRepo.set(lower, (map = new Map()));
+      map.set(room, expiresAt);
+    }
+    githubReposByRoom.set(room, next);
+  };
+  const sweeper = setInterval(() => (invites.sweep(), spaces.sweep(), sweepGithub()), WINDOW_MS);
   sweeper.unref();
-  const limiters = { sockets: new Limiter(LIMITS.sockets), requests: new Limiter(LIMITS.requests), invites: new Limiter(LIMITS.invites), spaces: new Limiter(LIMITS.spaces) };
+  const limiters = {
+    sockets: new Limiter(LIMITS.sockets),
+    requests: new Limiter(LIMITS.requests),
+    invites: new Limiter(LIMITS.invites),
+    spaces: new Limiter(LIMITS.spaces),
+    githubIp: new Limiter(LIMITS.githubIp),
+    githubInstall: new Limiter(LIMITS.githubInstall),
+  };
   const spacePageScript = readFileSync(new URL("../src/space-page.js.txt", import.meta.url), "utf8");
   const spaceFrameScript = readFileSync(new URL("../src/space-frame.js.txt", import.meta.url), "utf8");
   const pictures = botkinsDir ?? fileURLToPath(new URL("../../assets/botkins", import.meta.url));
@@ -478,10 +541,37 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       const { ws } = side;
       ws.on("message", (data, binary) => {
         if (!binary) {
-          // Any other text is ignored.
-          if (data.toString() !== "ping") return;
-          this.pinged(side);
-          send(ws, "pong");
+          const text = data.toString();
+          if (text === "ping") {
+            this.pinged(side);
+            send(ws, "pong");
+          } else if (side.kind === "host" && !side.closing && text.length <= 64 * 1024 && text.startsWith("{")) {
+            void (async () => {
+              const checked = await verifyGitHubSubscribe(text, this.name);
+              if (!checked.ok) {
+                send(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: checked.error }));
+                return;
+              }
+              const cachedAllowed = activeRoomGithubSubs(this.name, checked.expiresAt);
+              const { allowed, denied } = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
+                cachedAllowed,
+                fetch,
+                apiBase: githubApiBase || process.env.GITHUB_API_BASE || undefined,
+              });
+              setRoomGithubSubs(this.name, allowed, checked.expiresAt);
+              send(
+                ws,
+                JSON.stringify({
+                  type: "github-subscribed",
+                  ok: true,
+                  count: allowed.length,
+                  allowed,
+                  denied,
+                  expiresAt: checked.expiresAt,
+                }),
+              );
+            })();
+          }
         } else {
           this.message(side, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
         }
@@ -641,6 +731,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
       this.pending.clear(true);
       this.recovery = null;
       this.seat = null;
+      setRoomGithubSubs(this.name, [], 0);
       if (notify) for (const phone of this.openPhones()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
     }
 
@@ -668,6 +759,7 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
         // What the phones still wait for will not be answered; they can try again at once. A v3
         // standby is already a usable seat, so its active peer disappearing is silent.
         for (const phone of this.openPhones()) send(phone.ws, Uint8Array.of(NOTICE_HOST_CLOSED));
+        if (!this.openHosts().length) setRoomGithubSubs(this.name, [], 0);
       }
     }
 
@@ -793,9 +885,51 @@ export function createRelay({ dataDir, pushUpstream = DEFAULT_PUSH_UPSTREAM, cli
     }
   }
 
+  async function handleGitHubEvents(request, network) {
+    const checked = await checkGitHubWebhookRequest(request, githubWebhookSecret, {
+      checkIp: async () => allowed("githubIp", network),
+      checkInstallation: async (key) => allowed("githubInstall", key),
+    });
+    if (checked instanceof Response) return checked;
+
+    const now = Date.now();
+    sweepGithub();
+    if (githubSeenDeliveries.has(checked.deliveryId)) {
+      log("github_delivery", { event: checked.event, status: 202, duplicate: 1, delivered: 0 });
+      return Response.json({ ok: true, duplicate: true, delivered: 0 }, { status: 202, headers: { "cache-control": "no-store" } });
+    }
+    githubSeenDeliveries.set(checked.deliveryId, now + GITHUB_DELIVERY_DEDUPE_TTL_MS);
+    while (githubSeenDeliveries.size > GITHUB_DELIVERY_DEDUPE_MAX) {
+      const oldest = githubSeenDeliveries.keys().next().value;
+      if (oldest === undefined) break;
+      githubSeenDeliveries.delete(oldest);
+    }
+
+    const targets = githubSubsByRepo.get(checked.repositoryLower);
+    if (!targets || !targets.size) {
+      log("github_delivery", { event: checked.event, status: 204, delivered: 0 });
+      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+    }
+
+    const frameText = JSON.stringify(checked.frame);
+    let delivered = 0;
+    for (const [roomName, until] of targets) {
+      if (until <= now) continue;
+      const host = rooms.get(roomName)?.activeHost();
+      if (host && send(host.ws, frameText)) delivered++;
+    }
+    log("github_delivery", { event: checked.event, status: delivered > 0 ? 202 : 204, targets: targets.size, delivered });
+    return delivered > 0
+      ? Response.json({ ok: true, delivered }, { status: 202, headers: { "cache-control": "no-store" } })
+      : new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+  }
+
   /** Everything that is not a new socket, as the Worker answers it. */
   async function answer(request, network) {
     const url = new URL(request.url);
+    if (url.pathname === GITHUB_EVENTS_PATH) {
+      return handleGitHubEvents(request, network);
+    }
     if (url.pathname === "/v1/push") {
       if (!allowed("requests", network)) return Response.json({ error: "rate_limited" }, { status: 429 });
       return forwardPush(request);
@@ -898,6 +1032,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     dataDir: process.env.DATA_DIR || undefined,
     pushUpstream: process.env.PUSH_UPSTREAM || DEFAULT_PUSH_UPSTREAM,
     clientIpHeader: process.env.CLIENT_IP_HEADER || undefined,
+    githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET || undefined,
     limits: process.env.RATE_LIMITS !== "off",
     qrFile: process.env.QR_FILE || undefined,
     botkinsDir: process.env.BOTKINS_DIR || undefined,

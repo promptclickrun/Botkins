@@ -246,6 +246,29 @@ A signed request can be sent again by anyone who sees it inside the TLS connecti
 
 Not verified on this machine: a real call to Apple. Apple's servers need HTTP/2 (the fake one speaks HTTP/1.1), and the Cloudflare docs do not say in so many words that Worker `fetch` uses HTTP/2 to an origin. Other projects send APNs pushes from Workers, but that is not checked here. The first real push (to a sandbox build, to one's own device) is the check: an answer of `502 unreachable` for every item means the Worker could not connect. A token or key problem shows as Apple's own `403` with `reason` (`InvalidProviderToken`, `ExpiredProviderToken`, `BadTopic`...).
 
+## GitHub webhook ingress (`POST /v1/github/events`)
+
+`POST /v1/github/events` accepts webhooks from the **Botkins Agent** GitHub App (App ID `5896932`, owner `promptclickrun`, webhook URL `https://relay.botkins.app/v1/github/events`) and fans them out in real time to subscribed Botkins hosts over their existing authenticated WebSocket connection.
+
+### Verification, limits, and deduplication
+
+- **Secret:** `GITHUB_WEBHOOK_SECRET` (Cloudflare Worker secret, set with `npx wrangler secret put GITHUB_WEBHOOK_SECRET`, or env var `GITHUB_WEBHOOK_SECRET` on the self-hosted Node relay). When unset, the route answers `503` with `{"error":"github_off"}`.
+- **Body cap:** `512 KiB` (`413 too_large` above). Requires `content-type: application/json` (`415` otherwise).
+- **Signature:** Verifies `x-hub-signature-256` (HMAC-SHA256 over the raw body bytes) with constant-time comparison (`401 unauthorized` on missing/bad signature or malformed `x-github-event` / `x-github-delivery`).
+- **Rate limits:** Per-IP (`GITHUB_IP`, `namespace_id: 47617`, 120/min) and per `installation.id` (`GITHUB_INSTALL`, `namespace_id: 47618`, 240/min) — answers `429 rate_limited` when exceeded.
+- **Deduplication:** Deduplicates deliveries on `x-github-delivery` for 10 minutes inside the `GitHubRouter` Durable Object (or in-memory map on the Node relay), answering `202` with `{"ok":true,"duplicate":true,"delivered":0}` on repeats.
+
+### Host subscriptions, per-repo authorization, and fan-out
+
+- Over its authenticated host WebSocket (`/v1/host/<room>`), a Botkins host sends a signed JSON control message `{ type: "github-subscribe", v: 1, key, time, exp, repos, sig, githubToken?, repoTokens? }` listing up to 100 lowercased `owner/repo` names. `sig` is Ed25519 over `"botkins-github-sub-v1:" + room + ":" + time + ":" + exp + ":" + repos.join(",")`.
+- **Per-repo authorization (deny-by-default):** Before routing events, the relay checks each requested repository against GitHub (`GET /repos/{owner}/{repo}`) using the host's ephemeral `repoTokens[repo]` or `githubToken` proof (never stored or logged):
+  - Public repos (`private === false`) are allowed when GitHub returns `200 OK`.
+  - Private repos require a valid proof token AND `permissions.pull === true` from GitHub.
+  - Any repo that fails verification (missing/invalid token, 401/403/404, timeout, or `permissions.pull !== true`) is dropped from the subscription, and the `github-subscribed` reply reports `{ ok: true, count, allowed, denied, expiresAt }`.
+- Subscriptions expire after 300 seconds (`exp <= time + 300`) and are renewed automatically by the host every 210 seconds while enabled GitHub triggers exist. Subscriptions are cleared when the host disconnects and fails recovery.
+- On a verified event, the relay trims the webhook JSON to only the workflow fields Botkins uses (no tokens or unrelated bloat) and pushes `{ type: "github-delivery", version: 1, deliveryId, event, action, repository, installationId, receivedAt, payload }` to every authorized, subscribed active host socket (`202` if delivered, `204` if no host is currently subscribed).
+- The relay keeps nothing beyond the short-lived `(repo, room, until)` routing entries and recent `delivery_id` dedupe keys; proof tokens are discarded immediately after the check.
+
 ## Pricing notes
 
 - Hibernated sockets stay open without duration charges. A room with held requests during host recovery can incur duration for the remaining reconnect window (at most 15 seconds at 128 MB). Ordinary request and answer traffic schedules no timer and incurs zero storage reads or writes.

@@ -40,7 +40,24 @@ import {
   normalizeGithubRepos,
   normalizeGithubTriggerConfig,
   normalizeLabelList,
+  normalizeRawGithubWebhook,
 } from "./workflow-github-events.mjs";
+import {
+  buildPushPollFingerprint,
+  checkCrossWorkflowChainCap,
+  checkSameWorkflowSelfGuard,
+  collectEnabledGithubRepos,
+  deserializeGithubCursor,
+  ensureGithubWorkflowStores,
+  findOldestWaitingDelivery,
+  isDuplicateDelivery,
+  isEventCausedByBot,
+  listGithubDeliveries,
+  recordGithubDelivery,
+  recordGithubOfflineGap,
+  recordGithubRunItem,
+  serializeGithubCursor,
+} from "./workflow-github-ledger.mjs";
 import {
   createDefaultGithubOutputClient,
   createWorkspaceActionStore,
@@ -573,9 +590,74 @@ export class Workflows {
     this.githubPolling = new Set(); // `${workflowId}:${nodeId}`
     this.githubLastPoll = new Map(); // `${workflowId}:${nodeId}` -> ms
     this.githubCursors = new Map(); // `${workflowId}:${nodeId}:${repoLower}` -> { initialized, prs, issues, comments }
+    this.onGithubReposChange = typeof options.onGithubReposChange === "function" ? options.onGithubReposChange : null;
+    this.githubRelayConnected = false;
+    this.githubRelayLostAt = null;
+    this.githubBotLogins = Array.isArray(options.githubBotLogins) ? options.githubBotLogins : ["botkins-agent", "botkins-bot"];
 
     this.ensureState();
+    this.loadGithubCursorsFromState();
     this.bindEvents();
+  }
+
+  /** Attaches a callback invoked whenever the set of enabled GitHub trigger repositories changes (for relay subscriptions). */
+  setGithubReposListener(fn) {
+    this.onGithubReposChange = typeof fn === "function" ? fn : null;
+    this.notifyGithubReposChanged();
+  }
+
+  /** Returns the sorted, deduplicated lowercased `owner/repo` list for all enabled GitHub triggers (max 100). */
+  subscribedGithubRepos() {
+    return collectEnabledGithubRepos(this.all);
+  }
+
+  notifyGithubReposChanged() {
+    if (!this.onGithubReposChange) return;
+    try {
+      this.onGithubReposChange(this.subscribedGithubRepos());
+    } catch {}
+  }
+
+  /**
+   * Notifies workflows of relay connection state transitions.
+   * When the relay reconnects after a drop, records a merged `offline:<from>` gap marker on enabled
+   * GitHub triggers and triggers a bounded persisted-cursor catch-up poll to recover missed events.
+   */
+  onRelayStateChanged(connected, now = Date.now()) {
+    const isUp = Boolean(connected);
+    if (this.githubRelayConnected && !isUp) {
+      this.githubRelayLostAt = now;
+    } else if (!this.githubRelayConnected && isUp) {
+      this.notifyGithubReposChanged();
+      if (this.githubRelayLostAt !== null) {
+        const lostAt = this.githubRelayLostAt;
+        this.githubRelayLostAt = null;
+        if (recordGithubOfflineGap(this.ws.state, this.all, lostAt, now)) {
+          this.ws.save();
+        }
+        // Bounded backfill after offline/sleep gap using persisted cursors.
+        void this.pollAllEnabledGithubTriggers();
+      }
+    }
+    this.githubRelayConnected = isUp;
+  }
+
+  /** Hydrates persisted `workflowGithubCursors` from workspace state into in-memory Maps. */
+  loadGithubCursorsFromState() {
+    ensureGithubWorkflowStores(this.ws.state);
+    this.githubCursors.clear();
+    for (const [key, raw] of Object.entries(this.ws.state.workflowGithubCursors || {})) {
+      const hydrated = deserializeGithubCursor(raw);
+      if (hydrated) this.githubCursors.set(key, hydrated);
+    }
+  }
+
+  persistGithubCursor(cursorKey, cursor) {
+    ensureGithubWorkflowStores(this.ws.state);
+    cursor.lastPollAt = Date.now();
+    this.githubCursors.set(cursorKey, cursor);
+    this.ws.state.workflowGithubCursors[cursorKey] = serializeGithubCursor(cursor);
+    this.ws.save();
   }
 
   /** Local GitHub CLI auth status for Workflow GitHub triggers. */
@@ -649,67 +731,19 @@ export class Workflows {
     };
   }
 
-  /** Lists recorded GitHub deliveries for a trigger node (newest first, max 50). */
-  listGithubDeliveries(workflowId, nodeId = null) {
+  /** Lists recorded GitHub deliveries for a workflow (or specific trigger node), newest first. */
+  listGithubDeliveries(workflowId, nodeId = null, limit = 50) {
     this.ensureState();
-    const list = this.ws.state.workflowGithubDeliveries ?? [];
-    return list
-      .filter((d) => d && d.workflowId === workflowId && (!nodeId || d.nodeId === nodeId))
-      .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""))
-      .slice(0, 50)
-      .map(({ payloadJson, ...rest }) => ({
-        ...rest,
-        replayable: rest.outcome === "started" && rest.reason !== "offline" && Boolean(payloadJson),
-      }));
+    return listGithubDeliveries(this.ws.state, workflowId, nodeId, limit);
   }
 
   /**
-   * Persists a GitHub delivery record (keeping up to 50 non-waiting rows per trigger, never pruning `waiting`).
-   * To keep workspace state compact, `payloadJson` is retained ONLY on `waiting` rows (needed for dequeue)
-   * and on the single newest `outcome === "started"` row per trigger (for "Run last event").
+   * Persists a GitHub delivery record into the shared durable ledger (keeping up to 50 non-waiting
+   * rows per trigger, never pruning `waiting`, and bounding `payloadJson` per #352 rules).
    */
   recordGithubDelivery(record) {
     this.ensureState();
-    const list = this.ws.state.workflowGithubDeliveries;
-    const idx = list.findIndex(
-      (d) =>
-        d &&
-        d.workflowId === record.workflowId &&
-        d.nodeId === record.nodeId &&
-        d.deliveryId === record.deliveryId,
-    );
-    if (idx >= 0) {
-      list[idx] = { ...list[idx], ...record };
-    } else {
-      list.unshift(record);
-    }
-    // Prune per (workflowId, nodeId) to newest 50 non-waiting records while keeping all waiting records.
-    const byTrigger = new Map();
-    for (const item of list) {
-      const k = `${item.workflowId}:${item.nodeId}`;
-      if (!byTrigger.has(k)) byTrigger.set(k, []);
-      byTrigger.get(k).push(item);
-    }
-    const kept = [];
-    for (const entries of byTrigger.values()) {
-      const waiting = entries.filter((e) => e.outcome === "waiting");
-      const rest = entries
-        .filter((e) => e.outcome !== "waiting")
-        .sort((a, b) => Date.parse(b.receivedAt || "") - Date.parse(a.receivedAt || ""))
-        .slice(0, 50);
-
-      // Retain payloadJson only on the newest replayable (`outcome === "started"`) row per trigger.
-      let keptStartedPayload = false;
-      for (const entry of rest) {
-        if (entry.outcome === "started" && entry.reason !== "offline" && entry.payloadJson && !keptStartedPayload) {
-          keptStartedPayload = true;
-        } else if (entry.payloadJson !== undefined && entry.payloadJson !== null) {
-          entry.payloadJson = null;
-        }
-      }
-      kept.push(...waiting, ...rest);
-    }
-    this.ws.state.workflowGithubDeliveries = kept;
+    recordGithubDelivery(this.ws.state, record);
     this.ws.save();
   }
 
@@ -776,8 +810,7 @@ export class Workflows {
   ensureState() {
     this.ws.state.workflows ??= [];
     this.ws.state.workflowRuns ??= [];
-    this.ws.state.workflowGithubActions ??= {};
-    this.ws.state.workflowGithubDeliveries ??= [];
+    ensureGithubWorkflowStores(this.ws.state);
   }
 
   get all() {
@@ -942,6 +975,7 @@ export class Workflows {
 
     this.all.unshift(wf);
     this.ws.save();
+    this.notifyGithubReposChanged();
     return sanitizeWorkflow(wf);
   }
 
@@ -984,6 +1018,7 @@ export class Workflows {
     }
 
     this.ws.save();
+    this.notifyGithubReposChanged();
     return sanitizeWorkflow(wf);
   }
 
@@ -1034,6 +1069,7 @@ export class Workflows {
     wf.pausedAt = Date.now();
     wf.updatedAt = wf.pausedAt;
     this.ws.save();
+    this.notifyGithubReposChanged();
     return sanitizeWorkflow(wf);
   }
 
@@ -1054,6 +1090,7 @@ export class Workflows {
     const wf = this.get(id);
     this.applyResume(wf, now);
     this.ws.save();
+    this.notifyGithubReposChanged();
     return sanitizeWorkflow(wf);
   }
 
@@ -1071,6 +1108,7 @@ export class Workflows {
     }
     this.ws.state.workflows = this.all.filter((w) => w.id !== id);
     this.ws.save();
+    this.notifyGithubReposChanged();
     return true;
   }
 
@@ -1322,7 +1360,7 @@ export class Workflows {
           if (canonMatch) emit("mention", comment, { itemType: "comment", labelsList, mention: canonMatch });
         }
       }
-      this.githubCursors.set(cursorKey, cursor);
+      this.persistGithubCursor(cursorKey, cursor);
       return;
     }
 
@@ -1541,59 +1579,347 @@ export class Workflows {
         }
       }
     }
+
+    this.persistGithubCursor(cursorKey, cursor);
   }
 
-  fireGithubEvent(wf, node, repo, event, item, opts = {}) {
-    if (!wf.enabled) return;
-    const payload = buildGithubTriggerPayload(repo, event, item, opts);
-    const filterResult = evaluateGithubTriggerFilters(node.config, payload, {
-      sender: opts.sender ?? item.sender ?? item.user ?? item.author,
-      author: item.author ?? item.user,
-    });
-    const deliveryId = opts.deliveryId || `poll:${repo}:${event}:${payload.number || 0}:${Date.now()}:${randomUUID().slice(0, 6)}`;
-    let payloadJson = null;
-    try {
-      payloadJson = JSON.stringify(payload);
-    } catch {}
+  /** Triggers one bounded poll across all enabled GitHub triggers (used after relay offline/sleep reconnect). */
+  async pollAllEnabledGithubTriggers() {
+    const pending = [];
+    for (const wf of this.all) {
+      if (!wf.enabled) continue;
+      for (const node of wf.nodes) {
+        if (node.kind !== "trigger" || node.triggerKind !== "github") continue;
+        if (!normalizeGithubRepos(node.config).length) continue;
+        const key = `${wf.id}:${node.id}`;
+        if (this.githubPolling.has(key)) continue;
+        this.githubLastPoll.set(key, Date.now());
+        pending.push(this.pollGithubTrigger(wf, node, key));
+      }
+    }
+    if (pending.length) await Promise.allSettled(pending);
+  }
 
-    if (!filterResult.pass) {
-      this.recordGithubDelivery({
-        workflowId: wf.id,
-        nodeId: node.id,
-        deliveryId,
-        event: String(payload.event || event),
-        repository: repo || null,
-        number: Number(payload.number) || null,
-        pullRequest: typeof payload.pull_request === "boolean" ? payload.pull_request : null,
-        title: typeof payload.title === "string" && payload.title ? payload.title : null,
-        url: typeof payload.url === "string" && payload.url ? payload.url : null,
-        receivedAt: new Date().toISOString(),
-        outcome: "skipped",
-        reason: "filter",
-        reasonDetail: filterResult.reason || null,
-        runId: null,
-        payloadJson: null,
-      });
-      return;
+  /**
+   * Consumes a verified `github-delivery` frame pushed over the relay WebSocket and routes it
+   * through every enabled GitHub trigger watching `frame.repository`.
+   * Returns an array of delivery outcomes `{ workflowId, nodeId, deliveryId, outcome, reason?, runId? }`.
+   */
+  receiveGithubDelivery(frame, now = Date.now()) {
+    if (!frame || typeof frame !== "object") return [];
+    const deliveryId = String(frame.deliveryId || "").trim();
+    const rawEvent = String(frame.event || "").trim().toLowerCase();
+    const repository = String(frame.repository || frame.payload?.repository?.full_name || "").trim();
+    const payloadObj = frame.payload && typeof frame.payload === "object" ? frame.payload : {};
+    if (!deliveryId || !rawEvent || !repository) return [];
+
+    const repoLower = repository.toLowerCase();
+    const receivedAt = typeof frame.receivedAt === "string" && frame.receivedAt ? frame.receivedAt : new Date(now).toISOString();
+    const results = [];
+
+    for (const wf of this.all) {
+      if (!wf.enabled) continue;
+      for (const node of wf.nodes) {
+        if (node.kind !== "trigger" || node.triggerKind !== "github") continue;
+        const repos = normalizeGithubRepos(node.config);
+        if (!repos.some((r) => r.toLowerCase() === repoLower)) continue;
+
+        const mentionHandleStr =
+          Array.isArray(node.config?.mentionHandles) && node.config.mentionHandles.length
+            ? node.config.mentionHandles.join(",")
+            : node.config?.mentionHandle;
+        const mentionHandles = parseMentionHandles(mentionHandleStr);
+        const candidates = normalizeRawGithubWebhook(
+          rawEvent,
+          { ...payloadObj, repository: payloadObj.repository ?? { full_name: repository } },
+          { mentionHandles },
+        );
+        if (!candidates.length) continue;
+
+        for (let idx = 0; idx < candidates.length; idx++) {
+          const cand = candidates[idx];
+          const candidateDeliveryId = idx === 0 ? deliveryId : `${deliveryId}:${cand.event}`;
+          const updatedAt = cand.updatedAt || "";
+          const fp = buildPushPollFingerprint(
+            repository,
+            cand.event,
+            cand.payload.number,
+            updatedAt,
+            cand.objectKey || "",
+          );
+          const outcome = this.processGithubCandidate(wf, node, {
+            deliveryId: candidateDeliveryId,
+            fingerprint: fp,
+            event: cand.event,
+            payload: cand.payload,
+            sender: cand.sender,
+            author: cand.author,
+            objectKey: cand.objectKey,
+            receivedAt,
+            now,
+          });
+          if (outcome) results.push(outcome);
+        }
+      }
+    }
+    return results;
+  }
+
+  /** Checks whether `workflowId` already has an active run for `(repository, number)`. */
+  hasActiveGithubItemRun(workflowId, repository, number) {
+    const repoLow = String(repository || "").trim().toLowerCase();
+    const num = Number(number) || 0;
+    if (!repoLow || !num) return false;
+    return this.runs.some(
+      (r) =>
+        r.workflowId === workflowId &&
+        ACTIVE_STATUSES.has(r.status) &&
+        String(r.context?.repository || r.context?.repo || "").trim().toLowerCase() === repoLow &&
+        Number(r.context?.number || 0) === num,
+    );
+  }
+
+  /**
+   * Unified GitHub candidate ingress pipeline (shared by relay push and local `gh` poller):
+   * 1. Deduplicate by `(workflowId, nodeId, deliveryId)` and push/poll fingerprint
+   * 2. Evaluate trigger filters (repo/event/notBot/firstTime/labels/title/branch/author) -> `skipped/filter`
+   * 3. Same-workflow 1-hour self-loop guard (`sending` race + objectIds) -> `skipped/self`
+   * 4. Cross-workflow 3-per-10m chain cap -> `skipped/chain`
+   * 5. Per-`(workflowId, repository, number)` serialization -> `waiting` queue or `started`
+   */
+  processGithubCandidate(
+    wf,
+    node,
+    { deliveryId, fingerprint = "", event, payload, sender = null, author = null, objectKey = null, receivedAt = new Date().toISOString(), now = Date.now() },
+  ) {
+    if (!wf.enabled) return null;
+    if (isDuplicateDelivery(this.ws.state, wf.id, node.id, deliveryId, fingerprint)) {
+      return null;
     }
 
-    const run = this.startRun(wf, node, payload);
-    this.recordGithubDelivery({
+    const repository = String(payload?.repository || payload?.repo || "").trim();
+    const number = Number(payload?.number) || 0;
+    const pullRequest = Boolean(payload?.pull_request);
+    const title = String(payload?.title || "").slice(0, 240);
+    const causedByBot = isEventCausedByBot(sender ?? payload?.sender, author ?? payload?.author, this.githubBotLogins);
+    const payloadJson = JSON.stringify(payload);
+
+    const baseRecord = {
       workflowId: wf.id,
       nodeId: node.id,
       deliveryId,
-      event: String(payload.event || event),
-      repository: repo || null,
-      number: Number(payload.number) || null,
-      pullRequest: typeof payload.pull_request === "boolean" ? payload.pull_request : null,
-      title: typeof payload.title === "string" && payload.title ? payload.title : null,
-      url: typeof payload.url === "string" && payload.url ? payload.url : null,
-      receivedAt: new Date().toISOString(),
+      fingerprint,
+      event,
+      repository: repository || null,
+      number: number || null,
+      pullRequest,
+      title: title || null,
+      url: typeof payload?.url === "string" && payload.url ? payload.url : null,
+      receivedAt,
+      causedByBot,
+      objectKey: objectKey || null,
+      payloadJson,
+    };
+
+    // 1. Evaluate filters
+    const filterResult = evaluateGithubTriggerFilters(node.config, payload, { sender, author });
+    if (!filterResult.pass) {
+      // Only record filter skips when repo & event matched (or record all matched-repo candidates that failed filters).
+      if (filterResult.reason !== "repo" && filterResult.reason !== "event") {
+        recordGithubDelivery(this.ws.state, {
+          ...baseRecord,
+          outcome: "skipped",
+          reason: "filter",
+          reasonDetail: filterResult.reason || null,
+          runId: null,
+          payloadJson: null,
+        });
+        this.ws.save();
+        return { workflowId: wf.id, nodeId: node.id, deliveryId, outcome: "skipped", reason: "filter" };
+      }
+      return null;
+    }
+
+    // 2. Same-workflow 1-hour self-loop guard (A -> B is allowed because scoped by workflowId)
+    const selfCheck = checkSameWorkflowSelfGuard(this.ws.state, {
+      workflowId: wf.id,
+      repository,
+      number,
+      objectKey,
+      causedByBot,
+      now,
+    });
+    if (selfCheck.blocked) {
+      recordGithubDelivery(this.ws.state, {
+        ...baseRecord,
+        outcome: "skipped",
+        reason: "self",
+        reasonDetail: selfCheck.detail || null,
+        runId: null,
+        payloadJson: null,
+      });
+      this.ws.save();
+      return { workflowId: wf.id, nodeId: node.id, deliveryId, outcome: "skipped", reason: "self" };
+    }
+
+    // 3. Cross-workflow 3-per-10m chain cap
+    const chainCheck = checkCrossWorkflowChainCap(this.ws.state, {
+      repository,
+      number,
+      causedByBot,
+      now,
+    });
+    if (chainCheck.blocked) {
+      recordGithubDelivery(this.ws.state, {
+        ...baseRecord,
+        outcome: "skipped",
+        reason: "chain",
+        reasonDetail: null,
+        runId: null,
+        payloadJson: null,
+      });
+      this.ws.save();
+      return { workflowId: wf.id, nodeId: node.id, deliveryId, outcome: "skipped", reason: "chain" };
+    }
+
+    // 4. Per-item serialization: queue as `waiting` if this workflow already has an active run on (repo, number)
+    if (this.hasActiveGithubItemRun(wf.id, repository, number)) {
+      recordGithubDelivery(this.ws.state, {
+        ...baseRecord,
+        outcome: "waiting",
+        reason: null,
+        reasonDetail: null,
+        runId: null,
+      });
+      this.ws.save();
+      return { workflowId: wf.id, nodeId: node.id, deliveryId, outcome: "waiting", reason: null };
+    }
+
+    // 5. Start run and record ledger + github run history
+    const run = this.startRun(wf, node, payload, { githubDeliveryId: deliveryId, causedByBot });
+    recordGithubRunItem(this.ws.state, {
+      runId: run.id,
+      workflowId: wf.id,
+      nodeId: node.id,
+      deliveryId,
+      repository,
+      number,
+      pullRequest,
+      title,
+      causedByBot,
+      startedAt: now,
+    });
+    recordGithubDelivery(this.ws.state, {
+      ...baseRecord,
       outcome: "started",
       reason: null,
       reasonDetail: null,
       runId: run.id,
-      payloadJson,
+    });
+    this.ws.save();
+    return { workflowId: wf.id, nodeId: node.id, deliveryId, outcome: "started", runId: run.id };
+  }
+
+  /** Dequeues the oldest waiting GitHub delivery for `(workflowId, repository, number)` once a run settles. */
+  dequeueNextWaitingGithubDelivery(settledRun, now = Date.now()) {
+    if (!settledRun || settledRun.triggerKind !== "github") return null;
+    const wf = this.all.find((w) => w.id === settledRun.workflowId);
+    if (!wf || !wf.enabled) return null;
+    const repository = String(settledRun.context?.repository || settledRun.context?.repo || "").trim();
+    const number = Number(settledRun.context?.number) || 0;
+    if (!repository || !number) return null;
+    if (this.hasActiveGithubItemRun(wf.id, repository, number)) return null;
+
+    while (true) {
+      const next = findOldestWaitingDelivery(this.ws.state, wf.id, repository, number);
+      if (!next) return null;
+      const triggerNode = wf.nodes.find((n) => n.id === next.nodeId && n.kind === "trigger" && n.triggerKind === "github");
+      if (!triggerNode || !next.payloadJson) {
+        recordGithubDelivery(this.ws.state, { ...next, outcome: "skipped", reason: "refused" });
+        this.ws.save();
+        continue;
+      }
+
+      // Re-check cross-workflow 3-per-10m chain cap at dequeue time!
+      const chainCheck = checkCrossWorkflowChainCap(this.ws.state, {
+        repository,
+        number,
+        causedByBot: Boolean(next.causedByBot),
+        now,
+      });
+      if (chainCheck.blocked) {
+        recordGithubDelivery(this.ws.state, {
+          ...next,
+          outcome: "skipped",
+          reason: "chain",
+          runId: null,
+          payloadJson: null,
+        });
+        this.ws.save();
+        continue;
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(next.payloadJson);
+      } catch {
+        recordGithubDelivery(this.ws.state, { ...next, outcome: "skipped", reason: "refused" });
+        this.ws.save();
+        continue;
+      }
+
+      const run = this.startRun(wf, triggerNode, payload, {
+        githubDeliveryId: next.deliveryId,
+        causedByBot: Boolean(next.causedByBot),
+      });
+      recordGithubRunItem(this.ws.state, {
+        runId: run.id,
+        workflowId: wf.id,
+        nodeId: triggerNode.id,
+        deliveryId: next.deliveryId,
+        repository,
+        number,
+        pullRequest: Boolean(next.pullRequest),
+        title: String(next.title || ""),
+        causedByBot: Boolean(next.causedByBot),
+        startedAt: now,
+      });
+      recordGithubDelivery(this.ws.state, {
+        ...next,
+        outcome: "started",
+        reason: null,
+        reasonDetail: null,
+        runId: run.id,
+        receivedAt: new Date(now).toISOString(),
+      });
+      this.ws.save();
+      return run;
+    }
+  }
+
+  fireGithubEvent(wf, node, repo, event, item, opts = {}) {
+    if (!wf.enabled) return null;
+    const payload = buildGithubTriggerPayload(repo, event, item, opts);
+    const updatedAt = item.updatedAt || item.updated_at || "";
+    let objectKey = opts.objectKey || null;
+    if (!objectKey) {
+      if (opts.itemType === "comment" && item.id) objectKey = `comment:${item.id}`;
+      else if (opts.addedLabel) objectKey = `label:${String(opts.addedLabel).toLowerCase()}`;
+      else if (event === "issue.opened" && payload.number) objectKey = `issue:${payload.number}`;
+      else if (event === "pr.opened" && payload.number) objectKey = `pr:${payload.number}`;
+      else if (event === "issue.closed" || event === "pr.merged") objectKey = "close";
+    }
+    const extraId = objectKey || (item.id ? String(item.id) : "");
+    const fingerprint = buildPushPollFingerprint(repo, event, payload.number, updatedAt, extraId);
+    const deliveryId = opts.deliveryId || `poll:${fingerprint}:${Date.now()}`;
+    return this.processGithubCandidate(wf, node, {
+      deliveryId,
+      fingerprint,
+      event,
+      payload,
+      sender: opts.sender ?? item.sender ?? item.user ?? item.author,
+      author: item.author ?? item.user,
+      objectKey,
     });
   }
 
@@ -1981,6 +2307,7 @@ export class Workflows {
       run.error = note ? `Rejected: ${note}` : "Rejected by person.";
       this.markUntakenPendingAsSkipped(wf, run);
       this.ws.save();
+      this.dequeueNextWaitingGithubDelivery(run);
       return run;
     }
 
@@ -2004,6 +2331,7 @@ export class Workflows {
       }
     }
     this.ws.save();
+    this.dequeueNextWaitingGithubDelivery(run);
     return run;
   }
 
@@ -2126,6 +2454,7 @@ export class Workflows {
         if (failed && !run.error) run.error = failed.error || "Step failed.";
         run.finishedAt = Date.now();
         this.ws.save();
+        this.dequeueNextWaitingGithubDelivery(run);
         return;
       }
 
@@ -2193,6 +2522,7 @@ export class Workflows {
           if (uncertain && step.errorCode === "githubUncertain") run.githubUncertain = uncertain;
           run.finishedAt = Date.now();
           this.ws.save();
+          this.dequeueNextWaitingGithubDelivery(run);
           return;
         }
       }

@@ -141,8 +141,8 @@ export const WORKSPACE = {
   workflowGithubSignInStart: no("person"), // interactive browser device-code flow for `gh auth login --web`; terminal users run `gh auth login`
   workflowGithubSignInCancel: no("person"), // cancels an in-progress `gh auth login --web` started from the window or owner phone
   workflowGithubCatalog: no("person"), // lists repository labels and assignees for the desktop/mobile GitHub workflow pickers
-  workflowGithubDeliveries: no("person"), // reads per-trigger GitHub delivery log rows for the workflow UI
-  workflowGithubReplayLast: no("person"), // replays the latest stored GitHub event payload from the workflow UI
+  workflowGithubDeliveries: cmd("workflows deliveries"),
+  workflowGithubReplayLast: cmd("workflows replay"),
   // ── Channel Hooks ──
   channelsList: cmd("channels list"),
   channelAdd: cmd("channels add"),
@@ -616,6 +616,7 @@ export const CHANGES = {
   "workflows.pause": (args, value) => value?.name ?? args?.[0],
   "workflows.resume": (args, value) => value?.name ?? args?.[0],
   "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
+  "workflows.replay": (args, value) => value?.workflowId ?? args?.[0],
   "workflows.retry": (args, value) => {
     const id = value?.id ?? args?.[0];
     if (args?.[2]?.allowUncertainRetry !== true) return id;
@@ -809,7 +810,7 @@ export const READS = ["interactions.list", "skills.review", "chat.scriptCommand"
 export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
-  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export"],
+  routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries"],
   projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "macTools.status"],

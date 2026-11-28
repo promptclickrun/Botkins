@@ -32,7 +32,10 @@
     // Pushes: 240 a minute for each computer key. POST /v1/push counts one for each item.
     { "name": "PUSHES", "namespace_id": "47613", "simple": { "limit": 240, "period": 60 } },
     // Bug reports and feature requests: 5 a minute for each computer key, or each network from the website.
-    { "name": "FEEDBACK", "namespace_id": "47616", "simple": { "limit": 5, "period": 60 } }
+    { "name": "FEEDBACK", "namespace_id": "47616", "simple": { "limit": 5, "period": 60 } },
+    // GitHub webhooks: per source IP and per installation.id.
+    { "name": "GITHUB_IP", "namespace_id": "47617", "simple": { "limit": 120, "period": 60 } },
+    { "name": "GITHUB_INSTALL", "namespace_id": "47618", "simple": { "limit": 240, "period": 60 } }
   ],
   "durable_objects": {
     "bindings": [
@@ -40,7 +43,8 @@
       { "name": "INVITE", "class_name": "Invite" },
       { "name": "SPACE", "class_name": "Space" },
       { "name": "SPACE_OWNER", "class_name": "SpaceOwner" },
-      { "name": "SPACE_BUDGET", "class_name": "SpaceBudget" }
+      { "name": "SPACE_BUDGET", "class_name": "SpaceBudget" },
+      { "name": "GITHUB_ROUTER", "class_name": "GitHubRouter" }
     ]
   },
   // The Botkin pictures a shared space's page shows beside a bot's name, straight from the phone
@@ -48,10 +52,11 @@
   "assets": { "directory": "../assets/botkins", "base_path": "/s/botkin" },
   // SQLite-backed, the only kind the Free plan allows. Room uses hibernation; Invite stores sealed cards;
   // Space stores one sealed copy of a shared space, SpaceOwner counts one computer's copies,
-  // SpaceBudget counts all of them.
+  // SpaceBudget counts all of them, GitHubRouter maps repo subscriptions to rooms and dedupes deliveries.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Invite"] },
-    { "tag": "v3", "new_sqlite_classes": ["Space", "SpaceOwner", "SpaceBudget"] }
+    { "tag": "v3", "new_sqlite_classes": ["Space", "SpaceOwner", "SpaceBudget"] },
+    { "tag": "v4", "new_sqlite_classes": ["GitHubRouter"] }
   ]
 }

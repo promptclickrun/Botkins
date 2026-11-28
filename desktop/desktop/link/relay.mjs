@@ -426,7 +426,7 @@ const V3_IN_ALL = 256;
  * conn+id until the phone leaves or the reconnect grace window expires.
  */
 export class RelayHost {
-  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
+  constructor({ url, key, serve, onGone = () => {}, onChange = () => {}, onTaken = () => {}, onGithubDelivery = () => {}, getGithubAuthProof = null, log = () => {}, WebSocket = globalThis.WebSocket, timers = {}, group, fallbackV2 = true }) {
     this.key = key;
     this.secret = key?.privateKey;
     this.publicKey = key?.publicKey;
@@ -434,6 +434,8 @@ export class RelayHost {
     this.onGoneCallback = onGone;
     this.onChangeCallback = onChange;
     this.onTakenCallback = onTaken;
+    this.onGithubDeliveryCallback = onGithubDelivery;
+    this.getGithubAuthProof = typeof getGithubAuthProof === "function" ? getGithubAuthProof : null;
     this.logTo = log;
     this.WebSocketClass = WebSocket;
     this.timers = {
@@ -464,6 +466,8 @@ export class RelayHost {
     this.taken = false;
     this.takenInARow = 0;
     this.endpoint = null;
+    this.githubRepos = [];
+    this.githubRenewTimer = null;
     try {
       const origin = cleanRelayUrl(url);
       if (!validRelayKey(key)) throw new Error("no key");
@@ -514,6 +518,8 @@ export class RelayHost {
     this.standbyRetry = null;
     this.clear(this.grace);
     this.grace = null;
+    this.clear(this.githubRenewTimer);
+    this.githubRenewTimer = null;
     for (const [socket] of [...this.sockets]) this.finishSocket(socket, 1000, true);
     for (const conn of [...this.conns.keys()]) this.leave(conn);
     this.conns.clear();
@@ -599,8 +605,87 @@ export class RelayHost {
       }
     }
     this.nextPing(socket, meta);
+    if (meta.slot === "active" && this.githubRepos.length) void this.sendGithubSubscribe(socket);
     // The relay accepts two sockets for one v3 group. A v2 relay is left with one seat.
     if (meta.mode === "v3" && !this.standby && meta.slot === "active") this.scheduleStandby(true);
+  }
+
+  /** Sets the host's subscribed GitHub `owner/repo` list (up to 100) and sends/renews signed subscriptions on the relay. */
+  setGithubRepos(repos) {
+    const clean = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(repos) ? repos : []) {
+      const s = String(raw ?? "").trim().toLowerCase();
+      if (!/^[a-z0-9._-]{1,100}\/[a-z0-9._-]{1,100}$/.test(s) || seen.has(s)) continue;
+      seen.add(s);
+      clean.push(s);
+      if (clean.length >= 100) break;
+    }
+    clean.sort();
+    const same = clean.length === this.githubRepos.length && clean.every((r, i) => r === this.githubRepos[i]);
+    if (same) return;
+    this.githubRepos = clean;
+    this.clear(this.githubRenewTimer);
+    this.githubRenewTimer = null;
+    if (this.socket && this.sockets.has(this.socket)) {
+      void this.sendGithubSubscribe(this.socket);
+    }
+  }
+
+  /** Sets or updates the async callback that provides ephemeral GitHub read-access proof tokens on subscribe. */
+  setGithubAuthProofProvider(fn) {
+    this.getGithubAuthProof = typeof fn === "function" ? fn : null;
+  }
+
+  async sendGithubSubscribe(socket = this.socket) {
+    if (!socket || !this.sockets.has(socket) || !validRelayKey(this.key) || !this.room) return false;
+    const repos = [...this.githubRepos];
+    let githubToken;
+    let repoTokens;
+    if (repos.length > 0 && this.getGithubAuthProof) {
+      try {
+        const proof = await this.getGithubAuthProof(repos);
+        if (typeof proof === "string" && proof.trim()) {
+          githubToken = proof.trim();
+        } else if (proof && typeof proof === "object") {
+          if (typeof proof.githubToken === "string" && proof.githubToken.trim()) githubToken = proof.githubToken.trim();
+          if (proof.repoTokens && typeof proof.repoTokens === "object") repoTokens = proof.repoTokens;
+        }
+      } catch {}
+    }
+    // Re-check socket after async proof lookup; avoid sending stale list if repos changed mid-flight.
+    if (!socket || !this.sockets.has(socket) || !this.running) return false;
+    const nowSec = Math.floor(this.timers.now() / 1000);
+    const exp = nowSec + 300;
+    const challenge = `botkins-github-sub-v1:${this.room}:${nowSec}:${exp}:${repos.join(",")}`;
+    const sig = signWithRelayKey(this.key, challenge);
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "github-subscribe",
+          v: 1,
+          key: this.key.publicKey,
+          time: nowSec,
+          exp,
+          repos,
+          sig,
+          ...(githubToken ? { githubToken } : {}),
+          ...(repoTokens ? { repoTokens } : {}),
+        }),
+      );
+    } catch {
+      return false;
+    }
+    this.clear(this.githubRenewTimer);
+    this.githubRenewTimer = null;
+    if (repos.length > 0 && this.running) {
+      // Renew every 210 seconds (before the 300s TTL expires).
+      this.githubRenewTimer = this.later(210_000, () => {
+        this.githubRenewTimer = null;
+        if (this.running && this.githubRepos.length && this.socket) void this.sendGithubSubscribe(this.socket);
+      });
+    }
+    return true;
   }
 
   nextPing(socket, meta) {
@@ -782,7 +867,17 @@ export class RelayHost {
     if (!meta) return;
     this.clear(meta.dead);
     meta.dead = null;
-    if (typeof data === "string") return;
+    if (typeof data === "string") {
+      if (data !== "pong" && data.startsWith("{")) {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed && parsed.type === "github-delivery") {
+            this.onGithubDeliveryCallback(parsed);
+          }
+        } catch {}
+      }
+      return;
+    }
     if (data?.byteLength > MAX_REQUEST_FRAME) return;
     let frame;
     if (data instanceof ArrayBuffer) frame = Buffer.from(data);

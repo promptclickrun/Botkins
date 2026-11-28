@@ -412,5 +412,9 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "workflows.import"([raw, agentMap]) {
       return await handlers.workflowImportText(raw, agentMap);
     },
+    "workflows.deliveries": ([id, nodeId, limit]) => handlers.workflowGithubDeliveries(id, nodeId, limit),
+    async "workflows.replay"([id, nodeId]) {
+      return await handlers.workflowGithubReplayLast(id, nodeId);
+    },
   };
 }
