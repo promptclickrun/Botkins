@@ -31,6 +31,21 @@ import {
   findMentionInText,
   parseMentionHandles,
 } from "./workflow-github.mjs";
+import {
+  buildGithubTriggerPayload,
+  evaluateGithubTriggerFilters,
+  extractFailingCheckConclusion,
+  normalizeAssigneeList,
+  normalizeGithubEvents,
+  normalizeGithubRepos,
+  normalizeGithubTriggerConfig,
+  normalizeLabelList,
+} from "./workflow-github-events.mjs";
+import {
+  createDefaultGithubOutputClient,
+  createWorkspaceActionStore,
+  executeGithubOutputNode,
+} from "./workflow-github-output.mjs";
 import { exportWorkflow, parseImportedWorkflow } from "./workflow-port.mjs";
 
 const MAX_RUNS = 200;
@@ -545,12 +560,19 @@ export class Workflows {
     this.ws = ws;
     this.githubAuth = options.githubAuth ?? new WorkflowGithubAuth();
     this.githubPoller = options.githubPoller ?? createDefaultGithubPoller(this.githubAuth);
+    this.githubOutputClient =
+      options.githubOutputClient ??
+      createDefaultGithubOutputClient({
+        auth: this.githubAuth,
+        getInstallationToken: options.getGithubInstallationToken,
+      });
+    this.githubActionStore = options.githubActionStore ?? createWorkspaceActionStore(ws);
     this.modelRunner = options.modelRunner ?? null;
     this.waitingTurns = new Map(); // turnRunId -> { resolve, reject, workflowRunId, nodeId, structuredAnswer }
     this.activeExecutions = new Map(); // workflowRunId -> Promise
     this.githubPolling = new Set(); // `${workflowId}:${nodeId}`
     this.githubLastPoll = new Map(); // `${workflowId}:${nodeId}` -> ms
-    this.githubCursors = new Map(); // `${workflowId}:${nodeId}` -> { initialized, prs, issues, comments }
+    this.githubCursors = new Map(); // `${workflowId}:${nodeId}:${repoLower}` -> { initialized, prs, issues, comments }
 
     this.ensureState();
     this.bindEvents();
@@ -574,6 +596,7 @@ export class Workflows {
   ensureState() {
     this.ws.state.workflows ??= [];
     this.ws.state.workflowRuns ??= [];
+    this.ws.state.workflowGithubActions ??= {};
   }
 
   get all() {
@@ -689,6 +712,10 @@ export class Workflows {
         node.config.routeId = routeId;
         if (secretRef) node.config.secretRef = secretRef;
         node.config.hasSecret = !!secretRef;
+      }
+
+      if (node.kind === "trigger" && node.triggerKind === "github") {
+        node.config = normalizeGithubTriggerConfig(node.config);
       }
 
       return node;
@@ -926,6 +953,7 @@ export class Workflows {
    */
   tick(now = Date.now()) {
     let dirty = false;
+    const pendingPolls = [];
     for (const wf of this.all) {
       if (!wf.enabled) continue;
       for (const node of wf.nodes) {
@@ -949,245 +977,31 @@ export class Workflows {
           }
         }
 
-        if (node.triggerKind === "github" && node.config?.repo) {
+        if (node.triggerKind === "github" && normalizeGithubRepos(node.config).length > 0) {
           const key = `${wf.id}:${node.id}`;
           const intervalMs = Math.max(1, Number(node.config.pollMinutes) || 5) * 60_000;
           const last = this.githubLastPoll.get(key) ?? 0;
           if (!this.githubPolling.has(key) && now - last >= intervalMs) {
             this.githubLastPoll.set(key, now);
-            void this.pollGithubTrigger(wf, node, key);
+            const p = this.pollGithubTrigger(wf, node, key);
+            pendingPolls.push(p);
           }
         }
       }
     }
     if (dirty) this.ws.save();
+    return pendingPolls.length ? Promise.all(pendingPolls) : undefined;
   }
 
-  /** Polls GitHub PRs, issues, comments, and mentions via `gh` CLI (or injected poller) and fires matching events. */
+  /** Polls GitHub PRs, issues, comments, and mentions across all configured `repos[]` and fires matching events. */
   async pollGithubTrigger(wf, node, key) {
     if (this.githubPolling.has(key)) return;
     this.githubPolling.add(key);
     try {
-      const repo = clampStr(node.config?.repo, 160);
-      if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return;
-      const rawBatch = await this.githubPoller(repo, node.config);
-      const batch = Array.isArray(rawBatch)
-        ? { prs: rawBatch, issues: [], comments: [], viewerLogin: "" }
-        : {
-            prs: Array.isArray(rawBatch?.prs) ? rawBatch.prs : [],
-            issues: Array.isArray(rawBatch?.issues) ? rawBatch.issues : [],
-            comments: Array.isArray(rawBatch?.comments) ? rawBatch.comments : [],
-            viewerLogin: typeof rawBatch?.viewerLogin === "string" ? rawBatch.viewerLogin.trim().replace(/^@/, "") : "",
-          };
-
-      let cursor = this.githubCursors.get(key);
-      const eventsFilter = normalizeStatusList(node.config?.events);
-      const wants = (ev) => !eventsFilter.length || eventsFilter.includes(ev);
-      const branchFilter = clampStr(node.config?.branch, 120).toLowerCase();
-      const authorFilter = clampStr(node.config?.author, 80).toLowerCase();
-      const botHandles = parseMentionHandles(node.config?.mentionHandle);
-      const userHandles = batch.viewerLogin ? parseMentionHandles(batch.viewerLogin, "") : [];
-      const checkUserMention = (text) => (wants("user_mentioned") && userHandles.length ? findMentionInText(text, userHandles) : null);
-      const checkBotMention = (text) => (wants("bot_mentioned") && botHandles.length ? findMentionInText(text, botHandles) : null);
-
-      if (!cursor) {
-        // First poll seeds current state unless `fireInitial` is explicitly set (useful in tests).
-        cursor = { initialized: true, prs: new Map(), issues: new Map(), comments: new Map() };
-        for (const pr of batch.prs) {
-          const ci = summarizeCiRollup(pr.statusCheckRollup);
-          const review = String(pr.reviewDecision || "NONE").toLowerCase();
-          const labels = formatGithubLabels(pr.labels);
-          const fp = githubUpdateFingerprint(pr, labels);
-          const text = `${pr.title || ""}\n${pr.body || ""}`;
-          const userMatch = checkUserMention(text);
-          const botMatch = checkBotMention(text);
-          cursor.prs.set(pr.number, { review, ci, fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (node.config?.fireInitial) {
-            if (wants("pr_opened")) {
-              this.fireGithubEvent(wf, node, repo, "pr_opened", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
-            }
-            if (userMatch) {
-              this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
-            }
-            if (botMatch) {
-              this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
-            }
-          }
-        }
-        for (const issue of batch.issues) {
-          const labels = formatGithubLabels(issue.labels);
-          const fp = githubUpdateFingerprint(issue, labels);
-          const text = `${issue.title || ""}\n${issue.body || ""}`;
-          const userMatch = checkUserMention(text);
-          const botMatch = checkBotMention(text);
-          cursor.issues.set(issue.number, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (node.config?.fireInitial) {
-            if (wants("issue_opened")) {
-              this.fireGithubEvent(wf, node, repo, "issue_opened", issue, { itemType: "issue", labels, branchFilter, authorFilter });
-            }
-            if (userMatch) {
-              this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
-            }
-            if (botMatch) {
-              this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
-            }
-          }
-        }
-        for (const comment of batch.comments) {
-          const cid = String(comment.id ?? comment.url ?? "");
-          if (!cid) continue;
-          const labels = formatGithubLabels(comment.labels);
-          const fp = githubUpdateFingerprint(comment, labels);
-          const userMatch = checkUserMention(comment.body || "");
-          const botMatch = checkBotMention(comment.body || "");
-          cursor.comments.set(cid, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (node.config?.fireInitial) {
-            if (wants("issue_comment")) {
-              this.fireGithubEvent(wf, node, repo, "issue_comment", comment, { itemType: "comment", labels, branchFilter, authorFilter });
-            }
-            if (userMatch) {
-              this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
-            }
-            if (botMatch) {
-              this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
-            }
-          }
-        }
-        this.githubCursors.set(key, cursor);
-        return;
-      }
-
-      // 1. Pull requests
-      for (const pr of batch.prs) {
-        const ci = summarizeCiRollup(pr.statusCheckRollup);
-        const review = String(pr.reviewDecision || "NONE").toLowerCase();
-        const labels = formatGithubLabels(pr.labels);
-        const fp = githubUpdateFingerprint(pr, labels);
-        const text = `${pr.title || ""}\n${pr.body || ""}`;
-        const userMatch = checkUserMention(text);
-        const botMatch = checkBotMention(text);
-        const prev = cursor.prs.get(pr.number);
-        if (!prev) {
-          cursor.prs.set(pr.number, { review, ci, fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (wants("pr_opened")) {
-            this.fireGithubEvent(wf, node, repo, "pr_opened", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
-          }
-          if (userMatch) {
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
-          }
-          if (botMatch) {
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
-          }
-        } else {
-          if (prev.review !== review) {
-            prev.review = review;
-            if (wants("pr_review")) {
-              this.fireGithubEvent(wf, node, repo, "pr_review", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
-            }
-          }
-          if (prev.ci !== ci) {
-            prev.ci = ci;
-            if (wants("ci_status")) {
-              this.fireGithubEvent(wf, node, repo, "ci_status", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
-            }
-          }
-          if (prev.fp !== fp) {
-            prev.fp = fp;
-            if (wants("pr_updated")) {
-              this.fireGithubEvent(wf, node, repo, "pr_updated", pr, { itemType: "pr", review, ci, labels, branchFilter, authorFilter });
-            }
-          }
-          if (userMatch && !prev.userMentioned) {
-            prev.userMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", pr, { itemType: "pr", review, ci, labels, mention: userMatch, branchFilter, authorFilter });
-          } else if (!userMatch) {
-            prev.userMentioned = false;
-          }
-          if (botMatch && !prev.botMentioned) {
-            prev.botMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", pr, { itemType: "pr", review, ci, labels, mention: botMatch, branchFilter, authorFilter });
-          } else if (!botMatch) {
-            prev.botMentioned = false;
-          }
-        }
-      }
-
-      // 2. Issues
-      for (const issue of batch.issues) {
-        const labels = formatGithubLabels(issue.labels);
-        const fp = githubUpdateFingerprint(issue, labels);
-        const text = `${issue.title || ""}\n${issue.body || ""}`;
-        const userMatch = checkUserMention(text);
-        const botMatch = checkBotMention(text);
-        const prev = cursor.issues.get(issue.number);
-        if (!prev) {
-          cursor.issues.set(issue.number, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (wants("issue_opened")) {
-            this.fireGithubEvent(wf, node, repo, "issue_opened", issue, { itemType: "issue", labels, branchFilter, authorFilter });
-          }
-          if (userMatch) {
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
-          }
-          if (botMatch) {
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
-          }
-        } else {
-          if (prev.fp !== fp) {
-            prev.fp = fp;
-            if (wants("issue_updated")) {
-              this.fireGithubEvent(wf, node, repo, "issue_updated", issue, { itemType: "issue", labels, branchFilter, authorFilter });
-            }
-          }
-          if (userMatch && !prev.userMentioned) {
-            prev.userMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", issue, { itemType: "issue", labels, mention: userMatch, branchFilter, authorFilter });
-          } else if (!userMatch) {
-            prev.userMentioned = false;
-          }
-          if (botMatch && !prev.botMentioned) {
-            prev.botMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", issue, { itemType: "issue", labels, mention: botMatch, branchFilter, authorFilter });
-          } else if (!botMatch) {
-            prev.botMentioned = false;
-          }
-        }
-      }
-
-      // 3. Issue & PR comments
-      for (const comment of batch.comments) {
-        const cid = String(comment.id ?? comment.url ?? "");
-        if (!cid) continue;
-        const labels = formatGithubLabels(comment.labels);
-        const fp = githubUpdateFingerprint(comment, labels);
-        const userMatch = checkUserMention(comment.body || "");
-        const botMatch = checkBotMention(comment.body || "");
-        const prev = cursor.comments.get(cid);
-        if (!prev) {
-          cursor.comments.set(cid, { fp, userMentioned: Boolean(userMatch), botMentioned: Boolean(botMatch) });
-          if (wants("issue_comment")) {
-            this.fireGithubEvent(wf, node, repo, "issue_comment", comment, { itemType: "comment", labels, branchFilter, authorFilter });
-          }
-          if (userMatch) {
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
-          }
-          if (botMatch) {
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
-          }
-        } else {
-          if (prev.fp !== fp) prev.fp = fp;
-          if (userMatch && !prev.userMentioned) {
-            prev.userMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "user_mentioned", comment, { itemType: "comment", labels, mention: userMatch, branchFilter, authorFilter });
-          } else if (!userMatch) {
-            prev.userMentioned = false;
-          }
-          if (botMatch && !prev.botMentioned) {
-            prev.botMentioned = true;
-            this.fireGithubEvent(wf, node, repo, "bot_mentioned", comment, { itemType: "comment", labels, mention: botMatch, branchFilter, authorFilter });
-          } else if (!botMatch) {
-            prev.botMentioned = false;
-          }
-        }
+      const repos = normalizeGithubRepos(node.config);
+      if (!repos.length) return;
+      for (const repo of repos) {
+        await this.pollGithubTriggerRepo(wf, node, `${key}:${repo.toLowerCase()}`, repo);
       }
     } catch {
       // Quiet on transient poll errors; next tick retries.
@@ -1196,29 +1010,367 @@ export class Workflows {
     }
   }
 
+  async pollGithubTriggerRepo(wf, node, cursorKey, repo) {
+    const rawBatch = await this.githubPoller(repo, node.config);
+    const batch = Array.isArray(rawBatch)
+      ? { prs: rawBatch, issues: [], comments: [], viewerLogin: "" }
+      : {
+          prs: Array.isArray(rawBatch?.prs) ? rawBatch.prs : [],
+          issues: Array.isArray(rawBatch?.issues) ? rawBatch.issues : [],
+          comments: Array.isArray(rawBatch?.comments) ? rawBatch.comments : [],
+          viewerLogin: typeof rawBatch?.viewerLogin === "string" ? rawBatch.viewerLogin.trim().replace(/^@/, "") : "",
+        };
+
+    let cursor = this.githubCursors.get(cursorKey);
+    // Legacy configs (single `repo` without `repos`, or explicit legacy event names) keep legacy poll event names
+    // when no canonical event names were supplied, unless `config.events` uses canonical names.
+    const legacyList = Array.isArray(node.config?._legacyEvents) ? node.config._legacyEvents : [];
+    const evInfo = normalizeGithubEvents(node.config?.events);
+    const hasExplicitCanonical = Array.isArray(node.config?.events) && node.config.events.length > 0 && legacyList.length === 0;
+    const useLegacyNames = legacyList.length > 0 || (!hasExplicitCanonical && node.config?._legacyRepoOnly === true);
+    const rawWantedSet = new Set(legacyList.map((e) => e.toLowerCase()));
+    const canonicalSet = new Set(evInfo.canonical);
+    const wantsAll = !evInfo.explicit;
+
+    const wantsLegacy = (legacyEv) => useLegacyNames && (wantsAll || rawWantedSet.has(legacyEv));
+    const wantsCanonical = (canonicalEv) => !useLegacyNames && (wantsAll || canonicalSet.has(canonicalEv));
+
+    const mentionHandleStr = Array.isArray(node.config?.mentionHandles) && node.config.mentionHandles.length
+      ? node.config.mentionHandles.join(",")
+      : node.config?.mentionHandle;
+    const botHandles = parseMentionHandles(mentionHandleStr);
+    const userHandles = batch.viewerLogin ? parseMentionHandles(batch.viewerLogin, "") : [];
+    const combinedHandles = [...new Set([...botHandles, ...userHandles])];
+
+    const checkUserMention = (text) => (wantsLegacy("user_mentioned") && userHandles.length ? findMentionInText(text, userHandles) : null);
+    const checkBotMention = (text) => (wantsLegacy("bot_mentioned") && botHandles.length ? findMentionInText(text, botHandles) : null);
+    const checkCanonicalMention = (text) => (wantsCanonical("mention") && combinedHandles.length ? findMentionInText(text, combinedHandles) : null);
+
+    const reviewerSet = (pr) => {
+      const reqs = Array.isArray(pr.reviewRequests) ? pr.reviewRequests : Array.isArray(pr.requested_reviewers) ? pr.requested_reviewers : [];
+      return new Set(reqs.map((r) => String(r?.login || r?.name || r || "").toLowerCase()).filter(Boolean));
+    };
+
+    const emit = (ev, item, opts) => this.fireGithubEvent(wf, node, repo, ev, item, opts);
+
+    if (!cursor) {
+      // First poll seeds current state unless `fireInitial` is explicitly set (useful in tests).
+      cursor = { initialized: true, prs: new Map(), issues: new Map(), comments: new Map() };
+      for (const pr of batch.prs) {
+        const ci = summarizeCiRollup(pr.statusCheckRollup);
+        const failConclusion = extractFailingCheckConclusion(pr.statusCheckRollup);
+        const review = String(pr.reviewDecision || "NONE").toLowerCase();
+        const labelsList = normalizeLabelList(pr.labels);
+        const labelsStr = labelsList.join(", ");
+        const assigneesList = normalizeAssigneeList(pr.assignees);
+        const reviewers = reviewerSet(pr);
+        const merged = Boolean(pr.merged || pr.mergedAt || pr.merged_at || String(pr.state || "").toLowerCase() === "merged");
+        const fp = githubUpdateFingerprint(pr, labelsStr);
+        const text = `${pr.title || ""}\n${pr.body || ""}`;
+        const userMatch = checkUserMention(text);
+        const botMatch = checkBotMention(text);
+        const canonMatch = checkCanonicalMention(text);
+        cursor.prs.set(pr.number, {
+          review,
+          ci,
+          failConclusion,
+          fp,
+          merged,
+          labels: new Set(labelsList.map((l) => l.toLowerCase())),
+          assignees: new Set(assigneesList.map((a) => a.toLowerCase())),
+          reviewers,
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (node.config?.fireInitial) {
+          if (wantsLegacy("pr_opened")) emit("pr_opened", pr, { itemType: "pr", pullRequest: true, review, ci, labelsList, assigneesList });
+          else if (wantsCanonical("pr.opened")) emit("pr.opened", pr, { itemType: "pr", pullRequest: true, review, ci, labelsList, assigneesList });
+          if (userMatch) emit("user_mentioned", pr, { itemType: "pr", pullRequest: true, review, ci, labelsList, assigneesList, mention: userMatch });
+          if (botMatch) emit("bot_mentioned", pr, { itemType: "pr", pullRequest: true, review, ci, labelsList, assigneesList, mention: botMatch });
+          if (canonMatch) emit("mention", pr, { itemType: "pr", pullRequest: true, review, ci, labelsList, assigneesList, mention: canonMatch });
+        }
+      }
+      for (const issue of batch.issues) {
+        const labelsList = normalizeLabelList(issue.labels);
+        const labelsStr = labelsList.join(", ");
+        const assigneesList = normalizeAssigneeList(issue.assignees);
+        const state = String(issue.state || "open").toLowerCase();
+        const fp = githubUpdateFingerprint(issue, labelsStr);
+        const text = `${issue.title || ""}\n${issue.body || ""}`;
+        const userMatch = checkUserMention(text);
+        const botMatch = checkBotMention(text);
+        const canonMatch = checkCanonicalMention(text);
+        cursor.issues.set(issue.number, {
+          fp,
+          state,
+          labels: new Set(labelsList.map((l) => l.toLowerCase())),
+          assignees: new Set(assigneesList.map((a) => a.toLowerCase())),
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (node.config?.fireInitial) {
+          if (wantsLegacy("issue_opened")) emit("issue_opened", issue, { itemType: "issue", pullRequest: false, labelsList, assigneesList });
+          else if (wantsCanonical("issue.opened")) emit("issue.opened", issue, { itemType: "issue", pullRequest: false, labelsList, assigneesList });
+          if (userMatch) emit("user_mentioned", issue, { itemType: "issue", pullRequest: false, labelsList, assigneesList, mention: userMatch });
+          if (botMatch) emit("bot_mentioned", issue, { itemType: "issue", pullRequest: false, labelsList, assigneesList, mention: botMatch });
+          if (canonMatch) emit("mention", issue, { itemType: "issue", pullRequest: false, labelsList, assigneesList, mention: canonMatch });
+        }
+      }
+      for (const comment of batch.comments) {
+        const cid = String(comment.id ?? comment.url ?? "");
+        if (!cid) continue;
+        const labelsList = normalizeLabelList(comment.labels);
+        const labelsStr = labelsList.join(", ");
+        const fp = githubUpdateFingerprint(comment, labelsStr);
+        const userMatch = checkUserMention(comment.body || "");
+        const botMatch = checkBotMention(comment.body || "");
+        const canonMatch = checkCanonicalMention(comment.body || "");
+        cursor.comments.set(cid, {
+          fp,
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (node.config?.fireInitial) {
+          if (wantsLegacy("issue_comment")) emit("issue_comment", comment, { itemType: "comment", labelsList });
+          else if (wantsCanonical("comment")) emit("comment", comment, { itemType: "comment", labelsList });
+          if (userMatch) emit("user_mentioned", comment, { itemType: "comment", labelsList, mention: userMatch });
+          if (botMatch) emit("bot_mentioned", comment, { itemType: "comment", labelsList, mention: botMatch });
+          if (canonMatch) emit("mention", comment, { itemType: "comment", labelsList, mention: canonMatch });
+        }
+      }
+      this.githubCursors.set(cursorKey, cursor);
+      return;
+    }
+
+    // 1. Pull requests
+    for (const pr of batch.prs) {
+      const ci = summarizeCiRollup(pr.statusCheckRollup);
+      const failConclusion = extractFailingCheckConclusion(pr.statusCheckRollup);
+      const review = String(pr.reviewDecision || "NONE").toLowerCase();
+      const labelsList = normalizeLabelList(pr.labels);
+      const labelsStr = labelsList.join(", ");
+      const assigneesList = normalizeAssigneeList(pr.assignees);
+      const reviewers = reviewerSet(pr);
+      const merged = Boolean(pr.merged || pr.mergedAt || pr.merged_at || String(pr.state || "").toLowerCase() === "merged");
+      const fp = githubUpdateFingerprint(pr, labelsStr);
+      const text = `${pr.title || ""}\n${pr.body || ""}`;
+      const userMatch = checkUserMention(text);
+      const botMatch = checkBotMention(text);
+      const canonMatch = checkCanonicalMention(text);
+      const prev = cursor.prs.get(pr.number);
+      const common = { itemType: "pr", pullRequest: true, review, ci, checkConclusion: failConclusion || ci, labelsList, assigneesList, merged };
+
+      if (!prev) {
+        cursor.prs.set(pr.number, {
+          review,
+          ci,
+          failConclusion,
+          fp,
+          merged,
+          labels: new Set(labelsList.map((l) => l.toLowerCase())),
+          assignees: new Set(assigneesList.map((a) => a.toLowerCase())),
+          reviewers,
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (wantsLegacy("pr_opened")) emit("pr_opened", pr, common);
+        else if (wantsCanonical("pr.opened")) emit("pr.opened", pr, common);
+        if (wantsCanonical("assigned") && assigneesList.length) emit("assigned", pr, common);
+        if (wantsCanonical("pr.reviewRequested") && reviewers.size) emit("pr.reviewRequested", pr, common);
+        if (userMatch) emit("user_mentioned", pr, { ...common, mention: userMatch });
+        if (botMatch) emit("bot_mentioned", pr, { ...common, mention: botMatch });
+        if (canonMatch) emit("mention", pr, { ...common, mention: canonMatch });
+      } else {
+        if (prev.review !== review) {
+          prev.review = review;
+          if (wantsLegacy("pr_review")) emit("pr_review", pr, common);
+          else if (wantsCanonical("pr.reviewSubmitted")) emit("pr.reviewSubmitted", pr, common);
+        }
+        if (prev.ci !== ci || prev.failConclusion !== failConclusion) {
+          prev.ci = ci;
+          prev.failConclusion = failConclusion;
+          if (wantsLegacy("ci_status")) emit("ci_status", pr, common);
+          else if (wantsCanonical("pr.checksFailed") && (failConclusion || ci === "failing")) {
+            emit("pr.checksFailed", pr, { ...common, checkConclusion: failConclusion || "failure" });
+          }
+        }
+        if (!prev.merged && merged) {
+          prev.merged = true;
+          if (wantsCanonical("pr.merged")) emit("pr.merged", pr, { ...common, state: "merged", merged: true });
+        }
+        const addedReviewers = [...reviewers].filter((r) => !prev.reviewers.has(r));
+        if (addedReviewers.length) {
+          prev.reviewers = reviewers;
+          if (wantsCanonical("pr.reviewRequested")) emit("pr.reviewRequested", pr, common);
+        }
+        const addedAssignees = assigneesList.filter((a) => !prev.assignees.has(a.toLowerCase()));
+        if (addedAssignees.length) {
+          prev.assignees = new Set(assigneesList.map((a) => a.toLowerCase()));
+          if (wantsCanonical("assigned")) emit("assigned", pr, common);
+        }
+        if (prev.fp !== fp) {
+          prev.fp = fp;
+          if (wantsLegacy("pr_updated")) emit("pr_updated", pr, common);
+          else if (wantsCanonical("pr.updated")) emit("pr.updated", pr, common);
+        }
+        if (userMatch && !prev.userMentioned) {
+          prev.userMentioned = true;
+          emit("user_mentioned", pr, { ...common, mention: userMatch });
+        } else if (!userMatch) {
+          prev.userMentioned = false;
+        }
+        if (botMatch && !prev.botMentioned) {
+          prev.botMentioned = true;
+          emit("bot_mentioned", pr, { ...common, mention: botMatch });
+        } else if (!botMatch) {
+          prev.botMentioned = false;
+        }
+        if (canonMatch && !prev.canonicalMentioned) {
+          prev.canonicalMentioned = true;
+          emit("mention", pr, { ...common, mention: canonMatch });
+        } else if (!canonMatch) {
+          prev.canonicalMentioned = false;
+        }
+      }
+    }
+
+    // 2. Issues
+    for (const issue of batch.issues) {
+      const labelsList = normalizeLabelList(issue.labels);
+      const labelsStr = labelsList.join(", ");
+      const assigneesList = normalizeAssigneeList(issue.assignees);
+      const state = String(issue.state || "open").toLowerCase();
+      const fp = githubUpdateFingerprint(issue, labelsStr);
+      const text = `${issue.title || ""}\n${issue.body || ""}`;
+      const userMatch = checkUserMention(text);
+      const botMatch = checkBotMention(text);
+      const canonMatch = checkCanonicalMention(text);
+      const prev = cursor.issues.get(issue.number);
+      const common = { itemType: "issue", pullRequest: false, labelsList, assigneesList, state };
+
+      if (!prev) {
+        cursor.issues.set(issue.number, {
+          fp,
+          state,
+          labels: new Set(labelsList.map((l) => l.toLowerCase())),
+          assignees: new Set(assigneesList.map((a) => a.toLowerCase())),
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (wantsLegacy("issue_opened")) emit("issue_opened", issue, common);
+        else if (wantsCanonical("issue.opened")) emit("issue.opened", issue, common);
+        if (wantsCanonical("assigned") && assigneesList.length) emit("assigned", issue, common);
+        if (userMatch) emit("user_mentioned", issue, { ...common, mention: userMatch });
+        if (botMatch) emit("bot_mentioned", issue, { ...common, mention: botMatch });
+        if (canonMatch) emit("mention", issue, { ...common, mention: canonMatch });
+      } else {
+        if (prev.state !== "closed" && state === "closed") {
+          if (wantsCanonical("issue.closed")) emit("issue.closed", issue, common);
+        }
+        prev.state = state;
+
+        const newlyAddedLabels = labelsList.filter((l) => !prev.labels.has(l.toLowerCase()));
+        if (newlyAddedLabels.length) {
+          prev.labels = new Set(labelsList.map((l) => l.toLowerCase()));
+          if (wantsCanonical("issue.labeled")) {
+            for (const addedLabel of newlyAddedLabels) {
+              emit("issue.labeled", issue, { ...common, addedLabel });
+            }
+          }
+        }
+        const newlyAddedAssignees = assigneesList.filter((a) => !prev.assignees.has(a.toLowerCase()));
+        if (newlyAddedAssignees.length) {
+          prev.assignees = new Set(assigneesList.map((a) => a.toLowerCase()));
+          if (wantsCanonical("assigned")) emit("assigned", issue, common);
+        }
+        if (prev.fp !== fp) {
+          prev.fp = fp;
+          if (wantsLegacy("issue_updated")) emit("issue_updated", issue, common);
+        }
+        if (userMatch && !prev.userMentioned) {
+          prev.userMentioned = true;
+          emit("user_mentioned", issue, { ...common, mention: userMatch });
+        } else if (!userMatch) {
+          prev.userMentioned = false;
+        }
+        if (botMatch && !prev.botMentioned) {
+          prev.botMentioned = true;
+          emit("bot_mentioned", issue, { ...common, mention: botMatch });
+        } else if (!botMatch) {
+          prev.botMentioned = false;
+        }
+        if (canonMatch && !prev.canonicalMentioned) {
+          prev.canonicalMentioned = true;
+          emit("mention", issue, { ...common, mention: canonMatch });
+        } else if (!canonMatch) {
+          prev.canonicalMentioned = false;
+        }
+      }
+    }
+
+    // 3. Issue & PR comments
+    for (const comment of batch.comments) {
+      const cid = String(comment.id ?? comment.url ?? "");
+      if (!cid) continue;
+      const labelsList = normalizeLabelList(comment.labels);
+      const labelsStr = labelsList.join(", ");
+      const fp = githubUpdateFingerprint(comment, labelsStr);
+      const userMatch = checkUserMention(comment.body || "");
+      const botMatch = checkBotMention(comment.body || "");
+      const canonMatch = checkCanonicalMention(comment.body || "");
+      const prev = cursor.comments.get(cid);
+      const common = { itemType: "comment", labelsList };
+
+      if (!prev) {
+        cursor.comments.set(cid, {
+          fp,
+          userMentioned: Boolean(userMatch),
+          botMentioned: Boolean(botMatch),
+          canonicalMentioned: Boolean(canonMatch),
+        });
+        if (wantsLegacy("issue_comment")) emit("issue_comment", comment, common);
+        else if (wantsCanonical("comment")) emit("comment", comment, common);
+        if (userMatch) emit("user_mentioned", comment, { ...common, mention: userMatch });
+        if (botMatch) emit("bot_mentioned", comment, { ...common, mention: botMatch });
+        if (canonMatch) emit("mention", comment, { ...common, mention: canonMatch });
+      } else {
+        if (prev.fp !== fp) prev.fp = fp;
+        if (userMatch && !prev.userMentioned) {
+          prev.userMentioned = true;
+          emit("user_mentioned", comment, { ...common, mention: userMatch });
+        } else if (!userMatch) {
+          prev.userMentioned = false;
+        }
+        if (botMatch && !prev.botMentioned) {
+          prev.botMentioned = true;
+          emit("bot_mentioned", comment, { ...common, mention: botMatch });
+        } else if (!botMatch) {
+          prev.botMentioned = false;
+        }
+        if (canonMatch && !prev.canonicalMentioned) {
+          prev.canonicalMentioned = true;
+          emit("mention", comment, { ...common, mention: canonMatch });
+        } else if (!canonMatch) {
+          prev.canonicalMentioned = false;
+        }
+      }
+    }
+  }
+
   fireGithubEvent(wf, node, repo, event, item, opts = {}) {
     if (!wf.enabled) return;
-    const itemType = opts.itemType || "pr";
-    const author = typeof item.author === "string" ? item.author : item.author?.login || item.user?.login || "";
-    const branch = item.headRefName || item.branch || "";
-    if (opts.branchFilter && itemType === "pr" && !branch.toLowerCase().includes(opts.branchFilter)) return;
-    if (opts.authorFilter && author.toLowerCase() !== opts.authorFilter) return;
-    this.startRun(wf, node, {
-      repo,
-      event,
-      number: Number(item.number) || 0,
-      title: item.title || "",
-      body: item.body || "",
-      author,
-      url: item.url || item.html_url || "",
-      branch,
-      state: String(item.state || "OPEN").toLowerCase(),
-      review_state: opts.review ?? "none",
-      ci_status: opts.ci ?? "none",
-      item_type: itemType,
-      mention: opts.mention ?? "",
-      labels: opts.labels ?? formatGithubLabels(item.labels),
+    const payload = buildGithubTriggerPayload(repo, event, item, opts);
+    const filterResult = evaluateGithubTriggerFilters(node.config, payload, {
+      sender: opts.sender ?? item.sender ?? item.user ?? item.author,
+      author: item.author ?? item.user,
     });
+    if (!filterResult.pass) return;
+    this.startRun(wf, node, payload);
   }
 
   /** Handles Task Board created & status-changed events. */
@@ -1558,6 +1710,7 @@ export class Workflows {
     run.error = null;
     run.pendingApproval = null;
     run.retriedAt = Date.now();
+    run.retryPass = (Number(run.retryPass) || 0) + 1;
     this.ws.save();
 
     this.launchExecution(run.id);
@@ -1846,7 +1999,8 @@ export class Workflows {
   /** Runs an Agent step by handing off to a Botkins bot via `ws.send(...)`; ends when its turn ends. */
   async executeAgentNode(wf, run, node) {
     const bot = this.resolveBotForNode(node);
-    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context);
+    const reader = ["github", "webhook", "channel"].includes(run.triggerKind) && !run.manual ? "model" : "person";
+    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context, { reader });
     if (!stepPrompt.trim()) throw new Error("Agent step prompt is empty.");
     const basePrompt = frameExternalPrompt(stepPrompt, run);
 
@@ -1933,7 +2087,8 @@ export class Workflows {
 
   /** Runs a one-shot LLM model step with NO tools and optional structured JSON output fields. */
   async executeModelNode(wf, run, node) {
-    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context);
+    const reader = ["github", "webhook", "channel"].includes(run.triggerKind) && !run.manual ? "model" : "person";
+    const stepPrompt = resolveTemplate(node.config?.prompt || "", run.context, { reader });
     if (!stepPrompt.trim()) throw new Error("Model step prompt is empty.");
     const prompt = frameExternalPrompt(stepPrompt, run);
     const outputFields = Array.isArray(node.config?.outputFields)
@@ -2021,10 +2176,30 @@ export class Workflows {
     }
   }
 
-  /** Executes an Output step (chat / feed / idea / goal / notification) with resolved `{{field}}` templates. */
+  /** Executes an Output step (chat / feed / idea / goal / notification / github) with resolved `{{field}}` templates. */
   async executeOutputNode(wf, run, node) {
     const cfg = node.config ?? {};
     const dest = OUTPUT_DESTINATIONS.includes(cfg.destination) ? cfg.destination : "chat";
+
+    if (dest === "github") {
+      const invokeModel = async (choicePrompt) => {
+        const framed = frameExternalPrompt(choicePrompt, run);
+        if (this.modelRunner) {
+          return String(await this.modelRunner({ prompt: framed, model: cfg.model, node, workflow: wf, run }) ?? "");
+        }
+        return await this.runOneShotModel(framed, cfg.model);
+      };
+      return await executeGithubOutputNode({
+        wf,
+        run,
+        node,
+        client: this.githubOutputClient,
+        actionStore: this.githubActionStore,
+        runModel: invokeModel,
+        pass: Number(run.retryPass ?? 0) || 0,
+      });
+    }
+
     const text = resolveTemplate(cfg.template || "", run.context).trim();
     const title = resolveTemplate(cfg.title || wf.name, run.context).trim() || wf.name;
     const hasCard = dest === "chat" && cfg.card && typeof cfg.card === "object" && !Array.isArray(cfg.card);
@@ -2178,7 +2353,7 @@ export class Workflows {
         config: {
           type: "object",
           description:
-            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category,card,a2ui}. Optional card (chat destination only, {{field}} templates): {title,subtitle?,needsYou?,body?,fields?,link?,blocks?,dispatch?}. Optional a2ui (chat destination only, {{field}} templates in strings): array of A2UI v1.0 messages or {messages:[...],onAction?:'bot'|'resume'|'trigger',targetWorkflowId?,dispatch?}.",
+            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repos,repo?,events,labels?,notBot?,firstTime?,titleContains?,baseBranch?,mentionHandles?,mentionHandle?,branch?,author?,pollMinutes?}. Events: issue.opened, issue.closed, issue.labeled, pr.opened, pr.updated, pr.reviewRequested, pr.reviewSubmitted, pr.checksFailed, pr.merged, comment, mention, assigned (legacy names migrated automatically). Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category,card,a2ui,action,repository,sameRepository,item,sameItem,body,labels,labelsFrom,assignees,reviewers,person,stateReason}. Destination 'github' supports actions: comment, label.add, label.remove, assign, review.request, review.approve, review.changes, close, reopen, issue.create. Optional card (chat destination only, {{field}} templates): {title,subtitle?,needsYou?,body?,fields?,link?,blocks?,dispatch?}. Optional a2ui (chat destination only, {{field}} templates in strings): array of A2UI v1.0 messages or {messages:[...],onAction?:'bot'|'resume'|'trigger',targetWorkflowId?,dispatch?}.",
         },
       },
       required: ["id", "kind"],
@@ -2233,7 +2408,7 @@ export class Workflows {
       }),
       defineTool("workflow_create", {
         description:
-          "Create an event-based Workflow graph and show it live on the Routines › Workflows canvas. Rejects invalid graphs or broken/ambiguous {{field}} references; trigger fields are fixed per trigger kind (task: id,title,bot,from,to,result,problem,priority; schedule: local_date,local_time,weekday,run_time,timezone; manual: run_time,triggered_by; routine: routine_id,routine_name,bot,status,result,run_id,finished_at; chat: chat_id,chat_title,bot,sender,text,time; webhook: body,payload,method,received_at; github: repo,event,number,title,body,author,url,branch,state,review_state,ci_status,item_type,mention,labels).",
+          "Create an event-based Workflow graph and show it live on the Routines › Workflows canvas. Rejects invalid graphs or broken/ambiguous {{field}} references; trigger fields are fixed per trigger kind (task: id,title,bot,from,to,result,problem,priority; schedule: local_date,local_time,weekday,run_time,timezone; manual: run_time,triggered_by; routine: routine_id,routine_name,bot,status,result,run_id,finished_at; chat: chat_id,chat_title,bot,sender,text,time; webhook: body,payload,method,received_at; github: event,repository,number,pull_request,title,body,url,state,author,sender,author_association,labels,added_label,assignees,base_branch,head_branch,head_sha,merged,review_state,review_body,comment_body,comment_url,check_conclusion,mention; channel: channel,connection,conversation,sender,text,isDirect,mentionsBot).",
         parameters: {
           type: "object",
           properties: {

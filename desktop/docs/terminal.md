@@ -430,6 +430,27 @@ botkins models --routines claude/claude-sonnet-5-5 --effort low
 - The log has one line for each change, by the routine's name (`routines.add Morning brief`). It has no prompt. A change to a chat's schedule names the chat.
 - A bot's own routine tool makes none that runs more often than every 15 minutes (and at most 25 for a bot). These commands do not stop such a schedule: `routines add`, `edit` and `duplicate` show a cost line for it (how often it runs, and that each run uses the model and can cost money) and need `--yes` with no terminal, and the socket calls refuse it unless the call carries `{ fastSchedule: true }`, which the commands send after the yes.
 
+### Workflows
+
+An **event-based workflow** runs a graph of triggers, conditions, approvals, agent/model steps, and outputs (`chat`, `feed`, `idea`, `goal`, `notification`, or `github`).
+
+```sh
+botkins workflows list
+botkins workflows add workflow.json
+botkins workflows edit <id> patch.json
+botkins workflows pause <id>
+botkins workflows resume <id>
+botkins workflows run <id>
+botkins workflows retry <runId>
+botkins workflows approve <runId> approved --note "Looks good"
+botkins workflows cancel <runId>
+botkins workflows export <id>
+botkins workflows import workflow.botkins-workflow.json
+```
+
+- **GitHub triggers** accept `repos[]` (migrating legacy single `repo`), 12 canonical events (`issue.opened`, `issue.closed`, `issue.labeled`, `pr.opened`, `pr.updated`, `pr.reviewRequested`, `pr.reviewSubmitted`, `pr.checksFailed`, `pr.merged`, `comment`, `mention`, `assigned`; legacy names are migrated automatically), filters (`labels`, `notBot` on by default, `firstTime`, `titleContains`, `baseBranch`), and expose 24 typed `{{field}}` values (`event`, `repository`, `number`, `pull_request`, `title`, `body`, `url`, `state`, `author`, `sender`, `author_association`, `labels`, `added_label`, `assignees`, `base_branch`, `head_branch`, `head_sha`, `merged`, `review_state`, `review_body`, `comment_body`, `comment_url`, `check_conclusion`, `mention`) with context-aware escaping (`model`, `person`, `lines`).
+- **Native GitHub output steps** (`destination: "github"`) run only inside a workflow run and respect unattended workflow gates. They support 10 actions (`comment`, `label.add`, `label.remove`, `assign`, `review.request`, `review.approve`, `review.changes`, `close`, `reopen`, `issue.create`), default to `sameRepository` + `sameItem`, restrict PR-only actions to PRs, validate agent-selected labels/reviewers against the repository catalog, prefer GitHub App installation tokens with local `gh` CLI fallback, strip/refuse raw external-event echoes (`githubEventText`), and write a `sending` ledger record (`${runId}:${nodeId}:${pass}`) before each API call so crash restarts never double-post non-repeatable actions (`githubUncertain`).
+
 ### Projects, to-dos, tasks and artifacts
 
 A **project** keeps folders, a to-do list, chats and artifacts together. A **task** is work for a bot on the task board; the board belongs to the whole app, not to a project. An **artifact** is a file that a bot made or showed.

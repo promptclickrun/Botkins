@@ -56,6 +56,7 @@ Pair the phone app, and your team goes with you.
 
 - **Today.** Bots post to **Feed**, **Ideas** and **Goals**, and keep live **panels** up to date.
 - **Routines.** Schedule a bot once, daily, on weekdays, weekly, or with cron. Choose where the result goes.
+- **Workflows.** Build event-driven graphs from schedules, tasks, chats, webhooks, channels, and GitHub triggers (multi-repo `repos[]`, 12 canonical events, label/bot/first-time/title/base-branch filters, and 24 typed fields) with deterministic conditions, approvals, agent/model steps, and outputs including native GitHub actions (`comment`, `label.add`, `label.remove`, `assign`, `review.request`, `review.approve`, `review.changes`, `close`, `reopen`, `issue.create`) backed by GitHub App tokens or local `gh`.
 - **Tasks.** A task board with Later, Ready, Working, Needs you and Done. Ready tasks start on their own. You approve the result.
 - **Usage.** See turns, tokens and cost by day, model and bot. Export to CSV.
 - **Background mode.** Close the window. Botkins keeps running, so routines and your phone keep working.

@@ -3,7 +3,19 @@
 
 export const NODE_KINDS = ["trigger", "agent", "model", "condition", "approval", "output"];
 export const TRIGGER_KINDS = ["task", "schedule", "manual", "routine", "chat", "webhook", "github", "channel"];
-export const OUTPUT_DESTINATIONS = ["chat", "feed", "idea", "goal", "notification"];
+export const OUTPUT_DESTINATIONS = ["chat", "feed", "idea", "goal", "notification", "github"];
+export const WORKFLOW_GITHUB_OUTPUT_ACTIONS = [
+  "comment",
+  "label.add",
+  "label.remove",
+  "assign",
+  "review.request",
+  "review.approve",
+  "review.changes",
+  "close",
+  "reopen",
+  "issue.create",
+];
 export const CONDITION_OPS = [
   "equals",
   "not_equals",
@@ -68,35 +80,48 @@ export const TRIGGER_FIELDS = {
     { name: "received_at", type: "string", description: "ISO timestamp received" },
   ],
   github: [
-    { name: "repo", type: "string", description: "Repository (owner/repo)" },
     {
       name: "event",
       type: "string",
-      description: "Event type",
+      description: "Canonical event type",
       choices: [
-        "pr_opened",
-        "pr_updated",
-        "pr_review",
-        "ci_status",
-        "issue_opened",
-        "issue_updated",
-        "issue_comment",
-        "user_mentioned",
-        "bot_mentioned",
+        "issue.opened",
+        "issue.closed",
+        "issue.labeled",
+        "pr.opened",
+        "pr.updated",
+        "pr.reviewRequested",
+        "pr.reviewSubmitted",
+        "pr.checksFailed",
+        "pr.merged",
+        "comment",
+        "mention",
+        "assigned",
       ],
     },
+    { name: "repository", type: "string", description: "Repository (owner/repo)" },
     { name: "number", type: "number", description: "Issue or pull request number" },
+    { name: "pull_request", type: "boolean", description: "True when the item is a pull request" },
     { name: "title", type: "string", description: "Issue or pull request title" },
     { name: "body", type: "string", description: "Issue, pull request, or comment body" },
-    { name: "author", type: "string", description: "Item or comment author" },
     { name: "url", type: "string", description: "GitHub URL" },
-    { name: "branch", type: "string", description: "Head branch name (PRs)" },
     { name: "state", type: "string", description: "Open, closed, or merged state" },
-    { name: "review_state", type: "string", description: "PR review decision" },
-    { name: "ci_status", type: "string", description: "PR CI rollup status" },
-    { name: "item_type", type: "string", description: "Source item kind", choices: ["pr", "issue", "comment"] },
+    { name: "author", type: "string", description: "Item or comment author login" },
+    { name: "sender", type: "string", description: "Actor login who triggered the event" },
+    { name: "author_association", type: "string", description: "Author's repository association (e.g. FIRST_TIME_CONTRIBUTOR, MEMBER)" },
+    { name: "labels", type: "list", description: "List of current label names" },
+    { name: "added_label", type: "string", description: "Label added on issue.labeled events" },
+    { name: "assignees", type: "list", description: "List of assignee logins" },
+    { name: "base_branch", type: "string", description: "Target base branch name (PRs)" },
+    { name: "head_branch", type: "string", description: "Source head branch name (PRs)" },
+    { name: "head_sha", type: "string", description: "Head commit SHA (PRs)" },
+    { name: "merged", type: "boolean", description: "True when the pull request is merged" },
+    { name: "review_state", type: "string", description: "PR review state or decision" },
+    { name: "review_body", type: "string", description: "PR review body text" },
+    { name: "comment_body", type: "string", description: "Comment body text" },
+    { name: "comment_url", type: "string", description: "Direct URL to the comment" },
+    { name: "check_conclusion", type: "string", description: "Check suite or CI conclusion" },
     { name: "mention", type: "string", description: "Matched @mention handle" },
-    { name: "labels", type: "string", description: "Comma-separated labels" },
   ],
   channel: [
     { name: "channel", type: "string", description: "Channel kind (slack, telegram, discord, imessage)" },
@@ -115,6 +140,8 @@ const TOKEN_RE = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_.-]{0,63})(\?)?\s*\}\}/g;
 export function isValidFieldName(name) {
   return typeof name === "string" && FIELD_NAME_RE.test(name);
 }
+
+export const GITHUB_LEGACY_FIELD_ALIASES = new Set(["repo", "branch", "ci_status", "item_type"]);
 
 /** Fields declared as output by a single node. */
 export function nodeOutputFields(node) {
@@ -276,9 +303,41 @@ export function frameExternalPrompt(prompt, run) {
   );
 }
 
-export function formatFieldValue(value) {
+export function formatFieldValue(value, context = "person") {
   if (value === undefined || value === null) return "";
+  if (context === "model") {
+    if (typeof value === "string") return JSON.stringify(value);
+    if (Array.isArray(value)) return JSON.stringify(value.map((v) => (v === undefined || v === null ? "" : String(v))));
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return JSON.stringify(String(value));
+    }
+  }
+  if (context === "lines") {
+    if (Array.isArray(value)) {
+      return value
+        .map((v) => (v === undefined || v === null ? "" : String(v).trim()))
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  // Default "person" context: human-readable strings, comma-joined lists
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => (v === undefined || v === null ? "" : String(v).trim()))
+      .filter(Boolean)
+      .join(", ");
+  }
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   try {
     return JSON.stringify(value);
@@ -301,9 +360,13 @@ export function parseNeedsYou(value) {
 
 /**
  * Resolves `{{field}}` and `{{field?}}` placeholders against `context`.
+ * `reader` selects context-aware escaping:
+ * - `"person"` (default): plain strings, comma-joined lists
+ * - `"model"`: JSON-stringified strings and lists so untrusted values stay delimited
+ * - `"lines"`: newline-joined lists (e.g. for label/assignee inputs)
  * Saved text always remains plain `{{field}}`.
  */
-export function resolveTemplate(text, context, { strict = false } = {}) {
+export function resolveTemplate(text, context, { strict = false, reader = "person" } = {}) {
   if (typeof text !== "string") return "";
   if (!text.includes("{{")) return text;
   const missing = [];
@@ -313,7 +376,7 @@ export function resolveTemplate(text, context, { strict = false } = {}) {
       if (!opt) missing.push(name);
       return "";
     }
-    return formatFieldValue(val);
+    return formatFieldValue(val, reader);
   });
   if (strict && missing.length) {
     throw new Error("Missing workflow field" + (missing.length > 1 ? "s" : "") + ": " + [...new Set(missing)].join(", "));
@@ -400,6 +463,19 @@ export function nodeTemplateStrings(node) {
   } else if (node?.kind === "output") {
     push("template", cfg.template);
     push("title", cfg.title);
+    if (cfg.destination === "github") {
+      push("body", cfg.body);
+      push("repository", cfg.repository);
+      push("repo", cfg.repo);
+      push("item", cfg.item);
+      push("itemNumber", cfg.itemNumber);
+      push("labels", cfg.labels);
+      push("assignees", cfg.assignees);
+      push("reviewers", cfg.reviewers);
+      push("person", cfg.person);
+      push("reason", cfg.reason);
+      push("stateReason", cfg.stateReason);
+    }
     pushCardTemplates(cfg.card, push);
     if (cfg.a2ui !== undefined && cfg.a2ui !== null) pushA2uiTemplates(cfg.a2ui, "a2ui", push);
   } else if (node?.kind === "condition") {
@@ -472,7 +548,10 @@ export function analyzeWorkflowFields(workflow) {
 
     for (const up of upstreamPaths) {
       const seenInPath = new Map(); // name -> sourceLabel[]
+      let pathHasGithubTrigger = false;
       for (const id of up) {
+        const upNode = byId.get(id);
+        if (upNode?.kind === "trigger" && upNode.triggerKind === "github") pathHasGithubTrigger = true;
         for (const f of nodeFields.get(id) ?? []) {
           if (!fieldSources.has(f.name)) fieldSources.set(f.name, []);
           const existing = fieldSources.get(f.name);
@@ -481,7 +560,17 @@ export function analyzeWorkflowFields(workflow) {
           seenInPath.get(f.name).push(f.sourceLabel);
         }
       }
-      pathSets.push(new Set(seenInPath.keys()));
+      const pathSet = new Set(seenInPath.keys());
+      if (pathHasGithubTrigger) {
+        // Legacy GitHub field aliases (`repo`, `branch`, `ci_status`, `item_type`) remain valid in templates.
+        for (const alias of GITHUB_LEGACY_FIELD_ALIASES) {
+          pathSet.add(alias);
+          if (!fieldSources.has(alias)) {
+            fieldSources.set(alias, [{ name: alias, type: "string", sourceNodeId: up[0], sourceLabel: "GitHub trigger", sourceKind: "trigger", triggerKind: "github", legacy: true }]);
+          }
+        }
+      }
+      pathSets.push(pathSet);
       for (const [fname, labels] of seenInPath.entries()) {
         if (labels.length > 1) {
           if (!ambiguous.has(fname)) ambiguous.set(fname, new Set());
@@ -499,6 +588,7 @@ export function analyzeWorkflowFields(workflow) {
       if (onAll) guaranteed.add(name);
       else partial.add(name);
       const first = metas[0];
+      if (first.legacy) continue;
       available.push({
         ...first,
         guaranteed: onAll,
@@ -695,6 +785,12 @@ export function validateWorkflow(workflow, { strictFields = false } = {}) {
     }
     if (node.kind === "output" && node.config?.destination && !OUTPUT_DESTINATIONS.includes(node.config.destination)) {
       errors.push(`Unknown output destination on ${node.id}: ${node.config.destination}.`);
+    }
+    if (node.kind === "output" && node.config?.destination === "github") {
+      const action = node.config?.action || "comment";
+      if (!WORKFLOW_GITHUB_OUTPUT_ACTIONS.includes(action)) {
+        errors.push(`Unknown GitHub output action on ${node.id}: ${action}.`);
+      }
     }
     if (node.kind === "output" && node.config?.card !== undefined && node.config?.card !== null) {
       const dest = node.config.destination || "chat";
