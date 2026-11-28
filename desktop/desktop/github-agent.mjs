@@ -312,16 +312,41 @@ export class GithubAgentManager {
     const ga = this.state;
     if (typeof appSlug === "string" && appSlug.trim()) ga.appSlug = appSlug.trim().toLowerCase();
     if (Array.isArray(installations)) {
-      ga.installations = installations.map((inst) => ({
-        installationId: Number(inst.installationId),
-        accountLogin: String(inst.accountLogin || ""),
-        accountType: String(inst.accountType || "User"),
-        installerLogin: String(inst.installerLogin || ""),
-        repositorySelection: inst.repositorySelection === "all" ? "all" : "selected",
-        repos: Array.isArray(inst.repos) ? inst.repos.map((r) => String(r).toLowerCase()).sort() : [],
-        suspended: Boolean(inst.suspended),
-        updatedAt: Number(inst.updatedAt) || Date.now(),
-      }));
+      ga.installations = installations.map((inst) => {
+        const boundAt = Number(inst.boundAt) || 0;
+        const expiresAt = Number(inst.expiresAt) || 0;
+        const expired = Boolean(inst.expired) || (expiresAt > 0 && expiresAt <= Date.now());
+        const repoPermissions = Array.isArray(inst.repoPermissions)
+          ? inst.repoPermissions
+              .filter((rp) => rp && typeof rp.fullName === "string" && REPO_RE.test(rp.fullName.trim()))
+              .map((rp) => ({
+                fullName: rp.fullName.trim().toLowerCase(),
+                pull: rp.pull !== false,
+                push: rp.push === true || rp.admin === true,
+                admin: rp.admin === true,
+              }))
+              .sort((a, b) => a.fullName.localeCompare(b.fullName))
+          : [];
+        const repos = repoPermissions.length
+          ? repoPermissions.map((rp) => rp.fullName)
+          : Array.isArray(inst.repos)
+            ? inst.repos.map((r) => String(r).toLowerCase()).sort()
+            : [];
+        return {
+          installationId: Number(inst.installationId),
+          accountLogin: String(inst.accountLogin || ""),
+          accountType: String(inst.accountType || "User"),
+          installerLogin: String(inst.installerLogin || ""),
+          repositorySelection: inst.repositorySelection === "all" ? "all" : "selected",
+          repos,
+          repoPermissions,
+          suspended: Boolean(inst.suspended),
+          updatedAt: Number(inst.updatedAt) || Date.now(),
+          boundAt,
+          expiresAt,
+          expired,
+        };
+      });
     }
     this.ws.save();
     this.onReposChanged?.();
@@ -329,29 +354,44 @@ export class GithubAgentManager {
   }
 
   /** Returns a safe snapshot for Settings › GitHub (desktop, phone, CLI). Contains zero tokens. */
-  status() {
+  status(now = Date.now()) {
     const ga = this.state;
     const repoMap = new Map();
-    for (const inst of ga.installations) {
-      if (inst.suspended) continue;
+    const installations = ga.installations.map((i) => {
+      const expiresAt = Number(i.expiresAt) || 0;
+      const expired = Boolean(i.expired) || (expiresAt > 0 && expiresAt <= now);
+      return {
+        ...i,
+        expiresAt,
+        expired,
+        manageUrl: `https://github.com/settings/installations/${i.installationId}`,
+      };
+    });
+    for (const inst of installations) {
+      if (inst.suspended || inst.expired) continue;
+      const permByRepo = new Map(
+        (Array.isArray(inst.repoPermissions) ? inst.repoPermissions : []).map((rp) => [rp.fullName.toLowerCase(), rp]),
+      );
       for (const repo of inst.repos || []) {
         const lower = repo.toLowerCase();
         if (!repoMap.has(lower)) {
           const saved = normalizeRepoConfig(ga.repos?.[lower]);
+          const perm = permByRepo.get(lower);
           repoMap.set(lower, {
             fullName: lower,
             installationId: inst.installationId,
             accountLogin: inst.accountLogin,
+            canWrite: perm ? Boolean(perm.push || perm.admin) : undefined,
             ...saved,
           });
         }
       }
     }
-    // Include any configured repos not currently listed (e.g., repository_selection === "all" or before refresh).
+    // Include any configured repos not currently listed (e.g., before refresh or after expiry).
     for (const [repo, rawCfg] of Object.entries(ga.repos || {})) {
       const lower = repo.toLowerCase();
       if (!repoMap.has(lower) && REPO_RE.test(lower)) {
-        const inst = this.findInstallationForRepo(lower);
+        const inst = this.findInstallationForRepo(lower, null, now);
         repoMap.set(lower, {
           fullName: lower,
           installationId: inst?.installationId ?? null,
@@ -362,13 +402,15 @@ export class GithubAgentManager {
     }
     const repos = [...repoMap.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
     const eventsOn = repos.some((r) => r.answerMentions) || (this.ws.workflows?.subscribedGithubRepos?.().length ?? 0) > 0;
+    const hasExpiredBindings = installations.some((i) => !i.suspended && i.expired);
     const slug = this.appSlug;
     return {
       appSlug: slug,
       mentionHandle: `@${slug}`,
       relayConnected: Boolean(this.isRelayConnected()),
       eventsOn,
-      installations: ga.installations.map((i) => ({ ...i, manageUrl: `https://github.com/settings/installations/${i.installationId}` })),
+      hasExpiredBindings,
+      installations,
       repos,
       lastDelivery: ga.lastDelivery ? { ...ga.lastDelivery } : null,
       manageAppUrl: `https://github.com/apps/${slug}`,
@@ -426,16 +468,14 @@ export class GithubAgentManager {
     return this.status();
   }
 
-  findInstallationForRepo(repoLower, installationId = null) {
+  findInstallationForRepo(repoLower, installationId = null, now = Date.now()) {
     const ga = this.state;
+    const active = (i) => !i.suspended && !i.expired && !(Number(i.expiresAt) > 0 && Number(i.expiresAt) <= now);
     if (installationId) {
-      const byId = ga.installations.find((i) => i.installationId === installationId && !i.suspended);
+      const byId = ga.installations.find((i) => i.installationId === installationId && active(i) && i.repos.includes(repoLower));
       if (byId) return byId;
     }
-    const owner = repoLower.split("/")[0] || "";
-    const exact = ga.installations.find((i) => !i.suspended && i.repos.includes(repoLower));
-    if (exact) return exact;
-    return ga.installations.find((i) => !i.suspended && i.repositorySelection === "all" && (!i.accountLogin || i.accountLogin.toLowerCase() === owner)) ?? null;
+    return ga.installations.find((i) => active(i) && i.repos.includes(repoLower)) ?? null;
   }
 
   /** Records last delivery metadata for Settings › GitHub status display. */

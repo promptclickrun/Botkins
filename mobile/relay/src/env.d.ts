@@ -38,6 +38,8 @@ interface Env {
   GITHUB_API_BASE?: string;
   /** Tests only: replaces `https://github.com` for OAuth code exchange. Unset in wrangler.jsonc. */
   GITHUB_WEB_BASE?: string;
+  /** Tests only: overrides the default 7-day per-room GitHub binding TTL (in ms). Unset in wrangler.jsonc. */
+  GITHUB_BINDING_TTL_MS?: string;
 }
 
 // The shared-space page's scripts are plain files, bundled as text (wrangler's own rule for *.txt).

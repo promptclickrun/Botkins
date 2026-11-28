@@ -16,6 +16,8 @@ export const GITHUB_ROUTE_TTL_SECONDS = 300;
 export const GITHUB_ROUTE_TTL_MS = GITHUB_ROUTE_TTL_SECONDS * 1000;
 export const GITHUB_SETUP_STATE_TTL_SECONDS = 600; // 10 minutes
 export const GITHUB_SETUP_STATE_TTL_MS = GITHUB_SETUP_STATE_TTL_SECONDS * 1000;
+/** Per-room GitHub installation bindings expire after 7 days unless re-authorized via OAuth setup. */
+export const GITHUB_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const GITHUB_DELIVERY_DEDUPE_TTL_MS = 10 * 60_000;
 export const GITHUB_DELIVERY_DEDUPE_MAX = 4096;
 export const GITHUB_CLAIM_TTL_MS = 10 * 60_000;
@@ -40,6 +42,8 @@ export const GITHUB_RAW_WEBHOOK_EVENTS = [
   "push",
   "installation",
   "installation_repositories",
+  "organization",
+  "membership",
 ] as const;
 
 export const GITHUB_RAW_WEBHOOK_EVENT_SET: ReadonlySet<string> = new Set(GITHUB_RAW_WEBHOOK_EVENTS);
@@ -106,6 +110,13 @@ export interface GitHubSetupStatePayload {
   sig: string;
 }
 
+export interface GitHubRepoPermissionEntry {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+}
+
 export interface GitHubInstallationBinding {
   installationId: number;
   accountLogin: string;
@@ -113,8 +124,13 @@ export interface GitHubInstallationBinding {
   installerLogin: string;
   repositorySelection: "all" | "selected";
   repos: string[];
+  /** Per-repo permissions observed for the binding user via `GET /user/installations/{id}/repositories`. */
+  repoPermissions: GitHubRepoPermissionEntry[];
   suspended: boolean;
   updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
 }
 
 export interface GitHubSubscribeMessage {
@@ -166,8 +182,12 @@ export interface GitHubInstallationSyncFrame {
     installerLogin: string;
     repositorySelection: "all" | "selected";
     repos: string[];
+    repoPermissions?: GitHubRepoPermissionEntry[];
     suspended: boolean;
     updatedAt: number;
+    boundAt?: number;
+    expiresAt?: number;
+    expired?: boolean;
   }>;
 }
 
@@ -271,6 +291,62 @@ export function normalizeSubscribedRepos(rawRepos: unknown): string[] | null {
   }
   out.sort();
   return out;
+}
+
+/** Reads the per-room GitHub binding TTL (defaults to 7 days; tests may override with `GITHUB_BINDING_TTL_MS`). */
+export function bindingTtlMsOf(env?: { GITHUB_BINDING_TTL_MS?: string } | null): number {
+  const raw = env?.GITHUB_BINDING_TTL_MS;
+  if (typeof raw === "string" && /^\d{1,12}$/.test(raw.trim())) {
+    const parsed = Number(raw.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return GITHUB_BINDING_TTL_MS;
+}
+
+/**
+ * Clamps requested installation token permissions against the binding user's verified push permission
+ * on that repository: when `canWrite` is false, every `write` permission is downgraded to `read`.
+ */
+export function clampPermissionsForRepoAccess(
+  permissions: Record<string, GitHubTokenPermissionLevel>,
+  canWrite: boolean,
+): Record<string, GitHubTokenPermissionLevel> {
+  if (canWrite) return { ...permissions };
+  const clamped: Record<string, GitHubTokenPermissionLevel> = {};
+  for (const [k, v] of Object.entries(permissions)) {
+    clamped[k] = v === "write" ? "read" : v;
+  }
+  return clamped;
+}
+
+/** Normalizes a list of `{ fullName | full_name, pull, push, admin }` repository permission records. */
+export function normalizeRepoPermissions(rawRepos: unknown): GitHubRepoPermissionEntry[] {
+  if (!Array.isArray(rawRepos)) return [];
+  const byRepo = new Map<string, GitHubRepoPermissionEntry>();
+  for (const item of rawRepos) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const rawName = typeof rec.fullName === "string" ? rec.fullName : typeof rec.full_name === "string" ? rec.full_name : "";
+    const lower = rawName.trim().toLowerCase();
+    if (!GITHUB_REPO_RE.test(lower)) continue;
+    const perms = rec.permissions && typeof rec.permissions === "object" && !Array.isArray(rec.permissions)
+      ? (rec.permissions as Record<string, unknown>)
+      : rec;
+    const admin = perms.admin === true;
+    const push = perms.push === true || perms.maintain === true || admin;
+    // GitHub's `/user/installations/{id}/repositories` only returns repos the user can read; if `permissions`
+    // is absent on a fixture/older payload, treat `pull` as true and `push`/`admin` as false (fail closed on write).
+    const pull = perms.pull === undefined ? true : perms.pull === true || push || admin;
+    if (!pull) continue;
+    const prev = byRepo.get(lower);
+    byRepo.set(lower, {
+      fullName: lower,
+      pull: true,
+      push: Boolean(prev?.push || push),
+      admin: Boolean(prev?.admin || admin),
+    });
+  }
+  return [...byRepo.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
 /** Normalizes a repo list from GitHub installation payloads (ignores invalid entries, no 100 cap). */
@@ -671,7 +747,7 @@ export async function verifyGitHubInstallationOAuth(
     }
   } catch {}
 
-  const repos: string[] = [];
+  const rawRepoEntries: unknown[] = [];
   try {
     for (let page = 1; page <= 5; page++) {
       const repoRes = await fetcher(
@@ -687,7 +763,7 @@ export async function verifyGitHubInstallationOAuth(
       const list = Array.isArray(data?.repositories) ? data.repositories : [];
       for (const r of list) {
         if (r && typeof r === "object" && typeof (r as Record<string, unknown>).full_name === "string") {
-          repos.push((r as Record<string, unknown>).full_name as string);
+          rawRepoEntries.push(r);
         }
       }
       if (list.length < 100) break;
@@ -704,6 +780,8 @@ export async function verifyGitHubInstallationOAuth(
   const accountType = typeof account.type === "string" ? account.type.trim() : "User";
   const repositorySelection = matchedInst.repository_selection === "all" ? "all" : "selected";
   const suspended = Boolean(matchedInst.suspended_at);
+  const repoPermissions = normalizeRepoPermissions(rawRepoEntries);
+  const normalizedRepos = repoPermissions.map((r) => r.fullName);
 
   return {
     ok: true,
@@ -713,7 +791,8 @@ export async function verifyGitHubInstallationOAuth(
       accountType,
       installerLogin: installerLogin || accountLogin,
       repositorySelection,
-      repos: normalizeInstallationRepos(repos),
+      repos: normalizedRepos,
+      repoPermissions,
       suspended,
       updatedAt: Date.now(),
     },
@@ -1131,6 +1210,17 @@ export interface CheckedGitHubInstallationEvent {
   receivedAt: string;
 }
 
+export interface CheckedGitHubMembershipEvent {
+  kind: "membership";
+  deliveryId: string;
+  event: "organization" | "membership";
+  action: string;
+  installationId: number | null;
+  accountLogin: string;
+  memberLogin: string;
+  receivedAt: string;
+}
+
 export interface CheckedGitHubWebhook {
   kind: "delivery";
   deliveryId: string;
@@ -1164,7 +1254,7 @@ export async function checkGitHubWebhookRequest(
   secret: string | undefined,
   limiters: GitHubIngressLimiters,
   nowMs = Date.now(),
-): Promise<CheckedGitHubWebhook | CheckedGitHubInstallationEvent | Response> {
+): Promise<CheckedGitHubWebhook | CheckedGitHubInstallationEvent | CheckedGitHubMembershipEvent | Response> {
   const fail = (error: string, status: number) =>
     Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 
@@ -1237,6 +1327,31 @@ export async function checkGitHubWebhookRequest(
       repositories: normalizeInstallationRepos(obj.repositories),
       repositoriesAdded: normalizeInstallationRepos(obj.repositories_added),
       repositoriesRemoved: normalizeInstallationRepos(obj.repositories_removed),
+      receivedAt,
+    };
+  }
+
+  if (event === "organization" || event === "membership") {
+    const action = typeof obj.action === "string" ? clampString(obj.action, 64).toLowerCase() : "";
+    const orgObj = obj.organization && typeof obj.organization === "object" ? (obj.organization as Record<string, unknown>) : null;
+    const instAccount = instObj?.account && typeof instObj.account === "object" ? (instObj.account as Record<string, unknown>) : null;
+    const accountLogin =
+      (typeof orgObj?.login === "string" ? clampString(orgObj.login, 100) : "") ||
+      (typeof instAccount?.login === "string" ? clampString(instAccount.login, 100) : "");
+    const membershipObj = obj.membership && typeof obj.membership === "object" ? (obj.membership as Record<string, unknown>) : null;
+    const membershipUser = membershipObj?.user && typeof membershipObj.user === "object" ? (membershipObj.user as Record<string, unknown>) : null;
+    const memberObj = obj.member && typeof obj.member === "object" ? (obj.member as Record<string, unknown>) : null;
+    const memberLogin =
+      (typeof membershipUser?.login === "string" ? clampString(membershipUser.login, 100) : "") ||
+      (typeof memberObj?.login === "string" ? clampString(memberObj.login, 100) : "");
+    return {
+      kind: "membership",
+      deliveryId,
+      event,
+      action,
+      installationId,
+      accountLogin,
+      memberLogin,
       receivedAt,
     };
   }

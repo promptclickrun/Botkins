@@ -11,6 +11,7 @@ import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex
 import { handleFeedback } from "./feedback.ts";
 import {
   GITHUB_AGENT_SLUG_DEFAULT,
+  GITHUB_BINDING_TTL_MS,
   GITHUB_CLAIM_MAX,
   GITHUB_CLAIM_TTL_MS,
   GITHUB_DELIVERY_DEDUPE_MAX,
@@ -22,10 +23,13 @@ import {
   agentAppOf,
   allowsLegacyUserTokenAuth,
   authorizeSubscribedRepos,
+  bindingTtlMsOf,
   checkGitHubWebhookRequest,
+  clampPermissionsForRepoAccess,
   fetchInstallationRepos,
   githubSetupResultPage,
   mintSingleRepoInstallationToken,
+  normalizeRepoPermissions,
   verifyGitHubClaimRequest,
   verifyGitHubInstallationsListRequest,
   verifyGitHubInstallationOAuth,
@@ -306,11 +310,12 @@ async function handleGitHubSetup(request: Request, env: Env, limited: boolean, n
     });
   }
 
+  const bindingTtlMs = bindingTtlMsOf(env);
   const bindRes = await router.fetch(
     new Request("https://github-router.internal/bind", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ room: verifiedState.room, installation: oauth.installation }),
+      body: JSON.stringify({ room: verifiedState.room, installation: oauth.installation, ttlMs: bindingTtlMs }),
     }),
   );
   if (!bindRes.ok) {
@@ -427,6 +432,58 @@ async function handleGitHubWebhook(request: Request, env: Env, limited: boolean,
       } catch {}
     }
     log("github_installation_event", { event: checked.event, action: checked.action, rooms: (result.affectedRooms ?? []).length });
+    return Response.json({ ok: true }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
+
+  if (checked.kind === "membership") {
+    const updateRes = await router.fetch(
+      new Request("https://github-router.internal/membership-event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deliveryId: checked.deliveryId,
+          event: checked.event,
+          action: checked.action,
+          installationId: checked.installationId,
+          accountLogin: checked.accountLogin,
+          memberLogin: checked.memberLogin,
+        }),
+      }),
+    );
+    if (!updateRes.ok) return Response.json({ error: "router_error" }, { status: 503, headers: { "cache-control": "no-store" } });
+    const result = (await updateRes.json()) as { duplicate?: boolean; affectedRooms?: string[] };
+    if (result.duplicate) {
+      return Response.json({ ok: true, duplicate: true }, { status: 202, headers: { "cache-control": "no-store" } });
+    }
+    const app = agentAppOf(env);
+    const appSlug = app?.appSlug || env.GITHUB_AGENT_APP_SLUG || GITHUB_AGENT_SLUG_DEFAULT;
+    for (const room of result.affectedRooms ?? []) {
+      try {
+        const listRes = await router.fetch(
+          new Request("https://github-router.internal/room-installations", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ room }),
+          }),
+        );
+        if (listRes.ok) {
+          const data = (await listRes.json()) as { installations?: unknown[] };
+          await env.ROOM.getByName(room).fetch(
+            new Request("https://room.internal/github-deliver", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                type: "github-installations",
+                version: 1,
+                appSlug,
+                installations: data.installations ?? [],
+              }),
+            }),
+          );
+        }
+      } catch {}
+    }
+    log("github_membership_event", { event: checked.event, action: checked.action, rooms: (result.affectedRooms ?? []).length });
     return Response.json({ ok: true }, { status: 202, headers: { "cache-control": "no-store" } });
   }
 
@@ -723,17 +780,34 @@ export class GitHubRouter extends DurableObject<Env> {
     );
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS installation_repos (installation_id INTEGER NOT NULL, repo TEXT NOT NULL, PRIMARY KEY (installation_id, repo))");
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS inst_repos_repo_idx ON installation_repos (repo)");
-    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS room_installations (room TEXT NOT NULL, installation_id INTEGER NOT NULL, bound_at INTEGER NOT NULL, PRIMARY KEY (room, installation_id))");
+    ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS room_installations (room TEXT NOT NULL, installation_id INTEGER NOT NULL, installer_login TEXT NOT NULL DEFAULT '', bound_at INTEGER NOT NULL, expires_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (room, installation_id))",
+    );
+    // Schema migration for pre-existing DO SQLite tables without installer_login / expires_at columns.
+    const riCols = new Set(
+      ctx.storage.sql.exec("PRAGMA table_info(room_installations)").toArray().map((r) => String(r.name)),
+    );
+    if (!riCols.has("installer_login")) {
+      ctx.storage.sql.exec("ALTER TABLE room_installations ADD COLUMN installer_login TEXT NOT NULL DEFAULT ''");
+    }
+    if (!riCols.has("expires_at")) {
+      ctx.storage.sql.exec("ALTER TABLE room_installations ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0");
+    }
     ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS room_inst_id_idx ON room_installations (installation_id)");
+    // Per-room verified repo access & permissions (captured from GET /user/installations/{id}/repositories for that room's binder).
+    ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS room_installation_repos (room TEXT NOT NULL, installation_id INTEGER NOT NULL, repo TEXT NOT NULL, can_pull INTEGER NOT NULL DEFAULT 1, can_push INTEGER NOT NULL DEFAULT 0, can_admin INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (room, installation_id, repo))",
+    );
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS room_inst_repos_lookup_idx ON room_installation_repos (room, repo)");
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS setup_nonces (nonce TEXT PRIMARY KEY, until INTEGER NOT NULL)");
     ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS delivery_claims (delivery_id TEXT PRIMARY KEY, room TEXT NOT NULL, until INTEGER NOT NULL)");
   }
 
-  private roomInstallations(room: string) {
+  private roomInstallations(room: string, now = Date.now()) {
     const sql = this.ctx.storage.sql;
     const rows = sql
       .exec(
-        "SELECT i.installation_id, i.account_login, i.account_type, i.installer_login, i.repo_selection, i.suspended, i.updated_at " +
+        "SELECT i.installation_id, i.account_login, i.account_type, ri.installer_login AS room_installer_login, i.installer_login AS inst_installer_login, i.repo_selection, i.suspended, i.updated_at, ri.bound_at, ri.expires_at " +
           "FROM room_installations ri JOIN installations i ON i.installation_id = ri.installation_id " +
           "WHERE ri.room = ? AND i.suspended = 0 ORDER BY i.installation_id ASC",
         room,
@@ -741,43 +815,77 @@ export class GitHubRouter extends DurableObject<Env> {
       .toArray();
     return rows.map((r) => {
       const id = Number(r.installation_id);
-      const repoRows = sql.exec("SELECT repo FROM installation_repos WHERE installation_id = ? ORDER BY repo ASC", id).toArray();
+      const boundAt = Number(r.bound_at) || 0;
+      const expiresAt = Number(r.expires_at) || (boundAt ? boundAt + GITHUB_BINDING_TTL_MS : 0);
+      const expired = expiresAt <= now;
+      const repoRows = expired
+        ? []
+        : sql
+            .exec(
+              "SELECT repo, can_pull, can_push, can_admin FROM room_installation_repos WHERE room = ? AND installation_id = ? AND can_pull != 0 ORDER BY repo ASC",
+              room,
+              id,
+            )
+            .toArray();
+      const repoPermissions = repoRows.map((rr) => ({
+        fullName: String(rr.repo),
+        pull: Number(rr.can_pull) !== 0,
+        push: Number(rr.can_push) !== 0,
+        admin: Number(rr.can_admin) !== 0,
+      }));
+      const installerLogin = String(r.room_installer_login || r.inst_installer_login || "");
       return {
         installationId: id,
         accountLogin: String(r.account_login || ""),
         accountType: String(r.account_type || "User"),
-        installerLogin: String(r.installer_login || ""),
+        installerLogin,
         repositorySelection: String(r.repo_selection) === "all" ? "all" : "selected",
-        repos: repoRows.map((rr) => String(rr.repo)),
+        repos: repoPermissions.map((rp) => rp.fullName),
+        repoPermissions,
         suspended: Number(r.suspended) !== 0,
         updatedAt: Number(r.updated_at) || 0,
+        boundAt,
+        expiresAt,
+        expired,
       };
     });
   }
 
-  private roomBoundInstallationForRepo(room: string, repoLower: string): number | null {
+  /**
+   * Resolves the active, non-expired room binding for `(room, repoLower)` strictly from `room_installation_repos`
+   * (never from `installation_repos` or `repo_selection = 'all'`). Returns `{ installationId, canWrite }` or `null`.
+   */
+  private roomBoundAccessForRepo(room: string, repoLower: string, now = Date.now()): { installationId: number; canWrite: boolean } | null {
     const sql = this.ctx.storage.sql;
     const rows = sql
       .exec(
-        "SELECT i.installation_id, i.repo_selection, i.account_login " +
+        "SELECT ri.installation_id, rir.can_push, rir.can_admin " +
           "FROM room_installations ri " +
           "JOIN installations i ON i.installation_id = ri.installation_id " +
-          "LEFT JOIN installation_repos ir ON ir.installation_id = i.installation_id AND ir.repo = ? " +
-          "WHERE ri.room = ? AND i.suspended = 0 AND (ir.repo IS NOT NULL OR i.repo_selection = 'all') " +
-          "ORDER BY (CASE WHEN ir.repo IS NOT NULL THEN 0 ELSE 1 END), i.installation_id ASC",
+          "JOIN room_installation_repos rir ON rir.room = ri.room AND rir.installation_id = ri.installation_id AND rir.repo = ? " +
+          "WHERE ri.room = ? AND i.suspended = 0 AND ri.expires_at > ? AND rir.can_pull != 0 " +
+          "ORDER BY (CASE WHEN rir.can_push != 0 OR rir.can_admin != 0 THEN 0 ELSE 1 END), ri.installation_id ASC",
         repoLower,
         room,
+        now,
       )
       .toArray();
     if (!rows.length) return null;
-    const owner = repoLower.split("/")[0] || "";
-    for (const r of rows) {
-      if (String(r.repo_selection) !== "all") return Number(r.installation_id);
-      // For `repository_selection === "all"`, also match account owner (case-insensitive) when known.
-      const acc = String(r.account_login || "").toLowerCase();
-      if (!acc || acc === owner) return Number(r.installation_id);
+    const first = rows[0]!;
+    return {
+      installationId: Number(first.installation_id),
+      canWrite: Number(first.can_push) !== 0 || Number(first.can_admin) !== 0,
+    };
+  }
+
+  private pruneRoomSubscriptions(room: string, now = Date.now()): void {
+    const sql = this.ctx.storage.sql;
+    const subRows = sql.exec("SELECT repo FROM subs WHERE room = ?", room).toArray();
+    for (const sr of subRows) {
+      if (this.roomBoundAccessForRepo(room, String(sr.repo), now) === null) {
+        sql.exec("DELETE FROM subs WHERE room = ? AND repo = ?", room, String(sr.repo));
+      }
     }
-    return null;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -808,6 +916,7 @@ export class GitHubRouter extends DurableObject<Env> {
     if (url.pathname === "/bind" && request.method === "POST") {
       const body = (await request.json()) as {
         room?: string;
+        ttlMs?: number;
         installation?: {
           installationId: number;
           accountLogin?: string;
@@ -815,6 +924,7 @@ export class GitHubRouter extends DurableObject<Env> {
           installerLogin?: string;
           repositorySelection?: string;
           repos?: string[];
+          repoPermissions?: Array<{ fullName?: string; full_name?: string; pull?: boolean; push?: boolean; admin?: boolean }>;
           suspended?: boolean;
           updatedAt?: number;
         };
@@ -829,11 +939,17 @@ export class GitHubRouter extends DurableObject<Env> {
       const repoSelection = inst?.repositorySelection === "all" ? "all" : "selected";
       const suspended = inst?.suspended ? 1 : 0;
       const updatedAt = Number(inst?.updatedAt) || now;
+      const ttlMs = typeof body.ttlMs === "number" && Number.isSafeInteger(body.ttlMs) && body.ttlMs > 0
+        ? body.ttlMs
+        : GITHUB_BINDING_TTL_MS;
+      const expiresAt = now + ttlMs;
+
+      // Upsert installation-level metadata without ever wiping installation_repos from one user's narrower view.
       sql.exec(
         "INSERT INTO installations (installation_id, account_login, account_type, installer_login, repo_selection, suspended, updated_at) " +
           "VALUES (?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT (installation_id) DO UPDATE SET account_login = excluded.account_login, account_type = excluded.account_type, " +
-          "installer_login = excluded.installer_login, repo_selection = excluded.repo_selection, suspended = excluded.suspended, updated_at = excluded.updated_at",
+          "repo_selection = excluded.repo_selection, suspended = excluded.suspended, updated_at = excluded.updated_at",
         installationId,
         accountLogin,
         accountType,
@@ -842,14 +958,42 @@ export class GitHubRouter extends DurableObject<Env> {
         suspended,
         updatedAt,
       );
-      sql.exec("DELETE FROM installation_repos WHERE installation_id = ?", installationId);
-      for (const r of Array.isArray(inst?.repos) ? inst!.repos : []) {
-        if (typeof r === "string" && r) {
-          sql.exec("INSERT OR IGNORE INTO installation_repos (installation_id, repo) VALUES (?, ?)", installationId, r.toLowerCase());
-        }
+
+      // Compute this binding user's verified per-repo permissions (fail closed on write if permissions are missing).
+      const normalizedPerms = Array.isArray(inst?.repoPermissions)
+        ? normalizeRepoPermissions(inst!.repoPermissions)
+        : normalizeRepoPermissions(
+            (Array.isArray(inst?.repos) ? inst!.repos : []).map((r) => ({ fullName: r, pull: true, push: false, admin: false })),
+          );
+
+      // Store per-room binding metadata (installer login + expiry) and replace ONLY this room's repo set.
+      sql.exec(
+        "INSERT OR REPLACE INTO room_installations (room, installation_id, installer_login, bound_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        room,
+        installationId,
+        installerLogin,
+        now,
+        expiresAt,
+      );
+      sql.exec("DELETE FROM room_installation_repos WHERE room = ? AND installation_id = ?", room, installationId);
+      for (const entry of normalizedPerms) {
+        sql.exec(
+          "INSERT OR REPLACE INTO room_installation_repos (room, installation_id, repo, can_pull, can_push, can_admin) VALUES (?, ?, ?, ?, ?, ?)",
+          room,
+          installationId,
+          entry.fullName,
+          entry.pull ? 1 : 0,
+          entry.push ? 1 : 0,
+          entry.admin ? 1 : 0,
+        );
+        // Additively record in installation_repos for installation_repositories bookkeeping only (never delete others).
+        sql.exec("INSERT OR IGNORE INTO installation_repos (installation_id, repo) VALUES (?, ?)", installationId, entry.fullName);
       }
-      sql.exec("INSERT OR REPLACE INTO room_installations (room, installation_id, bound_at) VALUES (?, ?, ?)", room, installationId, now);
-      return Response.json({ ok: true });
+
+      // Drop any existing subscriptions for this room that are no longer in this room's verified repo set.
+      this.pruneRoomSubscriptions(room, now);
+      await this.armAlarm();
+      return Response.json({ ok: true, expiresAt });
     }
 
     if (url.pathname === "/unbind" && request.method === "POST") {
@@ -857,20 +1001,22 @@ export class GitHubRouter extends DurableObject<Env> {
       const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
       const installationId = Number(body.installationId);
       if (!room || !Number.isSafeInteger(installationId) || installationId <= 0) return plain("Bad request", 400);
+      sql.exec("DELETE FROM room_installation_repos WHERE room = ? AND installation_id = ?", room, installationId);
       sql.exec("DELETE FROM room_installations WHERE room = ? AND installation_id = ?", room, installationId);
+      this.pruneRoomSubscriptions(room, now);
       const remaining = sql.exec("SELECT COUNT(*) AS n FROM room_installations WHERE installation_id = ?", installationId).one();
       if (Number(remaining.n) === 0) {
         sql.exec("DELETE FROM installation_repos WHERE installation_id = ?", installationId);
         sql.exec("DELETE FROM installations WHERE installation_id = ?", installationId);
       }
-      return Response.json({ ok: true, installations: this.roomInstallations(room) });
+      return Response.json({ ok: true, installations: this.roomInstallations(room, now) });
     }
 
     if (url.pathname === "/room-installations" && request.method === "POST") {
       const body = (await request.json()) as { room?: string };
       const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
       if (!room) return plain("Bad request", 400);
-      return Response.json({ installations: this.roomInstallations(room) });
+      return Response.json({ installations: this.roomInstallations(room, now) });
     }
 
     if (url.pathname === "/resolve-installation" && request.method === "POST") {
@@ -878,8 +1024,11 @@ export class GitHubRouter extends DurableObject<Env> {
       const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
       const repo = typeof body.repo === "string" ? body.repo.trim().toLowerCase() : "";
       if (!room || !repo) return plain("Bad request", 400);
-      const installationId = this.roomBoundInstallationForRepo(room, repo);
-      return Response.json({ installationId });
+      const access = this.roomBoundAccessForRepo(room, repo, now);
+      return Response.json({
+        installationId: access?.installationId ?? null,
+        canWrite: access?.canWrite ?? false,
+      });
     }
 
     if (url.pathname === "/installation-event" && request.method === "POST") {
@@ -913,17 +1062,12 @@ export class GitHubRouter extends DurableObject<Env> {
 
       if (event === "installation") {
         if (action === "deleted" || action === "suspend") {
+          sql.exec("DELETE FROM room_installation_repos WHERE installation_id = ?", installationId);
           sql.exec("DELETE FROM room_installations WHERE installation_id = ?", installationId);
           sql.exec("DELETE FROM installation_repos WHERE installation_id = ?", installationId);
           sql.exec("DELETE FROM installations WHERE installation_id = ?", installationId);
-          // Drop any repo subscriptions from affected rooms for repos they no longer have bound.
           for (const room of affectedRooms) {
-            const subRows = sql.exec("SELECT repo FROM subs WHERE room = ?", room).toArray();
-            for (const sr of subRows) {
-              if (this.roomBoundInstallationForRepo(room, String(sr.repo)) === null) {
-                sql.exec("DELETE FROM subs WHERE room = ? AND repo = ?", room, String(sr.repo));
-              }
-            }
+            this.pruneRoomSubscriptions(room, now);
           }
         } else if (action === "unsuspend" || action === "created" || action === "new_permissions_accepted") {
           const existing = sql.exec("SELECT installation_id FROM installations WHERE installation_id = ?", installationId).toArray();
@@ -937,6 +1081,7 @@ export class GitHubRouter extends DurableObject<Env> {
               now,
               installationId,
             );
+            // Bookkeeping only on installation_repos — never expand any room's verified repo set without fresh OAuth.
             if (Array.isArray(body.repositories) && body.repositories.length > 0) {
               sql.exec("DELETE FROM installation_repos WHERE installation_id = ?", installationId);
               for (const r of body.repositories) {
@@ -950,14 +1095,18 @@ export class GitHubRouter extends DurableObject<Env> {
         if (existing.length > 0) {
           const sel = body.repositorySelection === "all" ? "all" : "selected";
           sql.exec("UPDATE installations SET repo_selection = ?, updated_at = ? WHERE installation_id = ?", sel, now, installationId);
+          // Bookkeeping only: NEVER add newly added installation repos to existing rooms automatically.
+          // Each room's user must re-verify through OAuth setup to prove access to the added repo.
           for (const r of Array.isArray(body.repositoriesAdded) ? body.repositoriesAdded : []) {
             sql.exec("INSERT OR IGNORE INTO installation_repos (installation_id, repo) VALUES (?, ?)", installationId, String(r).toLowerCase());
           }
+          // Removal revokes access immediately across installation_repos and every bound room's repo set.
           for (const r of Array.isArray(body.repositoriesRemoved) ? body.repositoriesRemoved : []) {
             const lower = String(r).toLowerCase();
             sql.exec("DELETE FROM installation_repos WHERE installation_id = ? AND repo = ?", installationId, lower);
+            sql.exec("DELETE FROM room_installation_repos WHERE installation_id = ? AND repo = ?", installationId, lower);
             for (const room of affectedRooms) {
-              if (this.roomBoundInstallationForRepo(room, lower) === null) {
+              if (this.roomBoundAccessForRepo(room, lower, now) === null) {
                 sql.exec("DELETE FROM subs WHERE room = ? AND repo = ?", room, lower);
               }
             }
@@ -967,6 +1116,75 @@ export class GitHubRouter extends DurableObject<Env> {
 
       await this.armAlarm();
       return Response.json({ duplicate: false, affectedRooms });
+    }
+
+    if (url.pathname === "/membership-event" && request.method === "POST") {
+      const body = (await request.json()) as {
+        deliveryId?: string;
+        event?: string;
+        action?: string;
+        installationId?: number | null;
+        accountLogin?: string;
+        memberLogin?: string;
+      };
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const event = typeof body.event === "string" ? body.event : "";
+      const action = typeof body.action === "string" ? body.action : "";
+      const installationId =
+        typeof body.installationId === "number" && Number.isSafeInteger(body.installationId) && body.installationId > 0
+          ? body.installationId
+          : null;
+      const accountLogin = String(body.accountLogin || "").trim().toLowerCase();
+      const memberLogin = String(body.memberLogin || "").trim().toLowerCase();
+      if (!deliveryId) return plain("Bad request", 400);
+
+      sql.exec("DELETE FROM deliveries WHERE until <= ?", now);
+      const seen = sql.exec("SELECT 1 AS hit FROM deliveries WHERE delivery_id = ?", deliveryId).toArray();
+      if (seen.length > 0) return Response.json({ duplicate: true, affectedRooms: [] });
+      sql.exec("INSERT OR REPLACE INTO deliveries (delivery_id, until) VALUES (?, ?)", deliveryId, now + GITHUB_DELIVERY_DEDUPE_TTL_MS);
+
+      const isRemoval =
+        (event === "organization" && action === "member_removed") ||
+        (event === "membership" && action === "removed");
+      if (!isRemoval || !memberLogin) {
+        await this.armAlarm();
+        return Response.json({ duplicate: false, affectedRooms: [] });
+      }
+
+      // Expire matching room bindings for the removed member (forcing re-auth if they still have other access).
+      const matchingRows = installationId !== null
+        ? sql
+            .exec(
+              "SELECT ri.room, ri.installation_id FROM room_installations ri " +
+                "WHERE ri.installation_id = ? AND LOWER(ri.installer_login) = ?",
+              installationId,
+              memberLogin,
+            )
+            .toArray()
+        : accountLogin
+          ? sql
+              .exec(
+                "SELECT ri.room, ri.installation_id FROM room_installations ri " +
+                  "JOIN installations i ON i.installation_id = ri.installation_id " +
+                  "WHERE LOWER(i.account_login) = ? AND LOWER(ri.installer_login) = ?",
+                accountLogin,
+                memberLogin,
+              )
+              .toArray()
+          : [];
+
+      const affectedSet = new Set<string>();
+      for (const row of matchingRows) {
+        const room = String(row.room);
+        const instId = Number(row.installation_id);
+        affectedSet.add(room);
+        sql.exec("DELETE FROM room_installation_repos WHERE room = ? AND installation_id = ?", room, instId);
+        sql.exec("UPDATE room_installations SET expires_at = ? WHERE room = ? AND installation_id = ?", now - 1, room, instId);
+        this.pruneRoomSubscriptions(room, now);
+      }
+
+      await this.armAlarm();
+      return Response.json({ duplicate: false, affectedRooms: [...affectedSet] });
     }
 
     if (url.pathname === "/claim" && request.method === "POST") {
@@ -1000,7 +1218,7 @@ export class GitHubRouter extends DurableObject<Env> {
       const denied: string[] = [];
       for (const repo of repos) {
         const lower = repo.toLowerCase();
-        if (this.roomBoundInstallationForRepo(room, lower) !== null) allowed.push(lower);
+        if (this.roomBoundAccessForRepo(room, lower, now) !== null) allowed.push(lower);
         else denied.push(lower);
       }
       allowed.sort();
@@ -1069,14 +1287,17 @@ export class GitHubRouter extends DurableObject<Env> {
       sql.exec("DELETE FROM subs WHERE until <= ?", now);
       let rows: Array<Record<string, unknown>> = [];
       if (installationId !== null) {
-        // Strict installation-bound routing: ONLY rooms bound to payload.installation.id AND subscribed to repo.
+        // Strict per-room installation routing: ONLY rooms whose active, non-expired binding for
+        // `payload.installation.id` explicitly includes `repo` (from their own OAuth verification) AND subscribed.
         rows = sql
           .exec(
             "SELECT DISTINCT s.room FROM subs s " +
-              "JOIN room_installations ri ON ri.room = s.room AND ri.installation_id = ? " +
+              "JOIN room_installations ri ON ri.room = s.room AND ri.installation_id = ? AND ri.expires_at > ? " +
               "JOIN installations i ON i.installation_id = ri.installation_id AND i.suspended = 0 " +
+              "JOIN room_installation_repos rir ON rir.room = s.room AND rir.installation_id = ri.installation_id AND rir.repo = s.repo AND rir.can_pull != 0 " +
               "WHERE s.repo = ? AND s.until > ?",
             installationId,
+            now,
             repo,
             now,
           )
@@ -1373,12 +1594,13 @@ export class Room extends DurableObject<Env> {
         sendText(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "router_error" }));
         return;
       }
-      const { installationId } = (await resolveRes.json()) as { installationId?: number | null };
+      const { installationId, canWrite } = (await resolveRes.json()) as { installationId?: number | null; canWrite?: boolean };
       if (!installationId) {
         sendText(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "not_bound" }));
         return;
       }
-      const minted = await mintSingleRepoInstallationToken(app, installationId, checked.repo, checked.permissions, {
+      const effectivePermissions = clampPermissionsForRepoAccess(checked.permissions, Boolean(canWrite));
+      const minted = await mintSingleRepoInstallationToken(app, installationId, checked.repo, effectivePermissions, {
         apiBase: this.env.GITHUB_API_BASE || undefined,
       });
       if (!minted.ok) {

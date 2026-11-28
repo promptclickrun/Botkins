@@ -1752,6 +1752,13 @@ export type WorkflowGithubDelivery = {
   replayable?: boolean;
 };
 
+export type GithubAgentRepoPermission = {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+};
+
 export type GithubAgentInstallation = {
   installationId: number;
   accountLogin: string;
@@ -1759,8 +1766,12 @@ export type GithubAgentInstallation = {
   installerLogin: string;
   repositorySelection: "all" | "selected";
   repos: string[];
+  repoPermissions?: GithubAgentRepoPermission[];
   suspended: boolean;
   updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
   manageUrl?: string;
 };
 
@@ -1768,6 +1779,7 @@ export type GithubAgentRepoConfig = {
   fullName: string;
   installationId: number | null;
   accountLogin: string;
+  canWrite?: boolean;
   answerMentions: boolean;
   defaultBotId: string | null;
   allowlist: string[];
@@ -1778,6 +1790,7 @@ export type GithubAgentStatus = {
   mentionHandle: string;
   relayConnected: boolean;
   eventsOn: boolean;
+  hasExpiredBindings?: boolean;
   installations: GithubAgentInstallation[];
   repos: GithubAgentRepoConfig[];
   lastDelivery: {

@@ -225,15 +225,29 @@ export default function GithubSettings() {
                 <Row
                   key={inst.installationId}
                   title={`${inst.accountLogin || `Installation #${inst.installationId}`} (${inst.accountType})`}
-                  subtitle={`${inst.repositorySelection === "all" ? `All repos (${inst.repos.length})` : `${inst.repos.length} selected`}${inst.installerLogin ? ` · by @${inst.installerLogin}` : ""}`}
+                  subtitle={
+                    inst.expired
+                      ? `Expired${inst.installerLogin ? ` (@${inst.installerLogin})` : ""} · tap Re-authorize to resume events and tokens`
+                      : `${inst.repos.length} verified ${inst.repos.length === 1 ? "repo" : "repos"}${inst.installerLogin ? ` · @${inst.installerLogin}` : ""}${inst.expiresAt ? ` · expires ${formatShortTime(new Date(inst.expiresAt).toISOString())}` : ""}`
+                  }
                   trailing={
-                    <Button
-                      title="Disconnect"
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy}
-                      onPress={() => handleUnbind(inst.installationId, inst.accountLogin || `#${inst.installationId}`)}
-                    />
+                    <View style={{ flexDirection: "row", gap: space.xs }}>
+                      {inst.expired && (
+                        <Button
+                          title="Re-authorize"
+                          size="sm"
+                          disabled={busy || !online}
+                          onPress={() => void handleInstall()}
+                        />
+                      )}
+                      <Button
+                        title="Disconnect"
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onPress={() => handleUnbind(inst.installationId, inst.accountLogin || `#${inst.installationId}`)}
+                      />
+                    </View>
                   }
                 />
               ))

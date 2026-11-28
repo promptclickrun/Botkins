@@ -26,13 +26,14 @@ export const githubCommands = {
               lines.push(
                 "Installations:",
                 table(
-                  ["ID", "ACCOUNT", "TYPE", "REPOS", "INSTALLER"],
+                  ["ID", "ACCOUNT", "TYPE", "REPOS", "USER", "STATUS"],
                   s.installations.map((i) => [
                     String(i.installationId),
                     i.accountLogin || "-",
                     i.accountType || "-",
-                    i.repositorySelection === "all" ? `all (${i.repos?.length ?? 0})` : String(i.repos?.length ?? 0),
+                    String(i.repos?.length ?? 0),
                     i.installerLogin || "-",
+                    i.expired ? "expired (run `botkins github install`)" : i.expiresAt ? `expires ${new Date(i.expiresAt).toISOString().slice(0, 10)}` : "active",
                   ]),
                 ),
               );

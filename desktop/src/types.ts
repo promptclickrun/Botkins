@@ -558,6 +558,13 @@ export interface WorkflowGithubDelivery {
   replayable?: boolean;
 }
 
+export interface GithubAgentRepoPermission {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+}
+
 export interface GithubAgentInstallation {
   installationId: number;
   accountLogin: string;
@@ -565,8 +572,12 @@ export interface GithubAgentInstallation {
   installerLogin: string;
   repositorySelection: "all" | "selected";
   repos: string[];
+  repoPermissions?: GithubAgentRepoPermission[];
   suspended: boolean;
   updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
   manageUrl?: string;
 }
 
@@ -574,6 +585,7 @@ export interface GithubAgentRepoConfig {
   fullName: string;
   installationId: number | null;
   accountLogin: string;
+  canWrite?: boolean;
   answerMentions: boolean;
   defaultBotId: string | null;
   allowlist: string[];
@@ -584,6 +596,7 @@ export interface GithubAgentStatus {
   mentionHandle: string;
   relayConnected: boolean;
   eventsOn: boolean;
+  hasExpiredBindings?: boolean;
   installations: GithubAgentInstallation[];
   repos: GithubAgentRepoConfig[];
   lastDelivery: {

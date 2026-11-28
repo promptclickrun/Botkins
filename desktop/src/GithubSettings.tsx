@@ -166,7 +166,7 @@ export default function GithubSettings({ state }: { state: State }) {
 
       <Group
         title="Installations"
-        footer="Each installation is verified through GitHub OAuth and bound only to this host's room. Uninstall or suspend on GitHub removes the binding automatically."
+        footer="Each binding records only the repositories your GitHub account can access (with read/write matching your GitHub permissions) and expires every 7 days. Re-authorize after 7 days or after adding new repositories on GitHub."
       >
         {!hasInstallations ? (
           <ValueRow
@@ -178,11 +178,25 @@ export default function GithubSettings({ state }: { state: State }) {
           status!.installations.map((inst) => (
             <Row
               key={inst.installationId}
-              label={`${inst.accountLogin || `Installation #${inst.installationId}`} (${inst.accountType})`}
-              help={`Installation #${inst.installationId} · ${inst.repositorySelection === "all" ? `All repositories (${inst.repos.length})` : `${inst.repos.length} selected ${inst.repos.length === 1 ? "repository" : "repositories"}`}${inst.installerLogin ? ` · installed by @${inst.installerLogin}` : ""}`}
+              label={`${inst.accountLogin || `Installation #${inst.installationId}`} (${inst.accountType})${inst.expired ? " · Re-authorize required" : ""}`}
+              help={
+                inst.expired
+                  ? `Installation #${inst.installationId} · binding expired${inst.installerLogin ? ` (@${inst.installerLogin})` : ""}. Re-authorize to resume events and tokens.`
+                  : `Installation #${inst.installationId} · ${inst.repos.length} verified ${inst.repos.length === 1 ? "repository" : "repositories"}${inst.installerLogin ? ` · verified as @${inst.installerLogin}` : ""}${inst.expiresAt ? ` · expires ${formatTime(new Date(inst.expiresAt).toISOString())}` : ""}`
+              }
             >
               {(id) => (
                 <div id={id} style={{ display: "flex", gap: 8 }}>
+                  {inst.expired && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy}
+                      onClick={() => void handleInstall()}
+                    >
+                      Re-authorize
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn"

@@ -26,6 +26,7 @@ import { PendingRequests } from "../src/pending.ts";
 import { spaceFrame, spacePage } from "../src/space.ts";
 import {
   GITHUB_AGENT_SLUG_DEFAULT,
+  GITHUB_BINDING_TTL_MS,
   GITHUB_CLAIM_MAX,
   GITHUB_CLAIM_TTL_MS,
   GITHUB_DELIVERY_DEDUPE_MAX,
@@ -37,10 +38,13 @@ import {
   agentAppOf,
   allowsLegacyUserTokenAuth,
   authorizeSubscribedRepos,
+  bindingTtlMsOf,
   checkGitHubWebhookRequest,
+  clampPermissionsForRepoAccess,
   fetchInstallationRepos,
   githubSetupResultPage,
   mintSingleRepoInstallationToken,
+  normalizeRepoPermissions,
   verifyGitHubClaimRequest,
   verifyGitHubInstallationsListRequest,
   verifyGitHubInstallationOAuth,
@@ -342,12 +346,13 @@ function loadQrSource(file) {
 
 /** Persisted GitHub App installation bindings for the self-hosted Node relay (DATA_DIR/github-bindings.json). */
 class GitHubBindings {
-  constructor(file) {
+  constructor(file, ttlMs = GITHUB_BINDING_TTL_MS) {
     this.file = file;
+    this.ttlMs = Number.isSafeInteger(ttlMs) && ttlMs > 0 ? ttlMs : GITHUB_BINDING_TTL_MS;
     /** installationId (number) -> { installationId, accountLogin, accountType, installerLogin, repositorySelection, repos: Set<string>, suspended, updatedAt } */
     this.installations = new Map();
-    /** room -> Set<installationId> */
-    this.roomToInsts = new Map();
+    /** room -> Map<installationId, { installerLogin, boundAt, expiresAt, repos: Map<repoLower, { pull, push, admin }> }> */
+    this.roomBindings = new Map();
     /** installationId -> Set<room> */
     this.instToRooms = new Map();
     if (!file) return;
@@ -367,15 +372,28 @@ class GitHubBindings {
           updatedAt: Number(inst.updatedAt) || Date.now(),
         });
       }
-      for (const [room, ids] of Object.entries(saved.rooms ?? {})) {
-        if (!ROOM_NAME.test(room) || !Array.isArray(ids)) continue;
-        for (const rawId of ids) {
-          const id = Number(rawId);
-          if (!this.installations.has(id)) continue;
-          if (!this.roomToInsts.has(room)) this.roomToInsts.set(room, new Set());
-          this.roomToInsts.get(room).add(id);
-          if (!this.instToRooms.has(id)) this.instToRooms.set(id, new Set());
-          this.instToRooms.get(id).add(room);
+      if (saved.roomBindings && typeof saved.roomBindings === "object") {
+        for (const [room, entries] of Object.entries(saved.roomBindings)) {
+          if (!ROOM_NAME.test(room) || !Array.isArray(entries)) continue;
+          for (const entry of entries) {
+            const id = Number(entry?.installationId);
+            if (!this.installations.has(id)) continue;
+            const boundAt = Number(entry.boundAt) || Date.now();
+            const expiresAt = Number(entry.expiresAt) || boundAt + this.ttlMs;
+            const repoMap = new Map();
+            for (const rp of normalizeRepoPermissions(entry.repoPermissions ?? [])) {
+              repoMap.set(rp.fullName, { pull: rp.pull, push: rp.push, admin: rp.admin });
+            }
+            if (!this.roomBindings.has(room)) this.roomBindings.set(room, new Map());
+            this.roomBindings.get(room).set(id, {
+              installerLogin: String(entry.installerLogin || ""),
+              boundAt,
+              expiresAt,
+              repos: repoMap,
+            });
+            if (!this.instToRooms.has(id)) this.instToRooms.set(id, new Set());
+            this.instToRooms.get(id).add(room);
+          }
         }
       }
     } catch {
@@ -385,34 +403,70 @@ class GitHubBindings {
   save() {
     if (!this.file) return;
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    const roomBindings = {};
+    for (const [room, map] of this.roomBindings.entries()) {
+      roomBindings[room] = [...map.entries()].map(([installationId, binding]) => ({
+        installationId,
+        installerLogin: binding.installerLogin,
+        boundAt: binding.boundAt,
+        expiresAt: binding.expiresAt,
+        repoPermissions: [...binding.repos.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([fullName, perms]) => ({ fullName, ...perms })),
+      }));
+    }
     const payload = {
       installations: [...this.installations.values()].map((i) => ({ ...i, repos: [...i.repos].sort() })),
-      rooms: Object.fromEntries([...this.roomToInsts.entries()].map(([room, ids]) => [room, [...ids]])),
+      roomBindings,
     };
     writeFileSync(this.file + ".tmp", JSON.stringify(payload), { mode: 0o600 });
     renameSync(this.file + ".tmp", this.file);
   }
-  bind(room, inst) {
+  bind(room, inst, now = Date.now(), ttlMs = this.ttlMs) {
     const id = Number(inst.installationId);
+    const prevInst = this.installations.get(id);
+    const installerLogin = String(inst.installerLogin || inst.accountLogin || "");
+    const normalizedPerms = Array.isArray(inst.repoPermissions)
+      ? normalizeRepoPermissions(inst.repoPermissions)
+      : normalizeRepoPermissions(
+          (Array.isArray(inst.repos) ? inst.repos : []).map((r) => ({ fullName: r, pull: true, push: false, admin: false })),
+        );
+
+    // Preserve installation-level repo set additively (never let one user's narrower view wipe it).
+    const instRepos = new Set(prevInst ? prevInst.repos : []);
+    for (const rp of normalizedPerms) instRepos.add(rp.fullName);
     this.installations.set(id, {
       installationId: id,
-      accountLogin: String(inst.accountLogin || ""),
-      accountType: String(inst.accountType || "User"),
-      installerLogin: String(inst.installerLogin || inst.accountLogin || ""),
+      accountLogin: String(inst.accountLogin || prevInst?.accountLogin || ""),
+      accountType: String(inst.accountType || prevInst?.accountType || "User"),
+      installerLogin: prevInst?.installerLogin || installerLogin,
       repositorySelection: inst.repositorySelection === "all" ? "all" : "selected",
-      repos: new Set(Array.isArray(inst.repos) ? inst.repos.map((r) => String(r).toLowerCase()) : []),
+      repos: instRepos,
       suspended: Boolean(inst.suspended),
-      updatedAt: Number(inst.updatedAt) || Date.now(),
+      updatedAt: Number(inst.updatedAt) || now,
     });
-    if (!this.roomToInsts.has(room)) this.roomToInsts.set(room, new Set());
-    this.roomToInsts.get(room).add(id);
+
+    const repoMap = new Map();
+    for (const rp of normalizedPerms) {
+      repoMap.set(rp.fullName, { pull: rp.pull, push: rp.push, admin: rp.admin });
+    }
+    const effectiveTtl = Number.isSafeInteger(ttlMs) && ttlMs > 0 ? ttlMs : this.ttlMs;
+    const expiresAt = now + effectiveTtl;
+    if (!this.roomBindings.has(room)) this.roomBindings.set(room, new Map());
+    this.roomBindings.get(room).set(id, {
+      installerLogin,
+      boundAt: now,
+      expiresAt,
+      repos: repoMap,
+    });
     if (!this.instToRooms.has(id)) this.instToRooms.set(id, new Set());
     this.instToRooms.get(id).add(room);
     this.save();
+    return expiresAt;
   }
   unbind(room, installationId) {
-    this.roomToInsts.get(room)?.delete(installationId);
-    if (this.roomToInsts.get(room)?.size === 0) this.roomToInsts.delete(room);
+    this.roomBindings.get(room)?.delete(installationId);
+    if (this.roomBindings.get(room)?.size === 0) this.roomBindings.delete(room);
     this.instToRooms.get(installationId)?.delete(room);
     if (!this.instToRooms.get(installationId)?.size) {
       this.instToRooms.delete(installationId);
@@ -420,44 +474,65 @@ class GitHubBindings {
     }
     this.save();
   }
-  listForRoom(room) {
-    const ids = [...(this.roomToInsts.get(room) ?? [])].sort((a, b) => a - b);
+  listForRoom(room, now = Date.now()) {
+    const map = this.roomBindings.get(room);
+    if (!map) return [];
+    const ids = [...map.keys()].sort((a, b) => a - b);
     const out = [];
     for (const id of ids) {
       const inst = this.installations.get(id);
-      if (!inst || inst.suspended) continue;
+      const binding = map.get(id);
+      if (!inst || !binding || inst.suspended) continue;
+      const expired = binding.expiresAt <= now;
+      const repoPermissions = expired
+        ? []
+        : [...binding.repos.entries()]
+            .filter(([, p]) => p.pull)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([fullName, p]) => ({ fullName, pull: Boolean(p.pull), push: Boolean(p.push), admin: Boolean(p.admin) }));
       out.push({
         installationId: inst.installationId,
         accountLogin: inst.accountLogin,
         accountType: inst.accountType,
-        installerLogin: inst.installerLogin,
+        installerLogin: binding.installerLogin || inst.installerLogin,
         repositorySelection: inst.repositorySelection,
-        repos: [...inst.repos].sort(),
+        repos: repoPermissions.map((rp) => rp.fullName),
+        repoPermissions,
         suspended: inst.suspended,
         updatedAt: inst.updatedAt,
+        boundAt: binding.boundAt,
+        expiresAt: binding.expiresAt,
+        expired,
       });
     }
     return out;
   }
-  isRoomBoundToInstallation(room, installationId) {
+  /** True only when the room has an active, non-expired binding for `installationId` whose per-room repo set includes `repoLower`. */
+  isRoomBoundToInstallationRepo(room, installationId, repoLower, now = Date.now()) {
     const inst = this.installations.get(installationId);
     if (!inst || inst.suspended) return false;
-    return Boolean(this.roomToInsts.get(room)?.has(installationId));
+    const binding = this.roomBindings.get(room)?.get(installationId);
+    if (!binding || binding.expiresAt <= now) return false;
+    const perms = binding.repos.get(repoLower);
+    return Boolean(perms?.pull);
   }
-  resolveForRepo(room, repoLower) {
-    const ids = [...(this.roomToInsts.get(room) ?? [])].sort((a, b) => a - b);
-    const owner = repoLower.split("/")[0] || "";
-    let allFallback = null;
+  /** Resolves `{ installationId, canWrite }` strictly from this room's non-expired verified repo set (never installation_repos or "all"). */
+  resolveForRepo(room, repoLower, now = Date.now()) {
+    const map = this.roomBindings.get(room);
+    if (!map) return null;
+    const ids = [...map.keys()].sort((a, b) => a - b);
+    let readFallback = null;
     for (const id of ids) {
       const inst = this.installations.get(id);
-      if (!inst || inst.suspended) continue;
-      if (inst.repos.has(repoLower)) return id;
-      if (inst.repositorySelection === "all" && allFallback === null) {
-        const acc = inst.accountLogin.toLowerCase();
-        if (!acc || acc === owner) allFallback = id;
-      }
+      const binding = map.get(id);
+      if (!inst || !binding || inst.suspended || binding.expiresAt <= now) continue;
+      const perms = binding.repos.get(repoLower);
+      if (!perms?.pull) continue;
+      const canWrite = Boolean(perms.push || perms.admin);
+      if (canWrite) return { installationId: id, canWrite: true };
+      if (!readFallback) readFallback = { installationId: id, canWrite: false };
     }
-    return allFallback;
+    return readFallback;
   }
   applyEvent(ev) {
     const id = ev.installationId;
@@ -465,8 +540,8 @@ class GitHubBindings {
     if (ev.event === "installation") {
       if (ev.action === "deleted" || ev.action === "suspend") {
         for (const room of affectedRooms) {
-          this.roomToInsts.get(room)?.delete(id);
-          if (this.roomToInsts.get(room)?.size === 0) this.roomToInsts.delete(room);
+          this.roomBindings.get(room)?.delete(id);
+          if (this.roomBindings.get(room)?.size === 0) this.roomBindings.delete(room);
         }
         this.instToRooms.delete(id);
         this.installations.delete(id);
@@ -480,6 +555,7 @@ class GitHubBindings {
         existing.repositorySelection = ev.repositorySelection === "all" ? "all" : "selected";
         existing.suspended = false;
         existing.updatedAt = Date.now();
+        // Bookkeeping only on installation-level repos; never expand room bindings without fresh OAuth.
         if (Array.isArray(ev.repositories) && ev.repositories.length > 0) {
           existing.repos = new Set(ev.repositories.map((r) => String(r).toLowerCase()));
         }
@@ -492,13 +568,46 @@ class GitHubBindings {
       if (existing) {
         existing.repositorySelection = ev.repositorySelection === "all" ? "all" : "selected";
         existing.updatedAt = Date.now();
+        // Bookkeeping only: NEVER add newly added installation repos to existing rooms automatically.
         for (const r of ev.repositoriesAdded ?? []) existing.repos.add(String(r).toLowerCase());
-        for (const r of ev.repositoriesRemoved ?? []) existing.repos.delete(String(r).toLowerCase());
+        // Removals immediately revoke access from installation_repos AND every bound room.
+        for (const r of ev.repositoriesRemoved ?? []) {
+          const lower = String(r).toLowerCase();
+          existing.repos.delete(lower);
+          for (const room of affectedRooms) {
+            this.roomBindings.get(room)?.get(id)?.repos.delete(lower);
+          }
+        }
         this.save();
       }
       return affectedRooms;
     }
     return affectedRooms;
+  }
+  applyMembershipEvent(ev, now = Date.now()) {
+    const isRemoval =
+      (ev.event === "organization" && ev.action === "member_removed") ||
+      (ev.event === "membership" && ev.action === "removed");
+    const memberLower = String(ev.memberLogin || "").trim().toLowerCase();
+    const accountLower = String(ev.accountLogin || "").trim().toLowerCase();
+    if (!isRemoval || !memberLower) return [];
+    const affected = new Set();
+    for (const [room, map] of this.roomBindings.entries()) {
+      for (const [instId, binding] of map.entries()) {
+        const inst = this.installations.get(instId);
+        if (!inst) continue;
+        const instMatch = ev.installationId !== null
+          ? instId === ev.installationId
+          : Boolean(accountLower && inst.accountLogin.toLowerCase() === accountLower);
+        if (!instMatch) continue;
+        if (binding.installerLogin.toLowerCase() !== memberLower) continue;
+        binding.repos.clear();
+        binding.expiresAt = now - 1;
+        affected.add(room);
+      }
+    }
+    if (affected.size) this.save();
+    return [...affected];
   }
 }
 
@@ -530,11 +639,16 @@ export function createRelay({
   githubAllowUserTokenAuth,
   githubApiBase,
   githubWebBase,
+  githubBindingTtlMs,
   fetch = globalThis.fetch,
 } = {}) {
   const invites = new Invites(dataDir ? join(dataDir, "invites.json") : null);
   const spaces = new Spaces(dataDir || null, spaceBytesMax);
-  const githubBindings = new GitHubBindings(dataDir ? join(dataDir, "github-bindings.json") : null);
+  const effectiveBindingTtlMs =
+    Number.isSafeInteger(githubBindingTtlMs) && githubBindingTtlMs > 0
+      ? githubBindingTtlMs
+      : bindingTtlMsOf(process.env);
+  const githubBindings = new GitHubBindings(dataDir ? join(dataDir, "github-bindings.json") : null, effectiveBindingTtlMs);
   const githubEnv = {
     GITHUB_AGENT_APP_ID: githubAgentAppId,
     GITHUB_AGENT_APP_SLUG: githubAgentAppSlug,
@@ -831,15 +945,22 @@ export function createRelay({
           send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "app_not_configured" }));
           return;
         }
-        const installationId = githubBindings.resolveForRepo(this.name, checked.repo);
-        if (!installationId) {
+        const access = githubBindings.resolveForRepo(this.name, checked.repo);
+        if (!access) {
           send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: "not_bound" }));
           return;
         }
-        const minted = await mintSingleRepoInstallationToken(githubAgentApp, installationId, checked.repo, checked.permissions, {
-          fetch,
-          apiBase,
-        });
+        const effectivePermissions = clampPermissionsForRepoAccess(checked.permissions, access.canWrite);
+        const minted = await mintSingleRepoInstallationToken(
+          githubAgentApp,
+          access.installationId,
+          checked.repo,
+          effectivePermissions,
+          {
+            fetch,
+            apiBase,
+          },
+        );
         if (!minted.ok) {
           log("github_token", { status: minted.status, error: minted.error });
           send(ws, JSON.stringify({ type: "github-token-result", requestId: checked.requestId, ok: false, error: minted.error }));
@@ -853,7 +974,7 @@ export function createRelay({
             requestId: checked.requestId,
             ok: true,
             repo: checked.repo,
-            installationId,
+            installationId: access.installationId,
             token: minted.token,
             expiresAt: minted.expiresAt,
             permissions: minted.permissions,
@@ -1316,7 +1437,8 @@ export function createRelay({
       });
     }
 
-    githubBindings.bind(verifiedState.room, oauth.installation);
+    githubBindings.bind(verifiedState.room, oauth.installation, Date.now(), effectiveBindingTtlMs);
+    pruneRoomUnboundSubs(verifiedState.room);
     pushInstallationsToRoom(verifiedState.room);
     log("github_setup", { status: 200, repos: oauth.installation.repos.length });
     return githubSetupResultPage({
@@ -1369,6 +1491,16 @@ export function createRelay({
       return Response.json({ ok: true }, { status: 202, headers: { "cache-control": "no-store" } });
     }
 
+    if (checked.kind === "membership") {
+      const affectedRooms = githubBindings.applyMembershipEvent(checked, now);
+      for (const roomName of affectedRooms) {
+        pruneRoomUnboundSubs(roomName);
+        pushInstallationsToRoom(roomName);
+      }
+      log("github_membership_event", { event: checked.event, action: checked.action, rooms: affectedRooms.length });
+      return Response.json({ ok: true }, { status: 202, headers: { "cache-control": "no-store" } });
+    }
+
     const targets = githubSubsByRepo.get(checked.repositoryLower);
     if (!targets || !targets.size) {
       log("github_delivery", { event: checked.event, status: 204, delivered: 0 });
@@ -1381,7 +1513,8 @@ export function createRelay({
     for (const [roomName, until] of targets) {
       if (until <= now) continue;
       const boundOk =
-        checked.installationId !== null && githubBindings.isRoomBoundToInstallation(roomName, checked.installationId);
+        checked.installationId !== null &&
+        githubBindings.isRoomBoundToInstallationRepo(roomName, checked.installationId, checked.repositoryLower, now);
       if (!boundOk && !legacyUserTokenMode) continue;
       eligibleCount++;
       const host = rooms.get(roomName)?.activeHost();
