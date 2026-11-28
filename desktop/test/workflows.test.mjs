@@ -2118,4 +2118,369 @@ test("bot workflow_create and workflow_update accept expanded GitHub trigger and
   assert.equal(updated.nodes[1].config.labelsFrom, "agent");
 });
 
+test("GitHub trigger cursors persist across workspace restart without re-firing old items", async (t) => {
+  const issues = [
+    { number: 10, title: "Existing issue", body: "Seeded", url: "https://github.com/org/repo/issues/10", state: "OPEN", author: { login: "alice" }, updatedAt: "2026-11-27T10:00:00Z", labels: [] },
+  ];
+  const poller = async () => ({ prs: [], issues, comments: [], viewerLogin: "colt" });
+  const { ws, providers } = setup(t, { workflows: { githubPoller: poller } });
+
+  const wf = ws.workflows.create({
+    name: "Persisted cursor flow",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/repo"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Notify", config: { destination: "notification", template: "#{{number}} {{title}}" } },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1" }],
+  });
+
+  // First poll seeds cursor and persists to workspace.json
+  await ws.workflows.pollGithubTrigger(wf, wf.nodes[0], `${wf.id}:t1`);
+  assert.equal(ws.workflows.listRuns(wf.id).length, 0);
+  ws.flushSave();
+
+  // Simulate process restart by loading a fresh Workspace from the same dir
+  const ws2 = new Workspace(ws.dir, providers, () => {}, { workflows: { githubPoller: poller } });
+  const wf2 = ws2.workflows.get(wf.id);
+  // Polling the same seeded issue after restart must NOT re-fire
+  await ws2.workflows.pollGithubTrigger(wf2, wf2.nodes[0], `${wf2.id}:t1`);
+  assert.equal(ws2.workflows.listRuns(wf2.id).length, 0);
+
+  // Adding a brand new issue after restart fires exactly once
+  issues.push({
+    number: 11,
+    title: "New after restart",
+    body: "Body",
+    url: "https://github.com/org/repo/issues/11",
+    state: "OPEN",
+    author: { login: "bob" },
+    updatedAt: "2026-11-27T10:05:00Z",
+    labels: [],
+  });
+  await ws2.workflows.pollGithubTrigger(wf2, wf2.nodes[0], `${wf2.id}:t1`);
+  const runs = ws2.workflows.listRuns(wf2.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].context.number, 11);
+  await ws2.workflows.waitForRun(runs[0].id);
+});
+
+test("GitHub relay push and local gh poll deduplicate and never double-fire", async (t) => {
+  const issues = [
+    { number: 50, title: "Initial", body: "", url: "https://github.com/org/repo/issues/50", state: "OPEN", author: { login: "alice" }, updatedAt: "2026-11-27T09:00:00Z", labels: [] },
+  ];
+  const { ws } = setup(t, {
+    workflows: {
+      githubPoller: async () => ({ prs: [], issues, comments: [], viewerLogin: "colt" }),
+    },
+  });
+
+  const wf = ws.workflows.create({
+    name: "Push+Poll dedupe",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/repo"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Notify", config: { destination: "notification", template: "#{{number}}" } },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1" }],
+  });
+
+  // Seed initial cursor
+  await ws.workflows.pollGithubTrigger(wf, wf.nodes[0], `${wf.id}:t1`);
+  assert.equal(ws.workflows.listRuns(wf.id).length, 0);
+
+  // 1) Relay pushes issue #51 first
+  const pushed = ws.workflows.receiveGithubDelivery({
+    type: "github-delivery",
+    version: 1,
+    deliveryId: "del-push-51",
+    event: "issues",
+    action: "opened",
+    repository: "org/repo",
+    installationId: 77,
+    receivedAt: "2026-11-27T11:00:00Z",
+    payload: {
+      action: "opened",
+      repository: { full_name: "org/repo" },
+      sender: { login: "carol", type: "User" },
+      issue: {
+        number: 51,
+        title: "Pushed first",
+        body: "hi",
+        html_url: "https://github.com/org/repo/issues/51",
+        state: "open",
+        updated_at: "2026-11-27T11:00:00Z",
+        user: { login: "carol", type: "User" },
+        labels: [],
+      },
+    },
+  });
+  assert.equal(pushed.length, 1);
+  assert.equal(pushed[0].outcome, "started");
+  await ws.workflows.waitForRun(pushed[0].runId);
+
+  // Duplicate deliveryId ignored
+  const dup = ws.workflows.receiveGithubDelivery({
+    type: "github-delivery",
+    version: 1,
+    deliveryId: "del-push-51",
+    event: "issues",
+    action: "opened",
+    repository: "org/repo",
+    receivedAt: "2026-11-27T11:00:01Z",
+    payload: {
+      action: "opened",
+      repository: { full_name: "org/repo" },
+      sender: { login: "carol", type: "User" },
+      issue: { number: 51, title: "Pushed first", body: "hi", state: "open", updated_at: "2026-11-27T11:00:00Z", user: { login: "carol", type: "User" } },
+    },
+  });
+  assert.equal(dup.length, 0);
+
+  // 2) Subsequent gh poll sees the same issue #51 with matching updatedAt -> deduped, no second run!
+  issues.push({
+    number: 51,
+    title: "Pushed first",
+    body: "hi",
+    url: "https://github.com/org/repo/issues/51",
+    state: "OPEN",
+    author: { login: "carol" },
+    updatedAt: "2026-11-27T11:00:00Z",
+    labels: [],
+  });
+  await ws.workflows.pollGithubTrigger(wf, wf.nodes[0], `${wf.id}:t1`);
+  assert.equal(ws.workflows.listRuns(wf.id).length, 1);
+});
+
+test("GitHub delivery ledger retains newest 50, never prunes waiting, and serializes per (workflowId, repo, number)", async (t) => {
+  const { ws } = setup(t);
+
+  const wf = ws.workflows.create({
+    name: "Queue & retention",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/repo"], events: ["issue.opened", "comment"] } },
+      { id: "a1", kind: "approval", label: "Hold", config: { message: "Hold #{{number}}" } },
+      { id: "o1", kind: "output", label: "Notify", config: { destination: "notification", template: "Done #{{number}}" } },
+    ],
+    edges: [
+      { id: "e1", from: "t1", to: "a1" },
+      { id: "e2", from: "a1", to: "o1", branch: "approved" },
+    ],
+  });
+
+  const pushComment = (deliveryId, number, commentId, title = "Item") =>
+    ws.workflows.receiveGithubDelivery({
+      type: "github-delivery",
+      version: 1,
+      deliveryId,
+      event: "issue_comment",
+      action: "created",
+      repository: "org/repo",
+      receivedAt: new Date().toISOString(),
+      payload: {
+        action: "created",
+        repository: { full_name: "org/repo" },
+        sender: { login: "alice", type: "User" },
+        issue: { number, title, body: "", state: "open", user: { login: "alice", type: "User" } },
+        comment: { id: commentId, body: `comment ${commentId}`, html_url: `https://github.com/org/repo/issues/${number}#c${commentId}`, updated_at: `2026-11-27T12:00:${String(commentId % 60).padStart(2, "0")}Z`, user: { login: "alice", type: "User" } },
+      },
+    });
+
+  // 1) First event on #100 starts run 1 (pauses at approval)
+  const r1 = pushComment("del-q-1", 100, 1);
+  assert.equal(r1[0].outcome, "started");
+  await ws.workflows.waitForRun(r1[0].runId);
+  assert.equal(ws.workflows.getRun(r1[0].runId).status, "waiting_approval");
+
+  // 2) Second event on SAME #100 is queued as `waiting`
+  const r2 = pushComment("del-q-2", 100, 2);
+  assert.equal(r2[0].outcome, "waiting");
+
+  // 3) Push 60 filtered/skipped bot deliveries to push ledger well past 50
+  for (let i = 0; i < 60; i++) {
+    ws.workflows.receiveGithubDelivery({
+      type: "github-delivery",
+      version: 1,
+      deliveryId: `del-bot-skip-${i}`,
+      event: "issue_comment",
+      action: "created",
+      repository: "org/repo",
+      receivedAt: new Date(Date.now() + i).toISOString(),
+      payload: {
+        action: "created",
+        repository: { full_name: "org/repo" },
+        sender: { login: "dependabot[bot]", type: "Bot" },
+        issue: { number: 200 + i, title: "Bot noise", state: "open", user: { login: "dependabot[bot]", type: "Bot" } },
+        comment: { id: 1000 + i, body: "bump", updated_at: `2026-11-27T12:01:${String(i % 60).padStart(2, "0")}Z`, user: { login: "dependabot[bot]", type: "Bot" } },
+      },
+    });
+  }
+
+  const deliveries = ws.workflows.listGithubDeliveries(wf.id, "t1", 100);
+  const nonWaiting = deliveries.filter((d) => d.outcome !== "waiting");
+  assert.equal(nonWaiting.length, 50, "non-waiting ledger stays capped at 50");
+  assert.ok(deliveries.some((d) => d.deliveryId === "del-q-2" && d.outcome === "waiting"), "waiting delivery is never pruned");
+
+  // 4) Approve run 1 -> settles run 1 and automatically dequeues del-q-2 into run 2!
+  ws.workflows.respondApproval(r1[0].runId, "a1", "approved");
+  await ws.workflows.waitForRun(r1[0].runId);
+  assert.equal(ws.workflows.getRun(r1[0].runId).status, "completed");
+
+  const after = ws.workflows.listGithubDeliveries(wf.id, "t1", 100);
+  const dequeued = after.find((d) => d.deliveryId === "del-q-2");
+  assert.equal(dequeued?.outcome, "started");
+  assert.ok(dequeued?.runId && dequeued.runId !== r1[0].runId);
+});
+
+test("GitHub self-loop guard (1h per workflow, A->B allowed) and cross-workflow chain cap (3/10m, checked on ingress and dequeue)", async (t) => {
+  const { ws } = setup(t);
+
+  const wfA = ws.workflows.create({
+    name: "Workflow A",
+    nodes: [
+      { id: "tA", kind: "trigger", triggerKind: "github", label: "GH A", config: { repos: ["org/repo"], events: ["comment"], notBot: false } },
+      { id: "oA", kind: "output", label: "Notify A", config: { destination: "notification", template: "A: {{comment_body}}" } },
+    ],
+    edges: [{ id: "e1", from: "tA", to: "oA" }],
+  });
+
+  const wfB = ws.workflows.create({
+    name: "Workflow B",
+    nodes: [
+      { id: "tB", kind: "trigger", triggerKind: "github", label: "GH B", config: { repos: ["org/repo"], events: ["comment"], notBot: false } },
+      { id: "oB", kind: "output", label: "Notify B", config: { destination: "notification", template: "B: {{comment_body}}" } },
+    ],
+    edges: [{ id: "e1", from: "tB", to: "oB" }],
+  });
+
+  const now = Date.now();
+  // Simulate Workflow A having an in-flight (`status: "sending"`) GitHub action on org/repo#77
+  ws.state.workflowGithubActions["runA:outA:0"] = {
+    actionKey: "runA:outA:0",
+    workflowId: wfA.id,
+    runId: "runA",
+    stepId: "outA",
+    repository: "org/repo",
+    number: 77,
+    action: "comment",
+    status: "sending",
+    objectIds: [],
+    createdAt: now,
+  };
+
+  // Bot comment arrives on org/repo#77: Workflow A skips as `self`, Workflow B runs (A -> B allowed!)
+  const botFrame = (deliveryId, commentId) => ({
+    type: "github-delivery",
+    version: 1,
+    deliveryId,
+    event: "issue_comment",
+    action: "created",
+    repository: "org/repo",
+    receivedAt: new Date(now + commentId).toISOString(),
+    payload: {
+      action: "created",
+      repository: { full_name: "org/repo" },
+      sender: { login: "botkins-agent[bot]", type: "Bot" },
+      issue: { number: 77, title: "Loop test", state: "open", user: { login: "alice", type: "User" } },
+      comment: { id: commentId, body: `bot reply ${commentId}`, updated_at: `2026-11-27T13:00:0${commentId}Z`, user: { login: "botkins-agent[bot]", type: "Bot" } },
+    },
+  });
+
+  const res1 = ws.workflows.receiveGithubDelivery(botFrame("del-loop-1", 1), now + 100);
+  assert.equal(res1.find((r) => r.workflowId === wfA.id)?.reason, "self");
+  assert.equal(res1.find((r) => r.workflowId === wfB.id)?.outcome, "started");
+  await ws.workflows.waitForRun(res1.find((r) => r.workflowId === wfB.id).runId);
+
+  // Mark Workflow A's action done with objectIds ["comment:2"] -> comment:2 is still blocked on A (`self`), allowed on B
+  ws.state.workflowGithubActions["runA:outA:0"].status = "done";
+  ws.state.workflowGithubActions["runA:outA:0"].objectIds = ["comment:2"];
+
+  const res2 = ws.workflows.receiveGithubDelivery(botFrame("del-loop-2", 2), now + 200);
+  assert.equal(res2.find((r) => r.workflowId === wfA.id)?.reason, "self");
+  assert.equal(res2.find((r) => r.workflowId === wfB.id)?.outcome, "started");
+  await ws.workflows.waitForRun(res2.find((r) => r.workflowId === wfB.id).runId);
+
+  // Third bot-caused run on org/repo#77 (count = 3 within 10 minutes)
+  const res3 = ws.workflows.receiveGithubDelivery(botFrame("del-loop-3", 3), now + 300);
+  assert.equal(res3.find((r) => r.workflowId === wfB.id)?.outcome, "started");
+  await ws.workflows.waitForRun(res3.find((r) => r.workflowId === wfB.id).runId);
+
+  // Fourth bot-caused event within 10m hits cross-workflow chain cap (3/10m) -> skipped with reason `chain`!
+  const res4 = ws.workflows.receiveGithubDelivery(botFrame("del-loop-4", 4), now + 400);
+  assert.equal(res4.find((r) => r.workflowId === wfB.id)?.outcome, "skipped");
+  assert.equal(res4.find((r) => r.workflowId === wfB.id)?.reason, "chain");
+});
+
+test("GitHub Run last event replay re-executes the newest recorded delivery", async (t) => {
+  const { ws } = setup(t);
+
+  const wf = ws.workflows.create({
+    name: "Replayable GH flow",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/repo"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Notify", config: { destination: "notification", template: "Issue #{{number}}: {{title}}" } },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1" }],
+  });
+
+  // Replay before any event throws cleanly
+  assert.throws(() => ws.workflows.replayLastGithubEvent(wf.id), /No previous GitHub event/);
+
+  const delivered = ws.workflows.receiveGithubDelivery({
+    type: "github-delivery",
+    version: 1,
+    deliveryId: "del-replay-1",
+    event: "issues",
+    action: "opened",
+    repository: "org/repo",
+    receivedAt: "2026-11-27T14:00:00Z",
+    payload: {
+      action: "opened",
+      repository: { full_name: "org/repo" },
+      sender: { login: "alice", type: "User" },
+      issue: { number: 303, title: "Replay me", body: "Original payload", html_url: "https://github.com/org/repo/issues/303", state: "open", updated_at: "2026-11-27T14:00:00Z", user: { login: "alice", type: "User" } },
+    },
+  });
+  assert.equal(delivered[0].outcome, "started");
+  await ws.workflows.waitForRun(delivered[0].runId);
+
+  const replayRun = ws.workflows.replayLastGithubEvent(wf.id, "t1");
+  assert.equal(replayRun.manual, false);
+  assert.equal(replayRun.replay, true);
+  assert.notEqual(replayRun.id, delivered[0].runId);
+  await ws.workflows.waitForRun(replayRun.id);
+  assert.equal(ws.workflows.getRun(replayRun.id).status, "completed");
+  assert.equal(ws.workflows.getRun(replayRun.id).context.title, "Replay me");
+});
+
+test("GitHub relay offline gap markers merge within 2 minutes and subscribedGithubRepos tracks enabled workflows", async (t) => {
+  const { ws } = setup(t, { workflows: { githubPoller: async () => ({ prs: [], issues: [], comments: [] }) } });
+  const observed = [];
+  ws.workflows.setGithubReposListener((repos) => observed.push(repos));
+
+  const wf = ws.workflows.create({
+    name: "Subscribed repos",
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["Owner/RepoB", "owner/repoa"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Notify", config: { destination: "notification", template: "{{title}}" } },
+    ],
+    edges: [{ id: "e1", from: "t1", to: "o1" }],
+  });
+  assert.deepEqual(observed.at(-1), ["owner/repoa", "owner/repob"]);
+
+  const base = Date.now();
+  ws.workflows.onRelayStateChanged(true, base);
+  ws.workflows.onRelayStateChanged(false, base + 1000);
+  ws.workflows.onRelayStateChanged(true, base + 30_000);
+  // Second drop within 2 minutes merges into the same offline record
+  ws.workflows.onRelayStateChanged(false, base + 60_000);
+  ws.workflows.onRelayStateChanged(true, base + 90_000);
+
+  const list = ws.workflows.listGithubDeliveries(wf.id, "t1");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].outcome, "skipped");
+  assert.equal(list[0].reason, "offline");
+
+  ws.workflows.pause(wf.id);
+  assert.deepEqual(observed.at(-1), []);
+});
+
 

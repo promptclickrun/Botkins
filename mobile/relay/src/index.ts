@@ -9,6 +9,14 @@ import { PendingRequests } from "./pending.ts";
 import { DurableObject } from "cloudflare:workers";
 import { HOST_GROUP_LENGTH, HOST_PROTOCOL, HOST_PROTOCOL_V3, PHONE_PROTOCOL, hex, hostProof, hostProofV3, networkOf, sha256, unhex } from "./pure.ts";
 import { handleFeedback } from "./feedback.ts";
+import {
+  GITHUB_DELIVERY_DEDUPE_MAX,
+  GITHUB_DELIVERY_DEDUPE_TTL_MS,
+  GITHUB_EVENTS_PATH,
+  authorizeSubscribedRepos,
+  checkGitHubWebhookRequest,
+  verifyGitHubSubscribe,
+} from "./github.ts";
 import { handlePush } from "./push.ts";
 import { spaceFrame, spacePage } from "./space.ts";
 import spaceFrameScript from "./space-frame.js.txt";
@@ -65,7 +73,9 @@ const KIND_HEADER = "x-relay-kind";
 const FROM_HEADER = "x-relay-from";
 const HOST_VERSION_HEADER = "x-relay-host-version";
 const HOST_GROUP_HEADER = "x-relay-host-group";
+const ROOM_NAME_HEADER = "x-relay-room-name";
 const INVITE_OWNER_HEADER = "x-relay-invite-owner";
+const ROOM_NAME_KEY = "room:name";
 
 const OPEN = 1;
 
@@ -143,6 +153,8 @@ export default {
     if (url.pathname === "/v1/push") return handlePush(request, env, limited, network);
     // Bug reports and feature requests become GitHub issues: its own checks, in ./feedback.ts.
     if (url.pathname === "/v1/feedback") return handleFeedback(request, env, limited, network);
+    // GitHub App webhooks ("Botkins Agent"): HMAC-verified, rate-limited, deduped, fanned out to subscribed hosts.
+    if (url.pathname === GITHUB_EVENTS_PATH) return handleGitHubWebhook(request, env, limited, network);
     const space = SPACE_ROUTE.exec(url.pathname);
     if (space) return handleSpace(request, env, limited, network, space[1]!);
     const invite = INVITE_ROUTE.exec(url.pathname);
@@ -210,7 +222,7 @@ export default {
     const from = hex((await sha256(room + ":" + network)).subarray(0, 8));
 
     // Build the headers from scratch: nothing the client sent can reach the Durable Object.
-    const headers: Record<string, string> = { Upgrade: "websocket", [KIND_HEADER]: kind, [FROM_HEADER]: from };
+    const headers: Record<string, string> = { Upgrade: "websocket", [KIND_HEADER]: kind, [FROM_HEADER]: from, [ROOM_NAME_HEADER]: room };
     if (kind === "host") {
       headers[HOST_VERSION_HEADER] = hostVersion;
       if (hostVersion === "v3") headers[HOST_GROUP_HEADER] = hostGroup;
@@ -219,6 +231,57 @@ export default {
     return env.ROOM.getByName(room).fetch(forwarded);
   },
 } satisfies ExportedHandler<Env>;
+
+async function handleGitHubWebhook(request: Request, env: Env, limited: boolean, network: string): Promise<Response> {
+  const checked = await checkGitHubWebhookRequest(request, env.GITHUB_WEBHOOK_SECRET, {
+    checkIp: async () => !limited || (await env.GITHUB_IP.limit({ key: network })).success,
+    checkInstallation: async (key) => !limited || (await env.GITHUB_INSTALL.limit({ key })).success,
+  });
+  if (checked instanceof Response) return checked;
+
+  const routerResp = await env.GITHUB_ROUTER.getByName("all").fetch(
+    new Request("https://github-router.internal/route", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ deliveryId: checked.deliveryId, repo: checked.repositoryLower }),
+    }),
+  );
+  if (!routerResp.ok) return Response.json({ error: "router_error" }, { status: 503, headers: { "cache-control": "no-store" } });
+  const routed = (await routerResp.json()) as { duplicate?: boolean; rooms?: string[] };
+  if (routed.duplicate) {
+    log("github_delivery", { event: checked.event, status: 202, duplicate: 1, delivered: 0 });
+    return Response.json({ ok: true, duplicate: true, delivered: 0 }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
+  const rooms = Array.isArray(routed.rooms) ? routed.rooms : [];
+  if (!rooms.length) {
+    log("github_delivery", { event: checked.event, status: 204, delivered: 0 });
+    return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+  }
+
+  const frameText = JSON.stringify(checked.frame);
+  const results = await Promise.all(
+    rooms.map(async (room) => {
+      try {
+        const res = await env.ROOM.getByName(room).fetch(
+          new Request("https://room.internal/github-deliver", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: frameText,
+          }),
+        );
+        return res.status === 202;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  const delivered = results.filter(Boolean).length;
+  log("github_delivery", { event: checked.event, status: delivered > 0 ? 202 : 204, targets: rooms.length, delivered });
+  if (delivered > 0) {
+    return Response.json({ ok: true, delivered }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
+  return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+}
 
 type StoredInvite = { card: string; expiresAt: number; owner: string };
 
@@ -447,6 +510,105 @@ export class SpaceBudget extends DurableObject<Env> {
 }
 
 /**
+ * Maps short-lived host GitHub repository subscriptions (`owner/repo` -> room names) and deduplicates
+ * recent `x-github-delivery` IDs so webhook fan-out reaches only subscribed hosts once.
+ * Keeps no payload content and auto-expires subscriptions when their TTL elapses.
+ */
+export class GitHubRouter extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS subs (repo TEXT NOT NULL, room TEXT NOT NULL, until INTEGER NOT NULL, PRIMARY KEY (repo, room))");
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS subs_room_idx ON subs (room)");
+    ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS deliveries (delivery_id TEXT PRIMARY KEY, until INTEGER NOT NULL)");
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const now = Date.now();
+    const sql = this.ctx.storage.sql;
+
+    if (url.pathname === "/subscribe" && request.method === "POST") {
+      const body = (await request.json()) as { room?: string; repos?: string[]; expiresAt?: number };
+      const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
+      const repos = Array.isArray(body.repos) ? body.repos.filter((r): r is string => typeof r === "string" && r.length > 0) : [];
+      const expiresAt = Number(body.expiresAt);
+      if (!room || !Number.isSafeInteger(expiresAt)) return plain("Bad request", 400);
+      sql.exec("DELETE FROM subs WHERE room = ? OR until <= ?", room, now);
+      if (expiresAt > now) {
+        for (const repo of repos) {
+          sql.exec("INSERT OR REPLACE INTO subs (repo, room, until) VALUES (?, ?, ?)", repo.toLowerCase(), room, expiresAt);
+        }
+      }
+      await this.armAlarm();
+      return Response.json({ ok: true, count: repos.length });
+    }
+
+    if (url.pathname === "/active" && request.method === "POST") {
+      const body = (await request.json()) as { room?: string };
+      const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
+      if (!room) return plain("Bad request", 400);
+      sql.exec("DELETE FROM subs WHERE until <= ?", now);
+      const rows = sql.exec("SELECT repo, until FROM subs WHERE room = ? AND until > ?", room, now).toArray();
+      return Response.json({ repos: rows.map((r) => ({ repo: String(r.repo), until: Number(r.until) })) });
+    }
+
+    if (url.pathname === "/unsubscribe" && request.method === "POST") {
+      const body = (await request.json()) as { room?: string };
+      const room = typeof body.room === "string" && ROOM_NAME.test(body.room) ? body.room : "";
+      if (!room) return plain("Bad request", 400);
+      sql.exec("DELETE FROM subs WHERE room = ?", room);
+      await this.armAlarm();
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === "/route" && request.method === "POST") {
+      const body = (await request.json()) as { deliveryId?: string; repo?: string };
+      const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : "";
+      const repo = typeof body.repo === "string" ? body.repo.toLowerCase() : "";
+      if (!deliveryId || !repo) return plain("Bad request", 400);
+
+      sql.exec("DELETE FROM deliveries WHERE until <= ?", now);
+      const seen = sql.exec("SELECT 1 AS hit FROM deliveries WHERE delivery_id = ?", deliveryId).toArray();
+      if (seen.length > 0) {
+        return Response.json({ duplicate: true, rooms: [] });
+      }
+      sql.exec("INSERT OR REPLACE INTO deliveries (delivery_id, until) VALUES (?, ?)", deliveryId, now + GITHUB_DELIVERY_DEDUPE_TTL_MS);
+      // Cap stored delivery ids to bound SQLite growth under heavy bursts.
+      const countRow = sql.exec("SELECT COUNT(*) AS n FROM deliveries").one();
+      if (Number(countRow.n) > GITHUB_DELIVERY_DEDUPE_MAX) {
+        sql.exec(
+          "DELETE FROM deliveries WHERE delivery_id IN (SELECT delivery_id FROM deliveries ORDER BY until ASC LIMIT ?)",
+          Number(countRow.n) - GITHUB_DELIVERY_DEDUPE_MAX,
+        );
+      }
+
+      sql.exec("DELETE FROM subs WHERE until <= ?", now);
+      const rows = sql.exec("SELECT DISTINCT room FROM subs WHERE repo = ? AND until > ?", repo, now).toArray();
+      const rooms = rows.map((r) => String(r.room));
+      await this.armAlarm();
+      return Response.json({ duplicate: false, rooms });
+    }
+
+    return plain("Not found", 404);
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    this.ctx.storage.sql.exec("DELETE FROM subs WHERE until <= ?", now);
+    this.ctx.storage.sql.exec("DELETE FROM deliveries WHERE until <= ?", now);
+    await this.armAlarm();
+  }
+
+  private async armAlarm(): Promise<void> {
+    const subMin = this.ctx.storage.sql.exec("SELECT MIN(until) AS t FROM subs").one().t;
+    const delMin = this.ctx.storage.sql.exec("SELECT MIN(until) AS t FROM deliveries").one().t;
+    const times = [subMin, delMin].filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
+    else await this.ctx.storage.deleteAlarm();
+  }
+}
+
+/**
  * What each socket carries through hibernation. A phone's `ids` is `[conn 8][from 8]`, the prefix
  * the computer sees, and `at` is when it opened (milliseconds), to find the oldest. `notified` is set
  * once the other side has been told this socket is gone.
@@ -474,6 +636,7 @@ export class Room extends DurableObject<Env> {
   private readonly pending = new PendingRequests();
   private savedSeat?: SeatState | null;
   private savedRecovery?: RecoveryState | null;
+  private savedRoomName?: string | null;
   private holdTimer?: ReturnType<typeof setTimeout>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -484,14 +647,37 @@ export class Room extends DurableObject<Env> {
   }
 
   fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/github-deliver" && request.method === "POST") {
+      return this.deliverGitHubFrame(request);
+    }
     return this.ctx.blockConcurrencyWhile(() => this.upgrade(request));
+  }
+
+  private async deliverGitHubFrame(request: Request): Promise<Response> {
+    const frameText = await request.text();
+    const host = this.activeHost();
+    if (!host) return new Response(null, { status: 204 });
+    return sendText(host, frameText) ? new Response(null, { status: 202 }) : new Response(null, { status: 204 });
+  }
+
+  private async roomName(): Promise<string | null> {
+    if (this.savedRoomName !== undefined) return this.savedRoomName;
+    const stored = await this.ctx.storage.get<string>(ROOM_NAME_KEY);
+    this.savedRoomName = typeof stored === "string" && ROOM_NAME.test(stored) ? stored : null;
+    return this.savedRoomName;
   }
 
   private async upgrade(request: Request): Promise<Response> {
     const kind = request.headers.get(KIND_HEADER);
     const from = request.headers.get(FROM_HEADER) ?? "";
+    const room = request.headers.get(ROOM_NAME_HEADER) ?? "";
     if (request.headers.get("Upgrade") !== "websocket" || !/^[0-9a-f]{16}$/.test(from)) {
       return plain("Bad request", 400);
+    }
+    if (ROOM_NAME.test(room) && (await this.roomName()) !== room) {
+      await this.ctx.storage.put(ROOM_NAME_KEY, room);
+      this.savedRoomName = room;
     }
     this.expirePending();
     const pair = new WebSocketPair();
@@ -587,8 +773,15 @@ export class Room extends DurableObject<Env> {
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void> {
     this.expirePending();
-    // "ping" never gets here (auto-response). Any other text is ignored.
-    if (typeof message === "string" || ws.readyState !== OPEN) return;
+    if (ws.readyState !== OPEN) return;
+    if (typeof message === "string") {
+      // "ping" never gets here (auto-response). Only a host's signed github-subscribe JSON control message is handled.
+      const side = ws.deserializeAttachment() as Attachment | null;
+      if (side?.kind === "host" && !side.closing && message.length <= 64 * 1024 && message.startsWith("{")) {
+        return this.handleHostControl(ws, message);
+      }
+      return;
+    }
     const bytes = new Uint8Array(message);
     const side = ws.deserializeAttachment() as Attachment | null;
     if (message.byteLength > (side?.kind === "phone" ? MAX_PHONE_MESSAGE : MAX_MESSAGE)) return this.ctx.blockConcurrencyWhile(() => this.end(ws, 1009, "too big"));
@@ -634,6 +827,81 @@ export class Room extends DurableObject<Env> {
       // A view of the same bytes: the 8 are stripped without a copy.
       if (phone) send(phone, bytes.subarray(8));
     }
+  }
+
+  private async handleHostControl(ws: WebSocket, message: string): Promise<void> {
+    const room = await this.roomName();
+    if (!room) return;
+    const checked = await verifyGitHubSubscribe(message, room);
+    if (!checked.ok) {
+      sendText(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: checked.error }));
+      return;
+    }
+
+    // Reuse authorization only for repos whose existing verified subscription has not expired yet
+    // AND whose expiry covers the newly requested expiresAt (so renewal after TTL re-checks GitHub).
+    const router = this.env.GITHUB_ROUTER.getByName("all");
+    const cachedAllowed = new Set<string>();
+    if (checked.repos.length > 0) {
+      try {
+        const activeRes = await router.fetch(
+          new Request("https://github-router.internal/active", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ room }),
+          }),
+        );
+        if (activeRes.ok) {
+          const data = (await activeRes.json()) as { repos?: Array<{ repo: string; until: number }> };
+          const now = Date.now();
+          for (const entry of data.repos ?? []) {
+            if (entry.until > now && entry.until >= checked.expiresAt) {
+              cachedAllowed.add(entry.repo);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const { allowed, denied } = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
+      cachedAllowed,
+      apiBase: this.env.GITHUB_API_BASE || undefined,
+    });
+
+    const res = await router.fetch(
+      new Request("https://github-router.internal/subscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ room, repos: allowed, expiresAt: checked.expiresAt }),
+      }),
+    );
+    if (res.ok) {
+      sendText(
+        ws,
+        JSON.stringify({
+          type: "github-subscribed",
+          ok: true,
+          count: allowed.length,
+          allowed,
+          denied,
+          expiresAt: checked.expiresAt,
+        }),
+      );
+    } else {
+      sendText(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: "router_error" }));
+    }
+  }
+
+  private async clearGitHubSubscriptions(): Promise<void> {
+    const room = await this.roomName();
+    if (!room) return;
+    await this.env.GITHUB_ROUTER.getByName("all").fetch(
+      new Request("https://github-router.internal/unsubscribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ room }),
+      }),
+    ).catch(() => {});
   }
 
   private forwardRequest(ws: WebSocket, side: PhoneAttachment, bytes: Uint8Array): void | Promise<void> {
@@ -940,6 +1208,7 @@ export class Room extends DurableObject<Env> {
   private async failRecovery(): Promise<void> {
     if (await this.recovery()) await this.clearRecovery();
     await this.setSeat(null);
+    await this.clearGitHubSubscriptions();
     this.failPending();
   }
 
@@ -1023,6 +1292,7 @@ export class Room extends DurableObject<Env> {
       // What the phones still wait for will not be answered; they can try again at once. A v3
       // standby is already a usable seat, so its active peer disappearing is intentionally silent.
       for (const phone of this.open("phone")) if (phone !== ws) send(phone, Uint8Array.of(NOTICE_HOST_CLOSED));
+      if (!this.open("host").length) await this.clearGitHubSubscriptions();
     }
   }
 
@@ -1052,6 +1322,16 @@ function send(ws: WebSocket, data: Uint8Array): boolean {
     return true;
   } catch {
     // The socket closed between the check and the send.
+    return false;
+  }
+}
+
+function sendText(ws: WebSocket, data: string): boolean {
+  if (ws.readyState !== OPEN) return false;
+  try {
+    ws.send(data);
+    return true;
+  } catch {
     return false;
   }
 }

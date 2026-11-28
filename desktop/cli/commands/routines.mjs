@@ -547,6 +547,47 @@ export const routinesCommands = {
           context.print(res, (r) => "Imported workflow " + safe(r.workflow.name) + " (paused).");
         },
       },
+      deliveries: {
+        summary: "List recent GitHub webhook/poll deliveries recorded for a workflow",
+        usage: "botkins workflows deliveries <id> [--node <nodeId>] [--limit <n>]",
+        options: {
+          node: { type: "string", about: "Filter deliveries to one GitHub trigger node id" },
+          limit: { type: "string", about: "Maximum number of deliveries to return (1-200)" },
+        },
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          const nodeId = context.options.node || null;
+          const limit = context.options.limit ? Number(context.options.limit) : 50;
+          const rows = await context.client.call("workflows.deliveries", id, nodeId, limit);
+          context.print(rows, (list) =>
+            list.length
+              ? list
+                  .map(
+                    (d) =>
+                      `${d.outcome}${d.reason ? `/${d.reason}` : ""}\t${d.event}\t${d.repository || "-"}${d.number ? `#${d.number}` : ""}\t${d.deliveryId}`,
+                  )
+                  .join("\n")
+              : "No GitHub deliveries recorded yet.",
+          );
+        },
+      },
+      replay: {
+        summary: "Replay the last recorded GitHub event on a workflow",
+        usage: "botkins workflows replay <id> [--node <nodeId>]",
+        options: {
+          node: { type: "string", about: "Replay from a specific GitHub trigger node id" },
+        },
+        async run(context) {
+          const id = one(context, "Give the workflow id.");
+          const nodeId = context.options.node || null;
+          const res = await context.client.call("workflows.replay", id, nodeId);
+          context.print(
+            res,
+            (run) =>
+              `Replayed ${run.context?.event || "github"} (${run.context?.repository || "-"}${run.context?.number ? `#${run.context.number}` : ""}) -> run ${run.id} (${run.status}).`,
+          );
+        },
+      },
     },
   },
 };

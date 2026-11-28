@@ -1590,6 +1590,23 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     announce();
     push();
   });
+  link.on("relay", ({ connected }) => {
+    workspace.workflows.onRelayStateChanged(connected);
+  });
+  link.on("githubDelivery", (frame) => {
+    try {
+      workspace.workflows.receiveGithubDelivery(frame);
+    } catch (error) {
+      console.error("GitHub relay delivery:", error.message);
+    }
+  });
+  link.setGithubAuthProofProvider(async () => {
+    const token = await workspace.workflows.githubAuth?.getAuthToken?.();
+    return token ? { githubToken: token } : null;
+  });
+  workspace.workflows.setGithubReposListener((repos) => {
+    link.setGithubRepos(repos);
+  });
   // A phone switched a source on or off: the next turn's tools are read anew, and Settings looks again.
   link.on("tools", () => {
     phoneRevision++;

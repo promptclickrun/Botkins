@@ -436,11 +436,15 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
       sender: sender.login || "",
       ...extra,
     });
+    const objectKey = extra.objectKey || null;
+    const updatedAt = extra.updatedAt || item.updated_at || item.updatedAt || "";
     candidates.push({
       event: ev,
       payload: base,
       sender,
       author: item.user || item.author || {},
+      objectKey,
+      updatedAt,
     });
     const textForMention = extra.mentionText ?? `${item.title || ""}\n${item.body || ""}`;
     if (mentionHandles.length && textForMention) {
@@ -455,6 +459,8 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
           }),
           sender,
           author: item.user || item.author || {},
+          objectKey,
+          updatedAt,
         });
       }
     }
@@ -463,22 +469,29 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
   if (rawEvent === "issues" && payload.issue) {
     const issue = payload.issue;
     const common = { pullRequest: Boolean(issue.pull_request), itemType: "issue" };
-    if (action === "opened") pushWithMention("issue.opened", issue, common);
-    else if (action === "closed") pushWithMention("issue.closed", issue, { ...common, state: "closed" });
+    if (action === "opened") pushWithMention("issue.opened", issue, { ...common, objectKey: `issue:${issue.number}` });
+    else if (action === "closed") pushWithMention("issue.closed", issue, { ...common, state: "closed", objectKey: "close" });
+    else if (action === "reopened") pushWithMention("issue.opened", issue, { ...common, state: "open", objectKey: "reopen" });
     else if (action === "labeled") {
-      pushWithMention("issue.labeled", issue, { ...common, addedLabel: payload.label?.name || "" });
+      const lbl = payload.label?.name || "";
+      pushWithMention("issue.labeled", issue, { ...common, addedLabel: lbl, objectKey: lbl ? `label:${lbl.toLowerCase()}` : null });
     } else if (action === "assigned") {
-      pushWithMention("assigned", issue, common);
+      pushWithMention("assigned", issue, { ...common, objectKey: payload.assignee?.login ? `assign:${payload.assignee.login.toLowerCase()}` : null });
     }
   } else if (rawEvent === "pull_request" && payload.pull_request) {
     const pr = payload.pull_request;
     const common = { pullRequest: true, itemType: "pr" };
-    if (action === "opened") pushWithMention("pr.opened", pr, common);
+    if (action === "opened") pushWithMention("pr.opened", pr, { ...common, objectKey: `pr:${pr.number}` });
     else if (action === "synchronize" || action === "edited") pushWithMention("pr.updated", pr, common);
-    else if (action === "review_requested") pushWithMention("pr.reviewRequested", pr, common);
-    else if (action === "assigned") pushWithMention("assigned", pr, common);
-    else if (action === "closed" && pr.merged === true) {
-      pushWithMention("pr.merged", pr, { ...common, merged: true, state: "merged" });
+    else if (action === "review_requested") {
+      pushWithMention("pr.reviewRequested", pr, {
+        ...common,
+        objectKey: payload.requested_reviewer?.login ? `reviewer:${payload.requested_reviewer.login.toLowerCase()}` : null,
+      });
+    } else if (action === "assigned") {
+      pushWithMention("assigned", pr, { ...common, objectKey: payload.assignee?.login ? `assign:${payload.assignee.login.toLowerCase()}` : null });
+    } else if (action === "closed" && pr.merged === true) {
+      pushWithMention("pr.merged", pr, { ...common, merged: true, state: "merged", objectKey: "close" });
     }
   } else if (rawEvent === "pull_request_review" && payload.pull_request && payload.review) {
     if (action === "submitted") {
@@ -491,6 +504,8 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
         reviewBody: review.body || "",
         mentionText: review.body || "",
         author: review.user?.login || pr.user?.login || "",
+        objectKey: review.id ? `review:${review.id}` : null,
+        updatedAt: review.submitted_at || pr.updated_at || "",
       });
     }
   } else if (rawEvent === "issue_comment" && payload.issue && payload.comment) {
@@ -512,6 +527,8 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
           commentUrl: comment.html_url || "",
           mentionText: comment.body || "",
           author: comment.user?.login || "",
+          objectKey: comment.id ? `comment:${comment.id}` : null,
+          updatedAt: comment.updated_at || comment.created_at || "",
         },
       );
     }
@@ -528,6 +545,7 @@ export function normalizeRawGithubWebhook(rawEvent, payload = {}, options = {}) 
           baseBranch: pr.base?.ref || "",
           headSha: pr.head?.sha || suite.head_sha || "",
           checkConclusion: conclusion,
+          updatedAt: suite.updated_at || "",
         });
       }
     }

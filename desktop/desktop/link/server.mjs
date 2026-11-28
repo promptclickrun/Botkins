@@ -806,15 +806,31 @@ export class LinkHost extends EventEmitter {
       url: wanted.url,
       key: this.store.relayKey(),
       serve: (request) => this.serve({ ...request, via: "relay" }),
-      onChange: () => this.emit("status"),
+      onChange: (connected) => {
+        this.emit("status");
+        this.emit("relay", { connected });
+      },
       onTaken: () => this.emit("status"),
+      onGithubDelivery: (frame) => this.emit("githubDelivery", frame),
+      getGithubAuthProof: this._githubAuthProofProvider ?? null,
       log: (line) => this.log(line),
       WebSocket: this.relayOptions.WebSocket,
       timers: this.relayOptions.timers,
     });
     next.url = wanted.url;
+    if (this._githubRepos?.length) next.setGithubRepos(this._githubRepos);
     this.relayLink = next;
     next.start();
+  }
+  /** Updates the GitHub `owner/repo` subscriptions registered on the active relay connection. */
+  setGithubRepos(repos) {
+    this._githubRepos = Array.isArray(repos) ? [...repos] : [];
+    this.relayLink?.setGithubRepos(this._githubRepos);
+  }
+  /** Registers an async callback returning ephemeral GitHub read-access proof tokens for relay subscriptions. */
+  setGithubAuthProofProvider(fn) {
+    this._githubAuthProofProvider = typeof fn === "function" ? fn : null;
+    this.relayLink?.setGithubAuthProofProvider(this._githubAuthProofProvider);
   }
   /**
    * Changes the relay settings, saves them and applies them at once. `enabled` turns it on or off; `url` is

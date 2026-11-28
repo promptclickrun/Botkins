@@ -440,6 +440,24 @@ export class WorkflowGithubAuth {
   }
 
   /**
+   * Resolves a short-lived local GitHub read token (preferring `gh auth token`, falling back to
+   * `GH_TOKEN`/`GITHUB_TOKEN` env) used solely as a proof of repository read access when subscribing
+   * to the relay. Never persisted or logged.
+   */
+  async getAuthToken() {
+    const bin = this.findGh();
+    if (bin) {
+      const res = await this.execGh(bin, ["auth", "token"], { timeout: 6_000 });
+      if (res.ok) {
+        const tok = String(res.stdout || "").trim();
+        if (tok && !/\s/.test(tok)) return tok;
+      }
+    }
+    const envTok = String(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+    return envTok && !/\s/.test(envTok) ? envTok : null;
+  }
+
+  /**
    * Lists repository labels (up to 500) using local `gh api` pagination.
    * Used by the trigger label picker and GitHub output catalog validation.
    */
