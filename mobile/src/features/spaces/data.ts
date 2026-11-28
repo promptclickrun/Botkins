@@ -7,6 +7,7 @@ import { create } from "zustand";
 import type { PanelView, SpaceContent, SpaceSummary } from "@/link/types";
 import { useCapability, useOnline, usePart } from "@/state/hooks";
 import { api, attempt, boundApi } from "@/state/link";
+import { openPlace } from "@/features/all/open";
 import { DRAG } from "@/features/home/drag";
 import { runMarkSpacesRead } from "@/features/chat/unread";
 import { onComputerChange, showToast, useApp } from "@/state/store";
@@ -172,7 +173,8 @@ export function useArranging(spaces: SpaceSummary[]) {
 
 // The routes are new: typed routes learn them the next time Metro starts.
 export const openSpace = (id: string) => router.push(spaceRoute(id) as unknown as Href);
-export const openSpaces = () => router.push(spaceRoute() as unknown as Href);
+/** The list of spaces: its tab while Spaces is on the bar, otherwise its page. */
+export const openSpaces = () => openPlace("spaces");
 export const openShare = (id: string) => router.push(("/space/share?id=" + encodeURIComponent(id)) as unknown as Href);
 export const openNewPanel = (spaceId: string) => router.push(("/space/new-panel?spaceId=" + encodeURIComponent(spaceId)) as unknown as Href);
 export const openPanel = (spaceId: string, panelId: string) => router.push(spaceRoute(spaceId, panelId) as unknown as Href);

@@ -110,6 +110,8 @@ export default function RootLayout() {
             </Stack.Protected>
             <Stack.Protected guard={paired} redirectTo="/welcome">
               <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: screenBg } }} />
+              {/* A tab that is not on the bar, opened from All as a page (src/features/all/PlacePage.tsx). */}
+              <Stack.Screen name="place/[id]" />
               <Stack.Screen name="chat/[id]" dangerouslySingular={chatRouteId} />
               {/* Links from widgets, Live Activities and notifications (src/features/open): each hands over to a real screen at once. */}
               <Stack.Screen name="open/bot/[id]" options={{ headerShown: false, animation: "none" }} />

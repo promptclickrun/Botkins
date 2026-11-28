@@ -137,7 +137,7 @@ function Placeholder() {
  * them in comes first, as in the app on the computer; otherwise the three starters
  * (link-host/starters.mjs), each opening New bot filled in, or a bot of the person's own.
  */
-function FirstBot() {
+export function FirstBot() {
   const online = useApp((state) => state.link === "online");
   const canCreate = useCan("agents", "create");
   const [found, setFound] = useState(0);
@@ -193,7 +193,7 @@ function Starters() {
 }
 
 /** Settings, which is no tab: a button at the end of Home's top row. It carries the count of people asking to join the team. */
-function SettingsButton() {
+export function SettingsButton() {
   const theme = useTheme();
   const badge = badgeColors(theme);
   const asking = useApp((state) => {
