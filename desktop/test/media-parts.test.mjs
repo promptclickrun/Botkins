@@ -96,6 +96,17 @@ test("MEDIA: in a code block is never an attachment, and other paths stay links"
   assert.deepEqual(links(flat), [{ link: "/tmp/notes.txt" }]);
 });
 
+test("macOS Application Support and Windows bare MEDIA: lines with spaces render as media without raw text", () => {
+  const mac = "/Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png";
+  const win = "C:\\Users\\Alice Smith\\AppData\\Local\\Botkins\\shot 1.png";
+  const text = `Done.\nMEDIA: ${mac}\nMEDIA: ${win}`;
+  const flat = drawn(text, [mac, win]);
+  assert.deepEqual(media(flat), [mac, win]);
+  assert.ok(!shownText(flat).includes("MEDIA:"), "no raw MEDIA: lines remain: " + shownText(flat));
+  assert.ok(!shownText(flat).includes("Application Support"), "path remainder must not leak into text");
+  assert.ok(!shownText(flat).includes("Alice Smith"), "Windows path remainder must not leak into text");
+});
+
 test("mediaPlaces: only MEDIA: spans the computer knows, and `again` from the second place on", () => {
   const spans = [{ path: "/a.png", start: 30, end: 40, media: true }, { path: "/a.png", start: 0, end: 10, media: true }, { path: "/a.png", start: 50, end: 56 }, { path: "/b.png", start: 60, end: 70, media: true }];
   const places = mediaPlaces(spans, new Map([["/a.png", artifact("/a.png")]]));

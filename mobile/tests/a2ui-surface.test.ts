@@ -407,3 +407,36 @@ test("Mobile A2uiSurface dispatches callAgentFunction and responds to pendingRen
     "Pressing functionCall button should invoke callAgentFunction over Link",
   );
 });
+
+test("Mobile A2uiSurface maps primary, default, and borderless Button variants and child Text labels", async (t) => {
+  const calls = makeCalls();
+  const { A2uiSurface } = loadSurface(calls);
+
+  const surface: A2uiSurfaceData = {
+    surfaceId: "botkins-smoke-20261127",
+    version: "1.0",
+    components: [
+      { id: "root", component: "Row", children: ["b1", "b2", "b3"] },
+      { id: "b1", component: "Button", variant: "primary", child: "t1", action: { event: { name: "a1" } } },
+      { id: "t1", component: "Text", text: "Test A2UI click" },
+      { id: "b2", component: "Button", variant: "default", child: "t2", action: { event: { name: "a2" } } },
+      { id: "t2", component: "Text", text: "Default action" },
+      { id: "b3", component: "Button", variant: "borderless", child: "t3", action: { event: { name: "a3" } } },
+      { id: "t3", component: "Text", text: "Borderless action" },
+    ],
+    dataModel: {},
+  };
+
+  const screen = await mount(el(A2uiSurface, { chatId: "chat-1", surface, rich: true }));
+  t.after(screen.unmount);
+
+  const buttons = screen.root.root.findAllByType("Button" as never);
+  assert.deepEqual(
+    buttons.map((b) => [b.props.title, b.props.variant]),
+    [
+      ["Test A2UI click", "primary"],
+      ["Default action", "secondary"],
+      ["Borderless action", "ghost"],
+    ],
+  );
+});

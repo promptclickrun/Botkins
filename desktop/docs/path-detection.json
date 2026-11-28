@@ -5,8 +5,8 @@
     "A path is linked when it is absolute: POSIX with at least two parts (/Users/sam), in the home folder (~/notes.md), or Windows with a drive (C:\\Users\\sam, D:/work).",
     "A bare path starts at the start of the text, after white space, or after an opening bracket or quote, and runs to the next white space.",
     "Punctuation after a bare path belongs to the sentence: . , ; : ! ? ) ] } > and closing quotes are left out of the link. A slash at the end stays (a folder).",
-    "A path with spaces is linked only when it is written in quotes or backticks, or is a whole line of a code block. The quotes or backticks are not part of the link.",
-    "MEDIA: before a path (bare, or in quotes or backticks, with at most one space between) is an attachment: the link covers MEDIA: and the path.",
+    "A path with spaces is linked only when it is written in quotes or backticks, is a whole line of a code block, or is a bare MEDIA: line on its own.",
+    "MEDIA: before a path (bare, or in quotes or backticks, with at most one space between) is an attachment: the link covers MEDIA: and the path. On its own line, a bare MEDIA: path runs to the end of the line so paths with spaces (such as macOS Application Support or Windows user folders) stay whole.",
     "Inline code is a link only when the code is one whole path. Any other inline code is left alone, with whatever is in it.",
     "In a code block (between ``` or ~~~ lines) a line is a link only when the whole line is one path.",
     "Never linked: web and file URLs, network paths (//host/share, \\\\host\\share), relative paths, a slash inside a word (and/or, 1/2, km/h), a path with a . or .. part, a single-part POSIX path (/model, /tmp), and the target of a Markdown link."
@@ -175,6 +175,60 @@
           "text": "MEDIA: /Users/sam/out/clip.mp4",
           "path": "/Users/sam/out/clip.mp4",
           "media": true
+        }
+      ]
+    },
+    {
+      "name": "a bare MEDIA line with a macOS Application Support path containing spaces",
+      "text": "MEDIA: /Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png",
+      "links": [
+        {
+          "text": "MEDIA: /Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png",
+          "path": "/Users/gordieai/Library/Application Support/Botkins/data/files/04104688/botkins-a2ui-desktop.png",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a bare MEDIA line with a Windows path containing spaces",
+      "text": "MEDIA: C:\\Users\\Alice Smith\\AppData\\Local\\Botkins\\shot 1.png",
+      "links": [
+        {
+          "text": "MEDIA: C:\\Users\\Alice Smith\\AppData\\Local\\Botkins\\shot 1.png",
+          "path": "C:\\Users\\Alice Smith\\AppData\\Local\\Botkins\\shot 1.png",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a bare MEDIA line in a bullet list with spaces in the path",
+      "text": "- MEDIA: /Users/sam/My Pictures/final render.png",
+      "links": [
+        {
+          "text": "MEDIA: /Users/sam/My Pictures/final render.png",
+          "path": "/Users/sam/My Pictures/final render.png",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "a MEDIA attachment in backticks with spaces",
+      "text": "See MEDIA:`/Users/sam/My Pictures/sun set.jpg` here",
+      "links": [
+        {
+          "text": "MEDIA:`/Users/sam/My Pictures/sun set.jpg`",
+          "path": "/Users/sam/My Pictures/sun set.jpg",
+          "media": true
+        }
+      ]
+    },
+    {
+      "name": "prose with social media: is never treated as a MEDIA attachment",
+      "text": "Share on social media: /Users/sam/out/chart.png",
+      "links": [
+        {
+          "text": "/Users/sam/out/chart.png",
+          "path": "/Users/sam/out/chart.png"
         }
       ]
     },

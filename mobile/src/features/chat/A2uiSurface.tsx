@@ -1234,7 +1234,7 @@ export function A2uiSurface({ chatId, surface, rich, onOpenChat, onAction, onFun
         );
       }
       case "Button": {
-        const variant = comp.variant === "primary" ? "primary" : "secondary";
+        const variant = comp.variant === "primary" ? "primary" : comp.variant === "borderless" ? "ghost" : "secondary";
         const label = typeof comp.child === "string" ? labelOfChild(comp.child, ctx) : "";
         const checkErrs = evaluateChecks(comp, dataModel, ctx);
         const disabled = busyId !== null || checkErrs.length > 0;
