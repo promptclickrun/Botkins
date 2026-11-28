@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -11,8 +12,10 @@ import {
   Clock,
   Compass,
   Copy,
+  Ellipsis,
   ExternalLink,
   HardDrive,
+  ImageUp,
   Laptop,
   LogOut,
   Monitor,
@@ -26,9 +29,21 @@ import {
   X,
 } from "lucide-react";
 import type { ProfileState, State } from "./types";
+import { AVATAR_TYPES } from "./avatarImage";
+import { PersonBadge } from "./PersonBadge";
 import { Group, errorText } from "./SettingsRows";
-import { YourPicture } from "./YourPicture";
+import { YourPicture, useDesktopPicture } from "./YourPicture";
 import { WelcomeFrame, WelcomeLogo } from "./Welcome";
+import {
+  confirmDeleteProfile,
+  confirmDisconnectHost,
+  confirmSignOut,
+  confirmRevokeDevice,
+  desktopHostStatus,
+  desktopPendingBanner,
+  desktopProfileSummary,
+  orderDesktopDevices,
+} from "./profileLogic";
 import {
   canContinueWithoutProfile,
   nextAutoExpandState,
@@ -42,20 +57,6 @@ import {
   type WizardStep,
 } from "./profileWizard";
 import "./profile.css";
-
-const PROFILE_AVATARS = ["", "🌱", "🌊", "🌙", "☀️", "🦊", "🐈", "🌻", "🪐"] as const;
-
-const AVATAR_NAMES: Record<string, string> = {
-  "": "No avatar",
-  "🌱": "Seedling",
-  "🌊": "Wave",
-  "🌙": "Crescent moon",
-  "☀️": "Sun",
-  "🦊": "Fox",
-  "🐈": "Cat",
-  "🌻": "Sunflower",
-  "🪐": "Ringed planet",
-};
 
 const WIZARD_STEPS: ReadonlyArray<{ id: WizardStep; label: string }> = [
   { id: "intro", label: "Overview" },
@@ -676,22 +677,54 @@ function ProfileWizard({
   );
 }
 
+type ProfileSubView = "index" | "computers" | "devices" | "delete";
+
 function SignedInProfile({ state }: { state: State }) {
   const profile = state.profile!;
   const identity = profile.profile!;
+  const pic = useDesktopPicture(state);
+  const [view, setView] = useState<ProfileSubView>("index");
+  const [editingName, setEditingName] = useState(false);
   const [profileName, setProfileName] = useState(identity.name);
-  const [profileAvatar, setProfileAvatar] = useState(identity.avatar ?? "");
+  const [photoMenuOpen, setPhotoMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [deleteEmail, setDeleteEmail] = useState("");
   const [approvalCodes, setApprovalCodes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const avatarRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const photoMenuRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setProfileName(identity.name);
-    setProfileAvatar(identity.avatar ?? "");
-  }, [identity.profileId, identity.name, identity.avatar]);
+  }, [identity.profileId, identity.name]);
+
+  // Dismiss popovers on outside click or Escape.
+  useEffect(() => {
+    if (!photoMenuOpen && !moreMenuOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (photoMenuOpen && photoMenuRef.current && target && !photoMenuRef.current.contains(target)) {
+        setPhotoMenuOpen(false);
+      }
+      if (moreMenuOpen && moreMenuRef.current && target && !moreMenuRef.current.contains(target)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPhotoMenuOpen(false);
+        setMoreMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [photoMenuOpen, moreMenuOpen]);
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -706,383 +739,649 @@ function SignedInProfile({ state }: { state: State }) {
     }
   };
 
-  const hasIdentityChanges =
-    profileName.trim() !== identity.name || profileAvatar !== (identity.avatar ?? "");
+  const pairedServerIds = useMemo(
+    () => new Set((state.remote?.hosts ?? []).map((h) => h.id)),
+    [state.remote?.hosts],
+  );
+  const localServerId = state.remote?.unifiedHosts?.find((h) => h.local)?.id;
 
-  const handleAvatarKeyDown = (e: KeyboardEvent<HTMLButtonElement>, idx: number) => {
-    const count = PROFILE_AVATARS.length;
-    let nextIdx: number | null = null;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") nextIdx = (idx + 1) % count;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") nextIdx = (idx - 1 + count) % count;
-    else if (e.key === "Home") nextIdx = 0;
-    else if (e.key === "End") nextIdx = count - 1;
-    if (nextIdx === null) return;
+  const summary = useMemo(
+    () =>
+      desktopProfileSummary({
+        hosts: profile.hosts,
+        devices: profile.devices,
+        pairedServerIds,
+        localServerId,
+      }),
+    [profile.hosts, profile.devices, pairedServerIds, localServerId],
+  );
+
+  const orderedDevices = useMemo(() => orderDesktopDevices(profile.devices), [profile.devices]);
+  const pendingBanner = useMemo(() => desktopPendingBanner(profile.pendingDevices), [profile.pendingDevices]);
+
+  const handleSaveName = (e: FormEvent) => {
     e.preventDefault();
-    setProfileAvatar(PROFILE_AVATARS[nextIdx]);
-    avatarRefs.current[nextIdx]?.focus();
+    const trimmed = profileName.trim();
+    if (busy || !trimmed) return;
+    void run(async () => {
+      await window.botkins.profileUpdate(trimmed, identity.avatar ?? "");
+      setEditingName(false);
+      setNote("Profile name updated.");
+    });
   };
 
-  return (
-    <div className="profile-root profile-page">
-      {(error || note) && (
-        <div className="profile-feedback-stack">
-          <ProfileAlert message={error} />
-          {note && (
-            <div className="profile-notice is-success" role="status" aria-live="polite">
-              <CheckCircle2 size={16} aria-hidden="true" />
-              <span>{note}</span>
-            </div>
-          )}
+  const handleSignOut = () => {
+    confirmSignOut((msg) => window.confirm(msg), () => void run(() => window.botkins.profileSignOut()));
+  };
+
+  const handleDisconnectHost = () => {
+    confirmDisconnectHost((msg) => window.confirm(msg), () => void run(() => window.botkins.profileDisconnect()));
+  };
+
+  const handleRevokeDevice = (device: { id: string; current?: boolean }) => {
+    confirmRevokeDevice(device, (msg) => window.confirm(msg), (id) => void run(() => window.botkins.profileRevoke(id)));
+  };
+
+  const handleDeleteSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const outcome = confirmDeleteProfile(
+      deleteEmail,
+      identity.email,
+      (msg) => window.confirm(msg),
+      (email) => void run(() => window.botkins.profileDeleteAccount(email)),
+    );
+    if (!outcome.ok && outcome.error) setError(outcome.error);
+  };
+
+  const handleOpenHost = (host: ProfileState["hosts"][number]) => {
+    void run(async () => {
+      const result = pairedServerIds.has(host.serverId)
+        ? { id: host.serverId }
+        : await window.botkins.profileConnect(host.serverId);
+      await window.botkins.useRemoteHost(result.id);
+      setNote(`Connected to ${host.name}.`);
+    });
+  };
+
+  const feedbackBanner = (error || pic.error || note) && (
+    <div className="profile-feedback-stack">
+      <ProfileAlert message={error || pic.error} />
+      {note && (
+        <div className="profile-notice is-success" role="status" aria-live="polite">
+          <CheckCircle2 size={16} aria-hidden="true" />
+          <span>{note}</span>
         </div>
       )}
+    </div>
+  );
 
-      <Group
-        title="Your profile"
-        footer="Your profile account is separate from each computer's local bots and chats."
-      >
-        <div className="profile-account-header">
-          <span className="profile-avatar-badge" aria-hidden="true">
-            {identity.avatar || <UserRound size={24} />}
-          </span>
-          <div className="profile-account-info">
-            <div className="profile-account-name-row">
-              <h3 className="profile-account-name">{identity.name}</h3>
-              <span className="set-pill ok">Signed in</span>
-            </div>
-            <span className="profile-account-email">{identity.email || "Signed in with passkey"}</span>
-          </div>
-          <div className="set-control">
-            <button
-              type="button"
-              className="set-button"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await window.botkins.profileRefresh();
-                  setNote("Profile refreshed.");
-                })
-              }
-            >
-              <RefreshCw size={14} aria-hidden="true" />
-              <span>Refresh</span>
-            </button>
-          </div>
+  // ------------------------------------------------------------------ Sub-view: Computers
+  if (view === "computers") {
+    return (
+      <div className="profile-root profile-page">
+        <div className="profile-subhead">
+          <button type="button" className="profile-back-btn" onClick={() => { setError(""); setNote(""); setView("index"); }}>
+            <ArrowLeft size={15} aria-hidden="true" />
+            <span>Profile</span>
+          </button>
+          <button
+            type="button"
+            className="set-button"
+            disabled={busy}
+            onClick={() => void run(async () => { await window.botkins.profileRefresh(); setNote("Computers refreshed."); })}
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            <span>Refresh</span>
+          </button>
         </div>
 
-        <form
-          className="profile-edit-body"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (busy || !profileName.trim()) return;
-            void run(async () => {
-              await window.botkins.profileUpdate(profileName.trim(), profileAvatar.trim());
-              setNote("Profile identity updated.");
-            });
-          }}
-        >
-          <div className="profile-field">
-            <label htmlFor="profile-name">Profile name</label>
-            <input
-              id="profile-name"
-              className="profile-field-input"
-              value={profileName}
-              maxLength={60}
-              onChange={(e) => setProfileName(e.target.value)}
-            />
-            <span className="profile-field-hint">Shown to people approving or pairing this device.</span>
-          </div>
+        <div className="profile-sub-title">
+          <h2>Computers</h2>
+          <p>{profile.hosts.length === 1 ? "1 in your profile" : `${profile.hosts.length} in your profile`}</p>
+        </div>
 
-          <div className="profile-field">
-            <label id="profile-avatar-label">Avatar</label>
-            <div className="profile-avatar-grid" role="radiogroup" aria-labelledby="profile-avatar-label">
-              {PROFILE_AVATARS.map((avatar, idx) => {
-                const selected = profileAvatar === avatar;
-                const label = AVATAR_NAMES[avatar] || avatar;
-                return (
-                  <button
-                    key={avatar || "none"}
-                    ref={(el) => {
-                      avatarRefs.current[idx] = el;
-                    }}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    aria-label={label}
-                    title={label}
-                    tabIndex={selected ? 0 : -1}
-                    className="profile-avatar-tile"
-                    onClick={() => setProfileAvatar(avatar)}
-                    onKeyDown={(e) => handleAvatarKeyDown(e, idx)}
-                  >
-                    {avatar ? avatar : <UserRound size={18} aria-hidden="true" />}
-                  </button>
-                );
-              })}
+        {feedbackBanner}
+
+        <Group footer="Offline computers remain listed and will retry binding when they are reachable.">
+          {profile.hosts.length ? (
+            profile.hosts.map((host) => {
+              const isLocal = Boolean(localServerId && host.serverId === localServerId);
+              const isPaired = isLocal || pairedServerIds.has(host.serverId);
+              const status = desktopHostStatus(host, isPaired);
+              return (
+                <div className="set-row" key={host.serverId}>
+                  <div className="profile-row-main">
+                    <span
+                      className={`profile-row-icon${host.member ? " is-accent" : status.kind === "ready" ? " is-accent" : ""}`}
+                      aria-hidden="true"
+                    >
+                      {host.member ? <Users size={16} /> : <Monitor size={16} />}
+                    </span>
+                    <div className="set-label">
+                      <span className="set-name">{host.name}</span>
+                      <small>{status.subtitle}</small>
+                    </div>
+                  </div>
+                  <div className="set-control">
+                    <span className={`set-pill ${status.pillClass}`}>{status.label}</span>
+                    {!isLocal && host.hosts.length > 0 && (
+                      <button
+                        type="button"
+                        className="set-button"
+                        disabled={busy}
+                        onClick={() => handleOpenHost(host)}
+                      >
+                        {isPaired ? "Open" : "Enroll"}
+                      </button>
+                    )}
+                    {isLocal && !profile.localDisconnected && (
+                      <button
+                        type="button"
+                        className="set-button danger"
+                        disabled={busy}
+                        onClick={handleDisconnectHost}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="profile-empty-row">
+              <span className="profile-row-icon" aria-hidden="true">
+                <Monitor size={16} />
+              </span>
+              <span>No computers yet. Sign in on another computer to add it to your directory.</span>
             </div>
-            <span className="profile-field-hint">Optional emoji shared with your profile devices.</span>
-          </div>
+          )}
+        </Group>
 
-          <div className="profile-footer end">
-            <button
-              type="submit"
-              className="profile-btn-primary"
-              disabled={busy || !profileName.trim() || !hasIdentityChanges}
-            >
-              Save profile
-            </button>
-          </div>
-        </form>
-      </Group>
-
-      <YourPicture state={state} />
-
-      <Group
-        title="Computers"
-        footer="Offline computers remain listed and will retry binding when they are reachable."
-      >
-        {profile.hosts.length ? (
-          profile.hosts.map((host) => (
-            <div className="set-row" key={host.serverId}>
+        {profile.localDisconnected && (
+          <Group
+            title="This computer"
+            footer="This computer was removed from your profile directory. Reconnect it so your other devices can find it."
+          >
+            <div className="set-row">
               <div className="profile-row-main">
-                <span className={`profile-row-icon${host.hosts.length ? " is-accent" : ""}`} aria-hidden="true">
-                  {host.member ? <Users size={16} /> : <Monitor size={16} />}
+                <span className="profile-row-icon is-warning" aria-hidden="true">
+                  <Laptop size={16} />
                 </span>
                 <div className="set-label">
-                  <span className="set-name">{host.name}</span>
-                  <small>
-                    {host.hosts.length ? host.hosts.join(" · ") : "Offline or unavailable"}
-                  </small>
+                  <span className="set-name">Disconnected from directory</span>
+                  <small>Other devices cannot find this computer through your profile.</small>
                 </div>
               </div>
               <div className="set-control">
-                {host.member && <span className="set-pill">Team member</span>}
-                <span className={`set-pill${host.hosts.length ? " ok" : ""}`}>
-                  {host.hosts.length ? "Reachable" : "Offline"}
-                </span>
+                <button
+                  type="button"
+                  className="set-button primary"
+                  disabled={busy}
+                  onClick={() => void run(() => window.botkins.profileReconnect())}
+                >
+                  Connect to profile
+                </button>
               </div>
             </div>
-          ))
-        ) : (
-          <div className="profile-empty-row">
-            <span className="profile-row-icon" aria-hidden="true">
-              <Monitor size={16} />
-            </span>
-            <span>No computers yet. Sign in on another computer to add it to your directory.</span>
-          </div>
+          </Group>
         )}
-      </Group>
+      </div>
+    );
+  }
 
-      <Group
-        title="Trusted devices"
-        footer="Approve a device only when you recognize its short code. Revoking removes its profile access without unpairing local computers."
-      >
-        {profile.devices.map((device) => (
-          <div className="set-row" key={device.id}>
-            <div className="profile-row-main">
-              <span className={`profile-row-icon${device.current ? " is-success" : ""}`} aria-hidden="true">
+  // ------------------------------------------------------------------ Sub-view: Devices
+  if (view === "devices") {
+    return (
+      <div className="profile-root profile-page">
+        <div className="profile-subhead">
+          <button type="button" className="profile-back-btn" onClick={() => { setError(""); setNote(""); setView("index"); }}>
+            <ArrowLeft size={15} aria-hidden="true" />
+            <span>Profile</span>
+          </button>
+          <button
+            type="button"
+            className="set-button"
+            disabled={busy}
+            onClick={() => void run(async () => { await window.botkins.profileRefresh(); setNote("Devices refreshed."); })}
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        <div className="profile-sub-title">
+          <h2>Devices</h2>
+          <p>Can use your profile</p>
+        </div>
+
+        {feedbackBanner}
+
+        {profile.pendingDevices.length > 0 && (
+          <Group title="Waiting for you" footer="Approve a device only when you recognize its short code.">
+            {profile.pendingDevices.map((device) => {
+              const deviceCode = approvalCodes[device.id] ?? "";
+              return (
+                <div className="set-row profile-pending-row" key={device.id}>
+                  <div className="profile-row-main">
+                    <span className="profile-row-icon is-warning" aria-hidden="true">
+                      <Clock size={16} />
+                    </span>
+                    <div className="set-label">
+                      <span className="set-name">{device.label || "Another device"}</span>
+                      <small>{device.code ? `Code ${device.code}` : "Waiting for approval"}</small>
+                    </div>
+                  </div>
+                  <form
+                    className="profile-approve-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const trimmed = deviceCode.trim();
+                      if (busy || !trimmed) return;
+                      void run(async () => {
+                        await window.botkins.profileApprove(device.id, trimmed);
+                        setApprovalCodes((prev) => {
+                          const next = { ...prev };
+                          delete next[device.id];
+                          return next;
+                        });
+                        setNote(`Approved ${device.label}.`);
+                      });
+                    }}
+                  >
+                    <input
+                      className="profile-approve-input"
+                      aria-label={"Short code for " + device.label}
+                      value={deviceCode}
+                      onChange={(e) =>
+                        setApprovalCodes((prev) => ({
+                          ...prev,
+                          [device.id]: e.target.value,
+                        }))
+                      }
+                      placeholder="Short code"
+                      autoComplete="off"
+                    />
+                    <button type="submit" className="set-button primary" disabled={busy || !deviceCode.trim()}>
+                      Approve
+                    </button>
+                  </form>
+                </div>
+              );
+            })}
+          </Group>
+        )}
+
+        <Group
+          title="Trusted"
+          footer="Revoking a device removes its profile access without unpairing local computers."
+        >
+          {orderedDevices.length ? (
+            orderedDevices.map((device) => (
+              <div className="set-row" key={device.id}>
+                <div className="profile-row-main">
+                  <span className={`profile-row-icon${device.current ? " is-success" : ""}`} aria-hidden="true">
+                    <Laptop size={16} />
+                  </span>
+                  <div className="set-label">
+                    <span className="set-name">{device.label || "Device"}</span>
+                    <small>{device.current ? "This device" : "Trusted device"}</small>
+                  </div>
+                </div>
+                <div className="set-control">
+                  {!device.current && (
+                    <button
+                      type="button"
+                      className="set-button danger"
+                      disabled={busy}
+                      onClick={() => handleRevokeDevice(device)}
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="profile-empty-row">
+              <span className="profile-row-icon" aria-hidden="true">
                 <Laptop size={16} />
               </span>
-              <div className="set-label">
-                <span className="set-name">{device.label}</span>
-                <small>{device.current ? "This device" : device.id}</small>
+              <span>No trusted devices listed yet.</span>
+            </div>
+          )}
+        </Group>
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------------ Sub-view: Delete profile
+  if (view === "delete") {
+    return (
+      <div className="profile-root profile-page">
+        <div className="profile-subhead">
+          <button type="button" className="profile-back-btn" onClick={() => { setError(""); setDeleteEmail(""); setView("index"); }}>
+            <ArrowLeft size={15} aria-hidden="true" />
+            <span>Profile</span>
+          </button>
+        </div>
+
+        {feedbackBanner}
+
+        <section className="profile-danger-section" aria-labelledby="profile-danger-heading">
+          <h3 id="profile-danger-heading" className="profile-danger-heading">
+            Delete profile
+          </h3>
+          <div className="profile-danger-card">
+            <div className="profile-danger-banner">
+              <AlertTriangle size={17} aria-hidden="true" />
+              <div className="profile-danger-banner-copy">
+                <strong>Delete Botkins profile?</strong>
+                <small>
+                  This permanently deletes your hosted Botkins profile, its host directory and trusted devices. Local
+                  bots, chats, and unrelated manual pairings stay on this computer.
+                </small>
               </div>
             </div>
-            <div className="set-control">
-              {device.current ? (
-                <span className="set-pill ok">Current</span>
-              ) : (
+            <form className="profile-danger-body" onSubmit={handleDeleteSubmit}>
+              <div className="profile-field">
+                <label htmlFor="profile-delete-email">Confirm verified email</label>
+                <input
+                  id="profile-delete-email"
+                  className="profile-field-input"
+                  type="email"
+                  maxLength={254}
+                  value={deleteEmail}
+                  placeholder={identity.email || "you@example.com"}
+                  onChange={(e) => setDeleteEmail(e.target.value)}
+                  autoFocus
+                />
+                <span className="profile-field-hint">
+                  Type <strong>{identity.email || "your signed-in email"}</strong> to permanently delete this profile.
+                </span>
+              </div>
+              <div className="profile-danger-actions">
                 <button
                   type="button"
                   className="set-button"
                   disabled={busy}
-                  onClick={() => void run(() => window.botkins.profileRevoke(device.id))}
+                  onClick={() => {
+                    setDeleteEmail("");
+                    setView("index");
+                  }}
                 >
-                  Revoke
+                  Cancel
                 </button>
-              )}
-            </div>
-          </div>
-        ))}
-
-        {profile.pendingDevices.map((device) => {
-          const deviceCode = approvalCodes[device.id] ?? "";
-          return (
-            <div className="set-row profile-pending-row" key={device.id}>
-              <div className="profile-row-main">
-                <span className="profile-row-icon is-warning" aria-hidden="true">
-                  <Clock size={16} />
-                </span>
-                <div className="set-label">
-                  <span className="set-name">{device.label}</span>
-                  <small>Waiting for approval</small>
-                </div>
+                <button
+                  type="submit"
+                  className="profile-btn-danger"
+                  disabled={busy || !deleteEmail.trim()}
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                  <span>Delete profile</span>
+                </button>
               </div>
-              <form
-                className="profile-approve-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const trimmed = deviceCode.trim();
-                  if (busy || !trimmed) return;
+            </form>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  // ------------------------------------------------------------------ Index view
+  return (
+    <div className="profile-root profile-page">
+      {/* Hidden file picker for photo menu */}
+      <input
+        ref={pic.inputRef}
+        type="file"
+        accept={AVATAR_TYPES}
+        hidden
+        aria-label="Choose a picture"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          pic.handleFile(file);
+        }}
+      />
+
+      {/* Top right ••• menu */}
+      <div className="profile-index-bar">
+        <div className="profile-menu-anchor" ref={moreMenuRef}>
+          <button
+            type="button"
+            className="profile-icon-btn"
+            aria-label="More profile options"
+            aria-haspopup="menu"
+            aria-expanded={moreMenuOpen}
+            disabled={busy}
+            onClick={() => setMoreMenuOpen((open) => !open)}
+          >
+            <Ellipsis size={18} aria-hidden="true" />
+          </button>
+          {moreMenuOpen && (
+            <div className="profile-popover" role="menu" aria-label="Profile options">
+              <button
+                type="button"
+                role="menuitem"
+                className="profile-popover-item"
+                disabled={busy}
+                onClick={() => {
+                  setMoreMenuOpen(false);
                   void run(async () => {
-                    await window.botkins.profileApprove(device.id, trimmed);
-                    setApprovalCodes((prev) => {
-                      const next = { ...prev };
-                      delete next[device.id];
-                      return next;
-                    });
-                    setNote(`Approved ${device.label}.`);
+                    await window.botkins.profileRefresh();
+                    setNote("Profile refreshed.");
                   });
                 }}
               >
-                <input
-                  className="profile-approve-input"
-                  aria-label={"Short code for " + device.label}
-                  value={deviceCode}
-                  onChange={(e) =>
-                    setApprovalCodes((prev) => ({
-                      ...prev,
-                      [device.id]: e.target.value,
-                    }))
-                  }
-                  placeholder="Short code"
-                  autoComplete="off"
-                />
-                <button type="submit" className="set-button primary" disabled={busy || !deviceCode.trim()}>
-                  Approve
+                <RefreshCw size={15} aria-hidden="true" />
+                <span>Refresh</span>
+              </button>
+              <div className="profile-popover-info" role="menuitem" aria-disabled="true">
+                <strong>Email</strong>
+                <small>{identity.email || "No email on file"}</small>
+              </div>
+              <div className="profile-popover-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                className="profile-popover-item is-danger"
+                disabled={busy}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setError("");
+                  setNote("");
+                  setView("delete");
+                }}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                <span>Delete profile…</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Identity hero */}
+      <div className="profile-hero">
+        <div className="profile-menu-anchor" ref={photoMenuRef}>
+          <button
+            type="button"
+            className="profile-hero-avatar-btn"
+            aria-label={pic.avatar ? "Change your photo" : "Add a photo"}
+            aria-haspopup="menu"
+            aria-expanded={photoMenuOpen}
+            disabled={busy || pic.busy}
+            onClick={() => setPhotoMenuOpen((open) => !open)}
+          >
+            <PersonBadge
+              person={{ id: pic.me, name: identity.name, avatar: pic.avatar, emoji: pic.avatar ? undefined : identity.avatar }}
+              size={88}
+              className="profile-hero-badge"
+            />
+            <span className="profile-hero-cam" aria-hidden="true">
+              <Camera size={15} />
+            </span>
+          </button>
+          {photoMenuOpen && (
+            <div className="profile-popover profile-popover-center" role="menu" aria-label="Your picture">
+              <button
+                type="button"
+                role="menuitem"
+                className="profile-popover-item"
+                disabled={pic.busy}
+                onClick={() => {
+                  setPhotoMenuOpen(false);
+                  pic.openPicker();
+                }}
+              >
+                <ImageUp size={15} aria-hidden="true" />
+                <span>Choose photo…</span>
+              </button>
+              {pic.avatar && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="profile-popover-item is-danger"
+                  disabled={pic.busy}
+                  onClick={() => {
+                    setPhotoMenuOpen(false);
+                    pic.removeWithConfirm();
+                  }}
+                >
+                  <Trash2 size={15} aria-hidden="true" />
+                  <span>Remove photo</span>
                 </button>
-              </form>
+              )}
             </div>
-          );
-        })}
-
-        {!profile.devices.length && !profile.pendingDevices.length && (
-          <div className="profile-empty-row">
-            <span className="profile-row-icon" aria-hidden="true">
-              <Laptop size={16} />
-            </span>
-            <span>No trusted devices listed yet.</span>
-          </div>
-        )}
-      </Group>
-
-      <Group
-        title="This computer"
-        footer="Disconnecting removes only this computer from the hosted directory. It does not sign out the account or delete local bots and chats."
-      >
-        <div className="set-row">
-          <div className="profile-row-main">
-            <span
-              className={`profile-row-icon ${profile.localDisconnected ? "is-warning" : "is-success"}`}
-              aria-hidden="true"
-            >
-              <Laptop size={16} />
-            </span>
-            <div className="set-label">
-              <span className="set-name">
-                {profile.localDisconnected ? "Disconnected from directory" : "Connected to directory"}
-              </span>
-              <small>
-                {profile.localDisconnected
-                  ? "Other devices cannot find this computer through your profile."
-                  : "Other signed-in devices can find and reconnect to this computer."}
-              </small>
-            </div>
-          </div>
-          <div className="set-control">
-            {profile.localDisconnected ? (
-              <button
-                type="button"
-                className="set-button primary"
-                disabled={busy}
-                onClick={() => void run(() => window.botkins.profileReconnect())}
-              >
-                Connect this host to profile
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="set-button"
-                disabled={busy}
-                onClick={() => void run(() => window.botkins.profileDisconnect())}
-              >
-                Disconnect this host from profile
-              </button>
-            )}
-          </div>
+          )}
         </div>
 
-        <div className="set-row profile-signout-row">
-          <div className="profile-row-main">
-            <span className="profile-row-icon" aria-hidden="true">
-              <LogOut size={16} />
-            </span>
-            <div className="set-label">
-              <span className="set-name">Sign out on this computer</span>
-              <small>Local bots, chats, and unrelated manual pairings stay on this computer.</small>
-            </div>
-          </div>
-          <div className="set-control">
+        <h2 className="profile-hero-name">{identity.name}</h2>
+        <p className="profile-hero-sub">Signed in with a passkey</p>
+
+        {editingName ? (
+          <form className="profile-inline-name-form" onSubmit={handleSaveName}>
+            <input
+              className="profile-field-input"
+              aria-label="Profile name"
+              value={profileName}
+              maxLength={60}
+              onChange={(e) => setProfileName(e.target.value)}
+              autoFocus
+            />
+            <button type="submit" className="set-button primary" disabled={busy || !profileName.trim()}>
+              Save
+            </button>
             <button
               type="button"
               className="set-button"
               disabled={busy}
-              onClick={() => void run(() => window.botkins.profileSignOut())}
+              onClick={() => {
+                setProfileName(identity.name);
+                setEditingName(false);
+              }}
             >
-              Sign out of profile
+              Cancel
             </button>
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="profile-hero-edit"
+            disabled={busy}
+            onClick={() => setEditingName(true)}
+          >
+            Edit name
+          </button>
+        )}
+      </div>
+
+      {feedbackBanner}
+
+      {/* Pending approvals banner — only when pendingDevices is non-empty */}
+      {pendingBanner && (
+        <div className="profile-pending-banner" role="status">
+          <div className="profile-pending-banner-copy">
+            <strong>{pendingBanner.title}</strong>
+            <small>{pendingBanner.subtitle}</small>
           </div>
+          <button
+            type="button"
+            className="profile-pending-review-btn"
+            onClick={() => setView("devices")}
+          >
+            Review
+          </button>
         </div>
+      )}
+
+      {/* Two-row index */}
+      <Group
+        title="Your profile"
+        footer="Your profile lets your devices find your computers and lets your bots know it's you."
+      >
+        <button
+          type="button"
+          className="set-row profile-index-row"
+          onClick={() => setView("computers")}
+        >
+          <div className="profile-row-main">
+            <span className="profile-row-icon is-accent" aria-hidden="true">
+              <Monitor size={16} />
+            </span>
+            <div className="set-label">
+              <span className="set-name">Computers</span>
+              <small>{summary.computersSubtitle}</small>
+            </div>
+          </div>
+          <div className="profile-index-trailing">
+            <span className="profile-index-count">{summary.computersCount}</span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="set-row profile-index-row"
+          onClick={() => setView("devices")}
+        >
+          <div className="profile-row-main">
+            <span className="profile-row-icon is-success" aria-hidden="true">
+              <ShieldCheck size={16} />
+            </span>
+            <div className="set-label">
+              <span className="set-name">Trusted devices</span>
+              <small>{summary.devicesSubtitle}</small>
+            </div>
+          </div>
+          <div className="profile-index-trailing">
+            <span className="profile-index-count">{summary.devicesCount}</span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </div>
+        </button>
       </Group>
 
-      <section className="profile-danger-section" aria-labelledby="profile-danger-heading">
-        <h3 id="profile-danger-heading" className="profile-danger-heading">
-          Danger zone
-        </h3>
-        <div className="profile-danger-card">
-          <div className="profile-danger-banner">
-            <AlertTriangle size={17} aria-hidden="true" />
-            <div className="profile-danger-banner-copy">
-              <strong>Delete profile</strong>
-              <small>
-                This permanently deletes your hosted Botkins profile and computer directory. Local bots, chats, and
-                unrelated manual pairings stay on this computer.
-              </small>
+      {/* Bottom group: Sign out */}
+      <Group>
+        <button
+          type="button"
+          className="set-row profile-index-row is-danger"
+          disabled={busy}
+          onClick={handleSignOut}
+        >
+          <div className="profile-row-main">
+            <span className="profile-row-icon is-danger" aria-hidden="true">
+              <LogOut size={16} />
+            </span>
+            <div className="set-label">
+              <span className="set-name">Sign out</span>
+              <small>Local bots, chats, and unrelated pairings stay on this computer</small>
             </div>
           </div>
-          <div className="profile-danger-body">
-            <div className="profile-field">
-              <label htmlFor="profile-delete-email">Confirm verified email</label>
-              <input
-                id="profile-delete-email"
-                className="profile-field-input"
-                type="email"
-                maxLength={254}
-                value={deleteEmail}
-                placeholder={identity.email || "you@example.com"}
-                onChange={(e) => setDeleteEmail(e.target.value)}
-              />
-              <span className="profile-field-hint">
-                Type <strong>{identity.email || "your signed-in email"}</strong> to permanently delete this profile.
-              </span>
-            </div>
-            <div className="profile-danger-actions">
-              <button
-                type="button"
-                className="profile-btn-danger"
-                disabled={busy || !deleteEmail.trim()}
-                onClick={() => {
-                  if (window.confirm("Delete this hosted Botkins profile permanently?")) {
-                    void run(() => window.botkins.profileDeleteAccount(deleteEmail.trim()));
-                  }
-                }}
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                <span>Delete profile</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+        </button>
+      </Group>
     </div>
   );
 }

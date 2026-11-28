@@ -1100,6 +1100,308 @@
   }
 }
 
+/* ------------------------------------------------------------ signed-in Settings › Profile (redesigned) */
+.profile-index-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: -8px;
+}
+
+.profile-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.profile-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+  cursor: pointer;
+}
+.profile-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.profile-icon-btn:disabled {
+  opacity: 0.5;
+}
+
+.profile-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 210px;
+  padding: 5px;
+  border-radius: var(--radius);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  z-index: 40;
+  display: grid;
+  gap: 2px;
+}
+.profile-popover-center {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+.profile-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.profile-popover-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.profile-popover-item.is-danger {
+  color: var(--danger);
+}
+.profile-popover-item.is-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+.profile-popover-info {
+  padding: 6px 10px;
+  display: grid;
+  gap: 1px;
+}
+.profile-popover-info strong {
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  color: var(--ink);
+}
+.profile-popover-info small {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.profile-popover-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 3px 6px;
+}
+
+/* Identity hero */
+.profile-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 4px 0 18px;
+  gap: 3px;
+}
+
+.profile-hero-avatar-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.profile-hero-avatar-btn:hover:not(:disabled) .profile-hero-cam {
+  background: var(--accent-soft);
+}
+
+.profile-hero-cam {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--raised);
+  color: var(--accent-text);
+  border: 3px solid var(--canvas);
+  box-shadow: var(--shadow);
+  transition: background-color 0.14s ease;
+}
+
+.profile-hero-name {
+  margin-top: 10px !important;
+  font-family: var(--font-display) !important;
+  font-size: calc(22px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: -0.25px;
+  color: var(--ink);
+}
+
+.profile-hero-sub {
+  margin: 0;
+  font-size: calc(13.5px * var(--text-scale));
+  color: var(--muted);
+}
+
+.profile-hero-edit {
+  margin-top: 4px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-text);
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+}
+.profile-hero-edit:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.profile-inline-name-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  width: min(360px, 100%);
+}
+.profile-inline-name-form .profile-field-input {
+  flex: 1;
+  min-height: 34px;
+  padding: 5px 10px;
+}
+
+/* Pending approvals banner */
+.profile-pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+}
+.profile-pending-banner-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.profile-pending-banner-copy strong {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  color: var(--warning);
+}
+.profile-pending-banner-copy small {
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--ink-2);
+}
+.profile-pending-review-btn {
+  flex: none;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--on-accent);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+}
+.profile-pending-review-btn:hover {
+  filter: brightness(1.06);
+}
+
+/* Clickable index rows */
+.set-row.profile-index-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: background-color 0.12s ease;
+}
+.set-row.profile-index-row:hover:not(:disabled) {
+  background: var(--hover);
+}
+.set-row.profile-index-row.is-danger .set-name {
+  color: var(--danger);
+}
+.set-row.profile-index-row.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-soft) 55%, transparent);
+}
+.profile-index-trailing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  flex: none;
+}
+.profile-index-count {
+  font-size: calc(14px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.profile-row-icon.is-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.set-pill.acc {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* Sub-view navigation header */
+.profile-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.profile-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-text);
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  cursor: pointer;
+}
+.profile-back-btn:hover {
+  background: var(--accent-soft);
+}
+.profile-sub-title {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 16px;
+}
+.profile-sub-title h2 {
+  font-family: var(--font-display) !important;
+  font-size: calc(24px * var(--text-scale));
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--ink);
+}
+.profile-sub-title p {
+  margin: 0;
+  font-size: calc(13.5px * var(--text-scale));
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------ inside the full-window Settings */
 /* One card for the setup, as the other sections: the benefits are rows of it split by hairlines,
    and the notes under them are quiet lines, not boxes in the box. */
