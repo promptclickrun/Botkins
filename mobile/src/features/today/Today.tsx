@@ -16,7 +16,7 @@ import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
 import { ago, upcoming } from "@/state/time";
-import { Blocks, BotAvatar, Button, EmptyState, Glass, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, tint, TwoUp, useTheme } from "@/ui";
+import { Badge, Blocks, BotAvatar, Button, EmptyState, Glass, Group, IconButton, Label, lift, Loading, Markdown, Mascot, Page, radius, Row, Segmented, space, T, Tap, tint, TwoUp, useTheme } from "@/ui";
 
 type Segment = "feed" | "idea" | "goal" | "panels";
 const SEGMENTS: { value: Segment; label: string }[] = [
@@ -93,13 +93,14 @@ function Card({ children, inner }: { children: ReactNode; inner?: RefObject<Comp
   );
 }
 
-function Byline({ bot, time, unread, note }: { bot?: Bot; time: number; unread?: boolean; note?: string }) {
+function Byline({ bot, time, unread, note, hostLabel }: { bot?: Bot; time: number; unread?: boolean; note?: string; hostLabel?: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
       <BotAvatar bot={bot} size={26} badge={false} />
       <T variant="footnote" weight="600" color="ink2" numberOfLines={1} style={{ flexShrink: 1 }}>
         {bot?.name ?? "A bot"}
       </T>
+      {!!hostLabel && <Badge label={hostLabel} tone="neutral" />}
       <T variant="footnote" color="faint" numberOfLines={1} style={{ flexShrink: 1 }}>
         {"· " + ago(time) + (note ? " · " + note : "")}
       </T>
@@ -178,7 +179,7 @@ function noteOf(item: BoardItem) {
 }
 
 /** `onSeen`: called each time the card is on screen (a space then marks it seen for this person). */
-export function ItemCard({ item, bot, onSeen }: { item: BoardItem; bot?: Bot; onSeen?: () => void }) {
+export function ItemCard({ item, bot, onSeen, hostLabel }: { item: BoardItem; bot?: Bot; onSeen?: () => void; hostLabel?: string }) {
   const { colors } = useTheme();
   const canUse = useCan("today", "use");
   const canCreate = useCan("today", "create");
@@ -221,7 +222,7 @@ export function ItemCard({ item, bot, onSeen }: { item: BoardItem; bot?: Bot; on
   const discuss = canChat ? <Button title="Discuss" icon={MessageCircle} variant="ghost" size="sm" onPress={() => void discussBoardItem(item)} accessibilityLabel={"Discuss with " + (bot?.name ?? "the bot")} /> : null;
   return (
     <Card inner={card}>
-      <Byline bot={bot} time={item.createdAt} unread={!item.read} note={noteOf(item)} />
+      <Byline bot={bot} time={item.createdAt} unread={!item.read} note={noteOf(item)} hostLabel={hostLabel} />
       <View style={{ gap: space.sm }}>
         <T variant="headline" accessibilityRole="header">
           {item.title}

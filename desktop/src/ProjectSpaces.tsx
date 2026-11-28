@@ -29,9 +29,11 @@ export default function ProjectSpaces({
   fail: (e: unknown) => void;
 }) {
   const spaces = state.spaces ?? [];
+  const projectHost = project.hostId ?? "local";
   const attached = spaces.filter((s) => s.projectId === project.id);
-  const choices = attachable(spaces, project.id);
+  const choices = attachable(spaces, project.id).filter((s) => !s.merged && (s.hostId ?? "local") === projectHost);
   const today = spaces.find((s) => s.builtin === "today" && s.mine);
+  const projectBot = state.bots.find((b) => (b.hostId ?? "local") === projectHost) ?? state.bots[0];
   const [menu, setMenu] = useState(false);
   const [adding, setAdding] = useState(false);
   const dialogs = useAsk();
@@ -55,7 +57,7 @@ export default function ProjectSpaces({
     setMenu(false);
     const name = await dialogs.ask({ title: "New space", confirm: "Create", field: { label: "Name", value: "", max: 40 } });
     if (!name) return;
-    const id = await api["spaces.create"]({ name });
+    const id = await api["spaces.create"]({ name, ...(state.remote?.unified && { hostId: projectHost }) } as { name: string });
     await api["spaces.setProject"](id, project.id);
     openSpace(id);
   }
@@ -162,7 +164,7 @@ export default function ProjectSpaces({
         <NewPanel
           state={state}
           space={today}
-          botId={state.bots[0]?.id ?? ""}
+          botId={projectBot?.id ?? ""}
           close={() => setAdding(false)}
           opened={(chatId) => {
             setAdding(false);

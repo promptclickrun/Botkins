@@ -18,6 +18,7 @@ import type {
   ChatSummary,
   DeviceAsk,
   Live,
+  MergedSpaceSource,
   Panel,
   PanelView,
   Parts,
@@ -27,6 +28,7 @@ import type {
   Run,
   RunSummary,
   Section,
+  SpaceContent,
   SpaceSummary,
   Workflow,
   WorkflowActionCard,
@@ -34,6 +36,31 @@ import type {
 } from "@/link/types";
 
 export const SCOPED_PREFIX = "rh~";
+export const MERGED_BUILTIN_PREFIX = "unified~builtin~";
+export type MergeableBuiltin = "today" | "feed" | "ideas" | "goals";
+const MERGEABLE_BUILTINS = new Set<string>(["today", "feed", "ideas", "goals"]);
+
+export function mergedBuiltinSpaceId(builtin: MergeableBuiltin): string {
+  return `${MERGED_BUILTIN_PREFIX}${builtin}`;
+}
+
+export function parseMergedBuiltinSpaceId(value: unknown): MergeableBuiltin | null {
+  if (typeof value !== "string" || !value.startsWith(MERGED_BUILTIN_PREFIX)) return null;
+  const kind = value.slice(MERGED_BUILTIN_PREFIX.length);
+  return MERGEABLE_BUILTINS.has(kind) ? (kind as MergeableBuiltin) : null;
+}
+
+export const isMergedBuiltinSpaceId = (value: unknown): boolean => parseMergedBuiltinSpaceId(value) !== null;
+
+export function isMergeableBuiltinSpace(space: Pick<SpaceSummary, "builtin" | "mine"> | undefined | null): space is Pick<SpaceSummary, "builtin" | "mine"> & { builtin: MergeableBuiltin; mine: true } {
+  return !!space && space.mine === true && typeof space.builtin === "string" && MERGEABLE_BUILTINS.has(space.builtin);
+}
+
+/** Quiet note shown in a merged built-in space when one or more included computers are offline. */
+export function offlineComputersNote(count: number): string | undefined {
+  if (!(count > 0)) return undefined;
+  return count === 1 ? "1 computer offline" : `${count} computers offline`;
+}
 
 export type UnifiedHostStatus = {
   id: string;
@@ -486,6 +513,12 @@ export function mergeUnifiedParts(
   live.requests.sort((a, b) => (a.time ?? 0) - (b.time ?? 0));
   board.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
+  // Merge built-in spaces (today/feed/ideas/goals with mine: true) across online hosts into
+  // one virtual space per builtin. Never merge by name; custom spaces and other people's built-ins
+  // stay separate per host. Offline hosts drop out of the merge and are reflected via offlineCount.
+  const offlineHostCount = hosts.filter((h) => h.link !== "online").length;
+  const mergedSpaces = mergeUnifiedSpaces(hosts, primaryId, offlineHostCount);
+
   merged.bots = bots;
   merged.sections = sections;
   merged.chatSections = chatSections;
@@ -499,13 +532,193 @@ export function mergeUnifiedParts(
   merged.panels = panels;
   merged.projectPanels = projectPanels;
   merged.board = board;
-  merged.spaces = spaces;
+  merged.spaces = mergedSpaces;
   merged.asks = asks;
   merged.live = live;
   if (Object.keys(proactiveBots).length || anyProactiveEnabled) {
     merged.proactive = { enabled: anyProactiveEnabled, ...(proactiveChatMode && { chatMode: proactiveChatMode }), bots: proactiveBots };
   }
   return merged;
+}
+
+/**
+ * Deduplicates `builtin` (today/feed/ideas/goals) + `mine: true` spaces across hosts into one
+ * virtual space per builtin (`unified~builtin~<kind>`). Custom spaces and other people's built-ins
+ * stay per host. Offline hosts drop out of the merge; their count is tracked on `merged.offlineCount`.
+ */
+export function mergeUnifiedSpaces(
+  hosts: PooledHostSnapshot[],
+  primaryId: string | null,
+  offlineHostCount?: number,
+): SpaceSummary[] {
+  const offlineCount = offlineHostCount ?? hosts.filter((h) => h.link !== "online").length;
+  const builtinGroups = new Map<MergeableBuiltin, { entry: SpaceSummary; source: MergedSpaceSource }[]>();
+  const firstSlot = new Map<MergeableBuiltin, number>();
+  const out: Array<SpaceSummary | { kind: "slot"; builtin: MergeableBuiltin }> = [];
+
+  for (const h of hosts) {
+    if (!h.synced) continue;
+    const hostId = h.pairing.serverId;
+    const hostName = hostNameOf(h.pairing, h.parts);
+    const online = h.link === "online";
+    const list = h.parts.spaces ?? [];
+    for (const sp of list) {
+      if (isMergeableBuiltinSpace(sp)) {
+        // Offline host drops out of the merge (never blanks the space).
+        if (!online) continue;
+        const builtin = sp.builtin;
+        if (!firstSlot.has(builtin)) {
+          firstSlot.set(builtin, out.length);
+          out.push({ kind: "slot", builtin });
+        }
+        const rawSpaceId = unscopeId(sp.id);
+        const source: MergedSpaceSource = {
+          hostId,
+          hostName,
+          spaceId: sp.id,
+          rawSpaceId,
+          rev: sp.rev ?? 0,
+          online,
+        };
+        const listForKind = builtinGroups.get(builtin) ?? [];
+        listForKind.push({ entry: sp, source });
+        builtinGroups.set(builtin, listForKind);
+      } else {
+        out.push(sp);
+      }
+    }
+  }
+
+  const result: SpaceSummary[] = [];
+  for (const item of out) {
+    if ("kind" in item) {
+      const group = builtinGroups.get(item.builtin);
+      if (!group?.length) continue;
+      // Prefer primary host's entry as the base metadata, otherwise first online contributor.
+      const base = group.find((g) => g.source.hostId === primaryId)?.entry ?? group[0]!.entry;
+      const seenHere = new Set<string>();
+      const here: SpaceSummary["here"] = [];
+      for (const g of group) {
+        for (const p of g.entry.here ?? []) {
+          const key = `${p.id}:${p.panelId ?? ""}`;
+          if (!seenHere.has(key)) {
+            seenHere.add(key);
+            here.push(p);
+          }
+        }
+      }
+      const totalCount = group.reduce((sum, g) => sum + (g.entry.count ?? 0), 0);
+      const totalChanged = Math.min(99, group.reduce((sum, g) => sum + (g.entry.changed ?? 0), 0));
+      const totalRev = group.reduce((sum, g) => sum + (g.entry.rev ?? 0), 0);
+      const updatedAt = Math.max(0, ...group.map((g) => g.entry.updatedAt ?? 0));
+      const pinned = group.some((g) => g.entry.pinned);
+      const mergedSummary: SpaceSummary = {
+        ...base,
+        id: mergedBuiltinSpaceId(item.builtin),
+        builtin: item.builtin,
+        mine: true,
+        count: totalCount,
+        changed: totalChanged,
+        pinned,
+        here,
+        rev: totalRev,
+        updatedAt,
+        hostId: undefined,
+        hostName: undefined,
+        merged: {
+          sources: group.map((g) => g.source),
+          offlineCount,
+        },
+      };
+      result.push(mergedSummary);
+    } else {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
+/**
+ * Combines `spaces.read` responses from multiple hosts for a merged built-in space.
+ * - Panels from all contributing hosts are kept in order and tagged with `hostId`/`hostName`.
+ * - Cards (Feed/Ideas/Goals) are interleaved newest first (`createdAt` desc, tie-break `updatedAt` desc),
+ *   each tagged with `hostId`/`hostName`.
+ * - Failed/offline hosts are dropped quietly and counted in `offlineCount` so the space never blanks.
+ */
+export function combineMergedSpaceContent(
+  mergedId: string,
+  rev: number,
+  responses: Array<{
+    hostId: string;
+    hostName: string;
+    content?: SpaceContent;
+    failed?: boolean;
+  }>,
+  baseOfflineCount = 0,
+): SpaceContent {
+  const panels: PanelView[] = [];
+  const cards: BoardItem[] = [];
+  const seenItems: Record<string, number> = {};
+  let hasSeenItems = false;
+  let seenAt = 0;
+  let failedReads = 0;
+  const contributing = new Set<string>();
+
+  for (const res of responses) {
+    if (res.failed || !res.content) {
+      failedReads += 1;
+      continue;
+    }
+    const c = res.content;
+    if (c.seenAt > seenAt) seenAt = c.seenAt;
+    if (c.seenItems) {
+      hasSeenItems = true;
+      for (const [itemId, at] of Object.entries(c.seenItems)) {
+        seenItems[itemId] = Math.max(seenItems[itemId] ?? 0, at);
+      }
+    }
+    const hostPanels = (c.panels ?? []).map((p) => ({
+      ...p,
+      hostId: p.hostId ?? res.hostId,
+      hostName: p.hostName ?? res.hostName,
+    }));
+    const hostCards = (c.cards ?? []).map((card) => ({
+      ...card,
+      hostId: card.hostId ?? res.hostId,
+      hostName: card.hostName ?? res.hostName,
+    }));
+    if (hostPanels.length > 0 || hostCards.length > 0) contributing.add(res.hostId);
+    panels.push(...hostPanels);
+    cards.push(...hostCards);
+  }
+
+  cards.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  return {
+    id: mergedId,
+    rev,
+    seenAt,
+    ...(hasSeenItems && { seenItems }),
+    panels,
+    cards,
+    offlineCount: baseOfflineCount + failedReads,
+    contributingHosts: contributing.size,
+  };
+}
+
+/**
+ * Resolves the concrete scoped spaceId on a target host for a merged built-in space (for panel
+ * creation, asking, or moving). Falls back to the host's own source spaceId if present, else
+ * the first online source.
+ */
+export function resolveMergedSpaceTarget(
+  space: SpaceSummary,
+  targetHostId: string | null | undefined,
+): { hostId: string; spaceId: string; rawSpaceId: string } | null {
+  const sources = space.merged?.sources ?? [];
+  if (!sources.length) return null;
+  const picked = (targetHostId ? sources.find((s) => s.hostId === targetHostId) : undefined) ?? sources[0]!;
+  return { hostId: picked.hostId, spaceId: picked.spaceId, rawSpaceId: picked.rawSpaceId };
 }
 
 /** Recursively locates the first scoped ID's hostId inside call arguments. */
@@ -823,10 +1036,14 @@ export function rescopeMobileResult<T>(method: string, result: T, hostId: string
     } as unknown as T;
   }
   if (method === "spaces.read") {
-    const content = result as unknown as { id: string; panels?: PanelView[]; cards?: BoardItem[] };
+    const content = result as unknown as { id: string; seenItems?: Record<string, number>; panels?: PanelView[]; cards?: BoardItem[] };
+    const seenItems = content.seenItems
+      ? Object.fromEntries(Object.entries(content.seenItems).map(([k, v]) => [s(k), v]))
+      : undefined;
     return {
       ...content,
       id: s(content.id),
+      ...(seenItems && { seenItems }),
       ...(content.panels && {
         panels: content.panels.map((p) => ({
           ...p,
@@ -836,10 +1053,11 @@ export function rescopeMobileResult<T>(method: string, result: T, hostId: string
           ...(p.spaceId && { spaceId: s(p.spaceId) }),
           ...(p.refreshChatId && { refreshChatId: s(p.refreshChatId) }),
           blocks: p.blocks.map((b) => (b.type === "html" && b.frame ? { ...b, frame: s(b.frame) } : b)),
+          hostId,
         })),
       }),
       ...(content.cards && {
-        cards: content.cards.map((c) => ({ ...c, id: s(c.id), botId: s(c.botId) })),
+        cards: content.cards.map((c) => ({ ...c, id: s(c.id), botId: s(c.botId), hostId })),
       }),
     } as unknown as T;
   }

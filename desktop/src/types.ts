@@ -1579,8 +1579,8 @@ declare global {
       "spaces.remove": (id: string) => Promise<void>;
       "spaces.setProject": (id: string, projectId: string | null) => Promise<void>;
       "spaces.setPanelProject": (panelId: string, projectId: string | null) => Promise<void>;
-      "spaces.newPanel": (input: { spaceId: string; botId: string; prompt: string; start?: SpaceStart; refresh?: { cron: string; timezone: string }; projectId?: string }) => Promise<{ chatId: string }>;
-      "spaces.ask": (input: { spaceId: string; botId: string; text: string; panelId?: string }) => Promise<{ chatId: string }>;
+      "spaces.newPanel": (input: { spaceId: string; botId: string; prompt: string; start?: SpaceStart; refresh?: { cron: string; timezone: string }; projectId?: string; hostId?: string }) => Promise<{ chatId: string }>;
+      "spaces.ask": (input: { spaceId: string; botId: string; text: string; panelId?: string; hostId?: string }) => Promise<{ chatId: string }>;
       "spaces.movePanel": (panelId: string, to: { spaceId: string; before: string | null }) => Promise<void>;
       "spaces.patchState": (panelId: string, patch: Record<string, unknown>, label?: string) => Promise<{ rev: number }>;
       "spaces.note": (panelId: string, text: string) => Promise<string>;
@@ -2722,6 +2722,9 @@ export type Panel = {
   lastCheck?: { time: number; status: string; detail?: string };
   /** Set when the panel was published from a chat in a project. */
   projectId?: string;
+  /** Unified multi-host metadata: which computer owns this panel. */
+  hostId?: string;
+  hostName?: string;
 };
 
 export type ModelChoice = {
@@ -3280,6 +3283,9 @@ export type BoardItem = {
   alert?: ProactiveAlert;
   createdAt: number;
   updatedAt: number;
+  /** Unified multi-host metadata: which computer owns this card. */
+  hostId?: string;
+  hostName?: string;
 };
 
 export type ProjectTodo = { id: string; text: string; done: boolean; createdAt: number; doneAt?: number };
@@ -3298,6 +3304,9 @@ export type Project = {
   artifacts?: string[];
   lastUsed: number;
   createdAt: number;
+  /** Unified multi-host metadata: which computer owns this project. */
+  hostId?: string;
+  hostName?: string;
 };
 /** A job: a prompt that started its own chat, in a git worktree of its own or in the checkout. */
 export type Job = {

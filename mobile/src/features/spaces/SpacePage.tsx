@@ -51,8 +51,8 @@ function BarButtons({ space, spaces }: { space: SpaceSummary; spaces: SpaceSumma
   const { colors } = useTheme();
   const prompt = useTextPrompt();
   const canCreate = useCan("today", "create");
-  const own = space.can === "own";
-  const mayAdd = canCreate && (own || space.can === "edit");
+  const own = space.can === "own" && !space.merged;
+  const mayAdd = canCreate && (space.can === "own" || space.can === "edit");
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: gap.xs }}>
       <IconButton icon={space.pinned ? PinOff : Pin} label={space.pinned ? "Take off Home" : "Pin to Home"} onPress={() => setPinned(spaces, space.id, !space.pinned)} />

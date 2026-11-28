@@ -19,7 +19,9 @@ import {
   deleteQuestion,
   hasSpaces,
   lastLine,
+  mergedSpaceHostPicker,
   moveTargets,
+  offlineComputersNote,
   panelChanged,
   panelProject,
   panelDrop,
@@ -27,6 +29,7 @@ import {
   spaceIcon,
   spaceLine,
   spaceName,
+  spaceReadSignature,
   spaceSections,
   spaceWhen,
   snapSize,
@@ -320,4 +323,48 @@ test("a view's save goes out only soon after a real click or key press, and not 
   assert.equal(cleanLabel("  Ticked Press kit\n"), "Ticked Press kit");
   assert.equal(cleanLabel("x".repeat(200)).length, 80);
   for (const none of ["", "   ", 5, null, undefined, {}]) assert.equal(cleanLabel(none), undefined);
+});
+
+test("merged built-in space helpers: offline note, read signature, host picker, and same-host moveTargets", () => {
+  assert.equal(offlineComputersNote(0), null);
+  assert.equal(offlineComputersNote(undefined), null);
+  assert.equal(offlineComputersNote(1), "1 computer offline");
+  assert.equal(offlineComputersNote(3), "3 computers offline");
+
+  const mergedSpace = space({
+    id: "unified~builtin~today",
+    builtin: "today",
+    rev: 10,
+    merged: {
+      sources: [
+        { hostId: "local", hostName: "Desk Mac", spaceId: "sp-local", rawSpaceId: "sp-local", rev: 3, online: true },
+        { hostId: "srv-a", hostName: "Studio Linux", spaceId: "rh~srv-a~sp-a", rawSpaceId: "sp-a", rev: 7, online: true },
+      ],
+      offlineCount: 1,
+    },
+  });
+  assert.equal(spaceReadSignature(mergedSpace), "10|local:3,srv-a:7|off:1");
+  assert.equal(spaceReadSignature(space({ rev: 4 })), "4");
+
+  // Host picker: prefers active host, falls back cleanly, asks to pick when neither matches with 2+ choices.
+  assert.equal(mergedSpaceHostPicker(mergedSpace, "srv-a", "local").targetHostId, "srv-a");
+  assert.equal(mergedSpaceHostPicker(mergedSpace, "srv-a", "local").needsPick, false);
+  assert.equal(mergedSpaceHostPicker(mergedSpace, "offline-host", "local").targetHostId, "local");
+  assert.equal(mergedSpaceHostPicker(mergedSpace, null, null).targetHostId, null);
+  assert.equal(mergedSpaceHostPicker(mergedSpace, null, null).needsPick, true);
+
+  // moveTargets restricts a panel with hostId to spaces on the same host (or merged spaces including that host).
+  const list = [
+    mergedSpace,
+    space({ id: "local-custom", can: "own", hostId: "local" }),
+    space({ id: "remote-custom", can: "own", hostId: "srv-a" }),
+  ];
+  assert.deepEqual(
+    moveTargets(list, mergedSpace, { hostId: "srv-a" }, "owner").map((s) => s.id),
+    ["remote-custom"],
+  );
+  assert.deepEqual(
+    moveTargets(list, list[2], { hostId: "srv-a" }, "owner").map((s) => s.id),
+    ["unified~builtin~today"],
+  );
 });

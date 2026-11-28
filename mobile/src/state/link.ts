@@ -20,10 +20,13 @@ import { currentOf, hasRoom, indexOf, type Kept, NO_COMPUTERS, pairingKey, readK
 import { applyParts, forgetComputer, mergeChat, onComputerChange, showToast, useApp } from "./store";
 import {
   buildUnifiedHostsStatus,
+  combineMergedSpaceContent,
   hostOfId,
   mergeUnifiedParts,
+  parseMergedBuiltinSpaceId,
   parseScopedId,
   rescopeMobileResult,
+  resolveMergedSpaceTarget,
   routeMobileCall,
   scopePartsForHost,
   unscopeId,
@@ -283,6 +286,7 @@ function followUnified() {
         entry.link = link;
         if (link === "online") nearbyPace.reset();
         refreshUnifiedStatus();
+        pushMergedUnifiedParts();
       },
       onUnreachable: () => void lookNearby(pairing.serverId),
       onRoute: (route) => {
@@ -713,12 +717,207 @@ export async function unpair() {
 }
 
 type Api = { [K in keyof Calls]: (...args: Parameters<Calls[K]>) => Promise<ReturnType<Calls[K]>> };
+
+/** Handles calls targeting a merged virtual built-in space (`unified~builtin~<kind>`) across pooled hosts. */
+async function handleMergedSpaceCall(method: string, args: unknown[], primaryId: string): Promise<unknown> {
+  const spaces = useApp.getState().parts.spaces ?? [];
+  const findMerged = (id: unknown) =>
+    typeof id === "string" && parseMergedBuiltinSpaceId(id) ? spaces.find((s) => s.id === id) : undefined;
+
+  // spaces.read(mergedId): fan out to every included online host and combine panels/cards.
+  if (method === "spaces.read") {
+    const space = findMerged(args[0]);
+    if (!space?.merged) return Promise.reject(new LinkError("not-found", "This space no longer exists."));
+    const { sources, offlineCount } = space.merged;
+    const responses = await Promise.all(
+      sources.map(async (src) => {
+        const entry = pool.get(src.hostId);
+        if (!entry || entry.link !== "online") {
+          return { hostId: src.hostId, hostName: src.hostName, failed: true };
+        }
+        try {
+          const raw = await entry.client.call<import("@/link/types").SpaceContent>("spaces.read", src.rawSpaceId);
+          const content = rescopeMobileResult("spaces.read", raw, src.hostId, primaryId);
+          return { hostId: src.hostId, hostName: src.hostName, content };
+        } catch {
+          return { hostId: src.hostId, hostName: src.hostName, failed: true };
+        }
+      }),
+    );
+    const anySucceeded = responses.some((r) => !r.failed && r.content);
+    if (!anySucceeded && sources.length > 0) {
+      throw new LinkError("offline", "Couldn't reach any computer for this space.");
+    }
+    return combineMergedSpaceContent(space.id, space.rev, responses, offlineCount);
+  }
+
+  // link.spaces.seen(mergedId, itemId?): route to itemId's host when itemId is given, else fan out to all sources.
+  if (method === "link.spaces.seen") {
+    const space = findMerged(args[0]);
+    if (!space?.merged) return null;
+    const itemId = typeof args[1] === "string" ? args[1] : undefined;
+    if (itemId) {
+      const targetHost = hostOfId(itemId, primaryId);
+      const src = space.merged.sources.find((s) => s.hostId === targetHost);
+      const entry = src ? pool.get(src.hostId) : undefined;
+      if (!src || !entry || entry.link !== "online") return null;
+      return entry.client.call("link.spaces.seen", src.rawSpaceId, unscopeId(itemId)).catch(() => null);
+    }
+    await Promise.all(
+      space.merged.sources.map((src) => {
+        const entry = pool.get(src.hostId);
+        if (!entry || entry.link !== "online") return Promise.resolve();
+        return entry.client.call("link.spaces.seen", src.rawSpaceId).catch(() => {});
+      }),
+    );
+    return null;
+  }
+
+  // link.spaces.here(mergedId | null, panelId?): fan out presence to sources (or clear on all pooled hosts).
+  if (method === "link.spaces.here") {
+    const id = args[0];
+    const panelId = typeof args[1] === "string" ? args[1] : undefined;
+    if (id === null) {
+      await Promise.all(
+        [...pool.values()].map((entry) =>
+          entry.link === "online" ? entry.client.call("link.spaces.here", null).catch(() => {}) : Promise.resolve(),
+        ),
+      );
+      return null;
+    }
+    const space = findMerged(id);
+    if (!space?.merged) return null;
+    const panelHost = panelId ? hostOfId(panelId, primaryId) : null;
+    await Promise.all(
+      space.merged.sources.map((src) => {
+        const entry = pool.get(src.hostId);
+        if (!entry || entry.link !== "online") return Promise.resolve();
+        const rawPanel = panelId && panelHost === src.hostId ? unscopeId(panelId) : undefined;
+        return entry.client.call("link.spaces.here", src.rawSpaceId, rawPanel).catch(() => {});
+      }),
+    );
+    return null;
+  }
+
+  // link.spaces.notify(mergedId, mode): apply notification mode across all online sources.
+  if (method === "link.spaces.notify") {
+    const space = findMerged(args[0]);
+    if (!space?.merged) return null;
+    await Promise.all(
+      space.merged.sources.map((src) => {
+        const entry = pool.get(src.hostId);
+        if (!entry || entry.link !== "online") return Promise.resolve();
+        return entry.client.call("link.spaces.notify", src.rawSpaceId, args[1]).catch(() => {});
+      }),
+    );
+    return null;
+  }
+
+  // link.spaces.arrange({ order, pinned }): partition per host, expanding any merged virtual id back to each host's own builtin space id.
+  if (method === "link.spaces.arrange" && args[0] && typeof args[0] === "object") {
+    const input = args[0] as { order?: string[]; pinned?: string[] };
+    const mergedById = new Map(spaces.filter((s) => s.merged).map((s) => [s.id, s]));
+    const perHost = new Map<string, { order: string[]; pinned: string[] }>();
+    const ensure = (hid: string) => {
+      let bucket = perHost.get(hid);
+      if (!bucket) {
+        bucket = { order: [], pinned: [] };
+        perHost.set(hid, bucket);
+      }
+      return bucket;
+    };
+    const pushList = (ids: string[] | undefined, field: "order" | "pinned") => {
+      for (const id of ids ?? []) {
+        const m = mergedById.get(id);
+        if (m?.merged) {
+          for (const src of m.merged.sources) {
+            const b = ensure(src.hostId);
+            if (!b[field].includes(src.rawSpaceId)) b[field].push(src.rawSpaceId);
+          }
+        } else {
+          const hid = hostOfId(id, primaryId);
+          if (!hid) continue;
+          const raw = unscopeId(id);
+          const b = ensure(hid);
+          if (!b[field].includes(raw)) b[field].push(raw);
+        }
+      }
+    };
+    pushList(input.order, "order");
+    pushList(input.pinned, "pinned");
+    await Promise.all(
+      [...perHost.entries()].map(([hid, plan]) => {
+        const entry = pool.get(hid);
+        if (!entry || entry.link !== "online") return Promise.resolve();
+        return entry.client.call("link.spaces.arrange", plan).catch(() => {});
+      }),
+    );
+    return null;
+  }
+
+  // spaces.newPanel / spaces.ask with a merged spaceId: route to explicit hostId, botId's host, or settingsHost/primary.
+  if ((method === "spaces.newPanel" || method === "spaces.ask") && args[0] && typeof args[0] === "object") {
+    const input = args[0] as Record<string, unknown>;
+    const space = findMerged(input.spaceId);
+    if (space?.merged) {
+      const explicitHost = typeof input.hostId === "string" && input.hostId ? input.hostId : null;
+      const botHost = typeof input.botId === "string" && input.botId ? hostOfId(input.botId, primaryId) : null;
+      const panelHost = typeof input.panelId === "string" && input.panelId ? hostOfId(input.panelId, primaryId) : null;
+      const desiredHost = explicitHost ?? panelHost ?? botHost ?? usePrefs.getState().settingsHost ?? primaryId;
+      const resolved = resolveMergedSpaceTarget(space, desiredHost);
+      if (!resolved) throw new LinkError("offline", "No online computer available for this space.");
+      const entry = pool.get(resolved.hostId);
+      if (!entry || entry.link !== "online") throw new LinkError("offline", "That computer is not connected.");
+      const { hostId: _strip, ...rest } = input;
+      const nextPayload = {
+        ...rest,
+        spaceId: resolved.rawSpaceId,
+        ...(typeof rest.botId === "string" && { botId: unscopeId(rest.botId) }),
+        ...(typeof rest.panelId === "string" && { panelId: unscopeId(rest.panelId) }),
+        ...(typeof rest.projectId === "string" && { projectId: unscopeId(rest.projectId) }),
+      };
+      const result = await entry.client.call(method, nextPayload);
+      return rescopeMobileResult(method, result, resolved.hostId, primaryId);
+    }
+  }
+
+  // spaces.movePanel(panelId, { spaceId, before }): resolve merged destination spaceId to panel's own host.
+  if (method === "spaces.movePanel" && typeof args[0] === "string" && args[1] && typeof args[1] === "object") {
+    const to = args[1] as { spaceId?: string; before?: string | null };
+    const space = findMerged(to.spaceId);
+    if (space?.merged) {
+      const panelHost = hostOfId(args[0], primaryId);
+      const src = space.merged.sources.find((s) => s.hostId === panelHost);
+      if (!src) throw new LinkError("remote", "A panel can only move to a space on the same computer.");
+      const entry = pool.get(src.hostId);
+      if (!entry || entry.link !== "online") throw new LinkError("offline", "That computer is not connected.");
+      const nextTo = {
+        spaceId: src.rawSpaceId,
+        before: to.before && hostOfId(to.before, primaryId) === src.hostId ? unscopeId(to.before) : null,
+      };
+      return entry.client.call("spaces.movePanel", unscopeId(args[0]), nextTo);
+    }
+  }
+
+  return undefined;
+}
+
 /** The computer's calls, by name: `await api.addBot({...})`. Each rejects with a LinkError. */
 export const api = new Proxy({} as Api, {
   get: (_target, method: string) => (...args: unknown[]) => {
     if (pool.size > 0) {
       const primaryId = currentOf(kept)?.serverId;
       if (!primaryId) return Promise.reject(new LinkError("offline", "Pair with your computer first."));
+      // Merged built-in spaces (`unified~builtin~*`) and multi-host space calls (`link.spaces.arrange`, `link.spaces.here(null)`).
+      if (
+        method === "link.spaces.arrange" ||
+        (method === "link.spaces.here" && (args[0] === null || parseMergedBuiltinSpaceId(args[0]) !== null)) ||
+        ((method === "spaces.read" || method === "link.spaces.seen" || method === "link.spaces.notify") && parseMergedBuiltinSpaceId(args[0]) !== null) ||
+        ((method === "spaces.newPanel" || method === "spaces.ask") && args[0] && typeof args[0] === "object" && parseMergedBuiltinSpaceId((args[0] as { spaceId?: unknown }).spaceId) !== null) ||
+        (method === "spaces.movePanel" && args[1] && typeof args[1] === "object" && parseMergedBuiltinSpaceId((args[1] as { spaceId?: unknown }).spaceId) !== null)
+      ) {
+        return handleMergedSpaceCall(method, args, primaryId);
+      }
       const route = routeMobileCall(method, args, {
         primaryId,
         settingsHostId: usePrefs.getState().settingsHost,

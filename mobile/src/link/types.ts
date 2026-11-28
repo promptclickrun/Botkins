@@ -1134,6 +1134,9 @@ export type Panel = {
   last?: { by: string; name: string; label?: string; at: number };
   /** Up to 3 things worth asking its bot next, in the bot's own words: plain text, at most 60 characters each. Never made up by an app. */
   asks?: string[];
+  /** Unified multi-host metadata: which computer owns this panel. */
+  hostId?: string;
+  hostName?: string;
 };
 export type PanelNote = { id: string; by: string; name: string; text: string; at: number };
 /**
@@ -1143,6 +1146,17 @@ export type PanelNote = { id: string; by: string; name: string; text: string; at
 export type PanelView = Omit<Panel, "chatId" | "routine"> & {
   chatId?: string;
   routine: (Omit<NonNullable<Panel["routine"]>, "prompt"> & { prompt?: string; setBy?: string; promptBy?: string }) | null;
+};
+/** One source host's built-in space rolled into a merged virtual space in unified mode. */
+export type MergedSpaceSource = {
+  hostId: string;
+  hostName: string;
+  /** Scoped space id on that host (raw on primary, `rh~...` on secondary). */
+  spaceId: string;
+  /** Raw space id on that host. */
+  rawSpaceId: string;
+  rev: number;
+  online: boolean;
 };
 /** Who can open a space: only its maker, members the maker picked, all members, or anyone with the link. */
 export type SpaceAccess = "private" | "members" | "team" | "link";
@@ -1184,9 +1198,29 @@ export type SpaceSummary = {
   here: (Person & { panelId?: string })[];
   rev: number;
   updatedAt: number;
+  /** Unified multi-host metadata: owning computer for single-host spaces. */
+  hostId?: string;
+  hostName?: string;
+  /** Unified multi-host merged built-in space: the per-host spaces combined into this virtual space. */
+  merged?: {
+    sources: MergedSpaceSource[];
+    offlineCount: number;
+  };
 };
 /** A space's content, asked for with `spaces.read`. Read again when the `rev` in the `spaces` part passes this one. */
-export type SpaceContent = { id: string; rev: number; /** When the person last opened it before this read. */ seenAt: number; /** When they opened a panel or card on its own since (item id → time). Absent from an older computer. */ seenItems?: Record<string, number>; panels: PanelView[]; cards: BoardItem[] };
+export type SpaceContent = {
+  id: string;
+  rev: number;
+  /** When the person last opened it before this read. */
+  seenAt: number;
+  /** When they opened a panel or card on its own since (item id → time). Absent from an older computer. */
+  seenItems?: Record<string, number>;
+  panels: PanelView[];
+  cards: BoardItem[];
+  /** Unified merged built-in space metadata from `spaces.read` fan-out. */
+  offlineCount?: number;
+  contributingHosts?: number;
+};
 export type PanelStart = "checklist" | "tracker" | "chart" | "table" | "notes" | "app";
 export type SpaceShareInput = { access: SpaceAccess; grants?: { id: string; can: "view" | "edit" }[]; teamCan?: "view" | "edit" };
 export type BoardItem = {
@@ -1207,6 +1241,9 @@ export type BoardItem = {
   alert?: ProactiveAlert;
   createdAt: number;
   updatedAt: number;
+  /** Unified multi-host metadata: which computer owns this card. */
+  hostId?: string;
+  hostName?: string;
 };
 export type TaskStatus = "later" | "ready" | "working" | "review" | "blocked" | "done";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";

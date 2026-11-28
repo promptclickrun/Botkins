@@ -2,8 +2,10 @@ import AlertActions, { hasProactiveTeam } from "./AlertActions";
 import { useState } from "react";
 import { Check, ExternalLink, MessageCircle, Moon, Sparkles, Target, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { BotAvatar } from "./Avatar";
+import { HostChip } from "./RemoteHosts";
 import { RichText } from "./RichText";
 import type { BoardItem, State } from "./types";
+import type { SpaceSummary } from "./spaces";
 import "./board.css";
 
 type Kind = BoardItem["kind"];
@@ -44,12 +46,18 @@ export default function BoardPanel({
   fail,
   cards,
   only,
+  showHost,
+  targetSpace,
 }: {
   state: State;
   /** A space's cards (spaces.read). Left out, the cards of Today's board. */
   cards?: BoardItem[];
   /** A Feed, Ideas or Goals space shows its one kind, without the tabs. */
   only?: Kind;
+  /** Unified merged built-in space: tag each card with its source computer. */
+  showHost?: boolean;
+  /** When viewing a merged built-in space, routes empty-state card creation to the host in use (or lets the user pick). */
+  targetSpace?: SpaceSummary;
   /** Opens a new chat with the bot. `send` sends the text; otherwise it waits in the composer. */
   /** Starts a chat with a bot. With `item`, the message carries that Today item, and the chat shows a card for it. */
   startChat: (botId: string, text: string, send: boolean, item?: BoardItem) => Promise<void>;
@@ -61,6 +69,17 @@ export default function BoardPanel({
   const [openId, setOpenId] = useState("");
   const [finished, setFinished] = useState(false);
   const [why, setWhy] = useState("");
+  const mergedSources = targetSpace?.merged?.sources ?? [];
+  const defaultMergedHost =
+    (state.remote?.settingsHost && mergedSources.some((s) => s.hostId === state.remote?.settingsHost)
+      ? state.remote.settingsHost
+      : undefined) ??
+    (mergedSources.some((s) => s.hostId === "local") ? "local" : undefined) ??
+    (mergedSources.length === 1 ? mergedSources[0].hostId : "");
+  const [pickedHost, setPickedHost] = useState(defaultMergedHost);
+  const activeMergedHost = mergedSources.length
+    ? (pickedHost && mergedSources.some((s) => s.hostId === pickedHost) ? pickedHost : defaultMergedHost)
+    : "";
   const now = Date.now();
   const items = board.filter(
     (i) => i.kind === kind && (finished ? i.status !== "open" : i.status === "open" && !((i.snoozedUntil ?? 0) > now)),
@@ -73,7 +92,9 @@ export default function BoardPanel({
     ]),
   );
   const tab = tabs.find((t) => t.kind === kind)!;
-  const primary = state.bots[0];
+  const primary =
+    (activeMergedHost ? state.bots.find((b) => (b.hostId ?? "local") === activeMergedHost) : undefined) ??
+    state.bots[0];
   const act = (id: string, action: Parameters<typeof window.botkins.boardAct>[1], value?: string) => window.botkins.boardAct(id, action, value).catch(fail);
   function toggle(item: BoardItem) {
     setWhy("");
@@ -108,7 +129,20 @@ export default function BoardPanel({
       {!items.length ? (
         <div className="board-empty">
           <p>{finished ? "Nothing finished yet." : tab.empty}</p>
-          {!finished && (
+          {!finished && mergedSources.length > 1 && (
+            <label className="board-host-pick">
+              <span>Computer</span>
+              <select value={activeMergedHost} onChange={(e) => setPickedHost(e.target.value)}>
+                {!activeMergedHost && <option value="">Choose computer…</option>}
+                {mergedSources.map((src) => (
+                  <option key={src.hostId} value={src.hostId}>
+                    {src.hostId === "local" ? src.hostName + " (this computer)" : src.hostName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!finished && primary && (!mergedSources.length || !!activeMergedHost) && (
             <button className="link-button" onClick={() => startChat(primary.id, tab.ask, false).catch(fail)}>
               <Sparkles size={15} /> Ask {primary.name}
             </button>
@@ -127,6 +161,12 @@ export default function BoardPanel({
                   <span className="board-text">
                     <small>
                       {bot.name}
+                      {showHost && item.hostName && (
+                        <>
+                          {" "}
+                          <HostChip name={item.hostName} local={item.hostId === "local"} />
+                        </>
+                      )}
                       {item.kind === "goal" && item.category ? " · " + item.category : ""}
                       {item.source ? " · " + item.source : ""}
                       {item.answer === "yes" ? " · Said yes" : item.answer === "goal" ? " · Became a goal" : ""}

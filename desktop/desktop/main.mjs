@@ -14,7 +14,17 @@ import { join } from "node:path";
 import { chunk, fileDetails, publicFile } from "./artifact-files.mjs";
 import { ArtifactMedia } from "./artifact-media.mjs";
 import { HERE, RemoteHosts, splitPreferences } from "./remotehosts.mjs";
-import { composeUnifiedDesktopState, LOCAL_HOST_ID, parseScopedId, rescopeResult, routeUnifiedCall, unscopeId } from "./unified-hosts.mjs";
+import {
+  combineMergedDesktopSpaceContent,
+  composeUnifiedDesktopState,
+  hostOfId,
+  LOCAL_HOST_ID,
+  parseMergedBuiltinSpaceId,
+  parseScopedId,
+  rescopeResult,
+  routeUnifiedCall,
+  unscopeId,
+} from "./unified-hosts.mjs";
 import { adminModeStore, hasAdminMode, ownerWindowView } from "./admin-view.mjs";
 import { fillSecurePage, VIEWER_PARTITION, attachViewer, guardGuest, guardViewerSession } from "./webviewer.mjs";
 import { APP_SCHEME, AppWindows, registerAppScheme } from "./app-window.mjs";
@@ -760,6 +770,173 @@ else
       if (next.length === 0 || changed) lastBeforeInputKey = null;
       panelOpenFrames = new Set(next);
     });
+    const handleUnifiedMergedSpaceCall = async (name, args, localFn) => {
+      const snap = appSnapshot();
+      const allSpaces = Array.isArray(snap.spaces) ? snap.spaces : [];
+      const findMerged = (id) =>
+        typeof id === "string" && parseMergedBuiltinSpaceId(id) ? allSpaces.find((s) => s.id === id) : undefined;
+
+      if (name === "spaces.read") {
+        const space = findMerged(args[0]);
+        if (!space?.merged) throw new Error("This space no longer exists.");
+        const { sources, offlineCount } = space.merged;
+        const responses = await Promise.all(
+          sources.map(async (src) => {
+            try {
+              if (src.hostId === LOCAL_HOST_ID) {
+                const raw = await localFn(...asPerson("spaces.read", [src.rawSpaceId]));
+                return { hostId: src.hostId, hostName: src.hostName, content: raw };
+              }
+              const raw = await remote.callHost(src.hostId, "spaces.read", [src.rawSpaceId]);
+              const content = rescopeResult("spaces.read", src.hostId, raw);
+              return { hostId: src.hostId, hostName: src.hostName, content };
+            } catch {
+              return { hostId: src.hostId, hostName: src.hostName, failed: true };
+            }
+          }),
+        );
+        const anySucceeded = responses.some((r) => !r.failed && r.content);
+        if (!anySucceeded && sources.length > 0) throw new Error("Couldn't reach any computer for this space.");
+        return combineMergedDesktopSpaceContent(space.id, space.rev, responses, offlineCount);
+      }
+
+      if (name === "link.spaces.seen") {
+        const space = findMerged(args[0]);
+        if (!space?.merged) return null;
+        const itemId = typeof args[1] === "string" ? args[1] : undefined;
+        if (itemId) {
+          const targetHost = hostOfId(itemId);
+          const src = space.merged.sources.find((s) => s.hostId === targetHost);
+          if (!src) return null;
+          if (src.hostId === LOCAL_HOST_ID) return localFn(...asPerson("link.spaces.seen", [src.rawSpaceId, unscopeId(itemId)]));
+          return remote.callHost(src.hostId, "link.spaces.seen", [src.rawSpaceId, unscopeId(itemId)]).catch(() => null);
+        }
+        await Promise.all(
+          space.merged.sources.map((src) => {
+            if (src.hostId === LOCAL_HOST_ID) return Promise.resolve(localFn(...asPerson("link.spaces.seen", [src.rawSpaceId]))).catch(() => {});
+            return remote.callHost(src.hostId, "link.spaces.seen", [src.rawSpaceId]).catch(() => {});
+          }),
+        );
+        return null;
+      }
+
+      if (name === "link.spaces.here") {
+        const id = args[0];
+        const panelId = typeof args[1] === "string" ? args[1] : undefined;
+        if (id === null) {
+          await Promise.all([
+            Promise.resolve(localFn(...asPerson("link.spaces.here", [null]))).catch(() => {}),
+            ...remote.includedHosts().map((h) => remote.callHost(h.id, "link.spaces.here", [null]).catch(() => {})),
+          ]);
+          return null;
+        }
+        const space = findMerged(id);
+        if (!space?.merged) return null;
+        const panelHost = panelId ? hostOfId(panelId) : null;
+        await Promise.all(
+          space.merged.sources.map((src) => {
+            const rawPanel = panelId && panelHost === src.hostId ? unscopeId(panelId) : undefined;
+            if (src.hostId === LOCAL_HOST_ID) return Promise.resolve(localFn(...asPerson("link.spaces.here", [src.rawSpaceId, rawPanel]))).catch(() => {});
+            return remote.callHost(src.hostId, "link.spaces.here", [src.rawSpaceId, rawPanel]).catch(() => {});
+          }),
+        );
+        return null;
+      }
+
+      if (name === "link.spaces.notify") {
+        const space = findMerged(args[0]);
+        if (!space?.merged) return null;
+        await Promise.all(
+          space.merged.sources.map((src) => {
+            if (src.hostId === LOCAL_HOST_ID) return Promise.resolve(localFn(...asPerson("link.spaces.notify", [src.rawSpaceId, args[1]]))).catch(() => {});
+            return remote.callHost(src.hostId, "link.spaces.notify", [src.rawSpaceId, args[1]]).catch(() => {});
+          }),
+        );
+        return null;
+      }
+
+      if (name === "link.spaces.arrange" && args[0] && typeof args[0] === "object") {
+        const input = args[0];
+        const mergedById = new Map(allSpaces.filter((s) => s.merged).map((s) => [s.id, s]));
+        const perHost = new Map();
+        const ensure = (hid) => {
+          let b = perHost.get(hid);
+          if (!b) {
+            b = { order: [], pinned: [] };
+            perHost.set(hid, b);
+          }
+          return b;
+        };
+        const pushList = (ids, field) => {
+          for (const id of Array.isArray(ids) ? ids : []) {
+            const m = mergedById.get(id);
+            if (m?.merged) {
+              for (const src of m.merged.sources) {
+                const b = ensure(src.hostId);
+                if (!b[field].includes(src.rawSpaceId)) b[field].push(src.rawSpaceId);
+              }
+            } else if (typeof id === "string" && id) {
+              const hid = hostOfId(id);
+              const raw = unscopeId(id);
+              const b = ensure(hid);
+              if (!b[field].includes(raw)) b[field].push(raw);
+            }
+          }
+        };
+        pushList(input.order, "order");
+        pushList(input.pinned, "pinned");
+        await Promise.all(
+          [...perHost.entries()].map(([hid, plan]) => {
+            if (hid === LOCAL_HOST_ID) return Promise.resolve(localFn(...asPerson("link.spaces.arrange", [plan]))).catch(() => {});
+            return remote.callHost(hid, "link.spaces.arrange", [plan]).catch(() => {});
+          }),
+        );
+        return null;
+      }
+
+      if ((name === "spaces.newPanel" || name === "spaces.ask") && args[0] && typeof args[0] === "object") {
+        const input = args[0];
+        const space = findMerged(input.spaceId);
+        if (space?.merged) {
+          const explicitHost = typeof input.hostId === "string" && input.hostId ? input.hostId : null;
+          const panelHost = typeof input.panelId === "string" && input.panelId ? hostOfId(input.panelId) : null;
+          const botHost = typeof input.botId === "string" && input.botId ? hostOfId(input.botId) : null;
+          const desiredHost = explicitHost ?? panelHost ?? botHost ?? settingsHost ?? LOCAL_HOST_ID;
+          const src = space.merged.sources.find((s) => s.hostId === desiredHost) ?? space.merged.sources[0];
+          if (!src) throw new Error("No online computer available for this space.");
+          const { hostId: _strip, ...rest } = input;
+          const nextPayload = {
+            ...rest,
+            spaceId: src.rawSpaceId,
+            ...(typeof rest.botId === "string" && { botId: unscopeId(rest.botId) }),
+            ...(typeof rest.panelId === "string" && { panelId: unscopeId(rest.panelId) }),
+            ...(typeof rest.projectId === "string" && { projectId: unscopeId(rest.projectId) }),
+          };
+          if (src.hostId === LOCAL_HOST_ID) return localFn(...asPerson(name, [nextPayload]));
+          const r = await remote.callHost(src.hostId, name, [nextPayload]);
+          return rescopeResult(name, src.hostId, r);
+        }
+      }
+
+      if (name === "spaces.movePanel" && typeof args[0] === "string" && args[1] && typeof args[1] === "object") {
+        const to = args[1];
+        const space = findMerged(to.spaceId);
+        if (space?.merged) {
+          const panelHost = hostOfId(args[0]);
+          const src = space.merged.sources.find((s) => s.hostId === panelHost);
+          if (!src) throw new Error("A panel can only move to a space on the same computer.");
+          const nextTo = {
+            spaceId: src.rawSpaceId,
+            before: typeof to.before === "string" && hostOfId(to.before) === src.hostId ? unscopeId(to.before) : null,
+          };
+          if (src.hostId === LOCAL_HOST_ID) return localFn(...asPerson("spaces.movePanel", [unscopeId(args[0]), nextTo]));
+          return remote.callHost(src.hostId, "spaces.movePanel", [unscopeId(args[0]), nextTo]);
+        }
+      }
+
+      return undefined;
+    };
+
     for (const [name, fn] of Object.entries(handlers))
       ipcMain.handle(name, async (event, ...args) => {
         if (
@@ -784,6 +961,15 @@ else
             const { own, theirs } = splitPreferences(args[0]);
             if (own) fn(own);
             return theirs ? remote.callHost(settingsHost, name, [theirs]) : undefined;
+          }
+          if (
+            name === "link.spaces.arrange" ||
+            (name === "link.spaces.here" && (args[0] === null || parseMergedBuiltinSpaceId(args[0]) !== null)) ||
+            ((name === "spaces.read" || name === "link.spaces.seen" || name === "link.spaces.notify") && parseMergedBuiltinSpaceId(args[0]) !== null) ||
+            ((name === "spaces.newPanel" || name === "spaces.ask") && args[0] && typeof args[0] === "object" && parseMergedBuiltinSpaceId(args[0].spaceId) !== null) ||
+            (name === "spaces.movePanel" && args[1] && typeof args[1] === "object" && parseMergedBuiltinSpaceId(args[1].spaceId) !== null)
+          ) {
+            return handleUnifiedMergedSpaceCall(name, args, fn);
           }
           const route = routeUnifiedCall(name, args, { settingsHost });
           if (route.kind === "remote") {

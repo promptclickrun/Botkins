@@ -81,7 +81,7 @@ function SpaceTile({ space, spaces, big }: { space: SpaceSummary; spaces: SpaceS
         { id: "pin", title: pinWord, image: space.pinned ? "pin.slash" : "pin" },
         { id: "up", title: "Move up", image: "arrow.up", attributes: { disabled: !up } },
         { id: "down", title: "Move down", image: "arrow.down", attributes: { disabled: !down } },
-        ...(space.can === "own" ? [{ id: "share", title: "Share", image: "square.and.arrow.up" }] : []),
+        ...(space.can === "own" && !space.merged ? [{ id: "share", title: "Share", image: "square.and.arrow.up" }] : []),
       ]}
       onPressAction={({ nativeEvent }) => run(nativeEvent.event)}
     >

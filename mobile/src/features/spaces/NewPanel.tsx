@@ -12,6 +12,9 @@ import { BotChips } from "@/features/work/bits";
 import type { PanelStart } from "@/link/types";
 import { useBots, useCan, useMember, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { usePrefs } from "@/state/prefs";
+import { useApp } from "@/state/store";
+import { hostOfId } from "@/state/unified";
 import { EmptyState, Field, Group, Label, radius, Row, Sheet, space as gap, T, Tap, useTheme } from "@/ui";
 import { useSpaces } from "./data";
 import { panelProject, REFRESH, spaceTitle, STARTS } from "./logic";
@@ -26,9 +29,12 @@ export default function NewPanel() {
   const bots = useBots();
   const shown = useMemo(() => bots.filter((bot) => !bot.hidden), [bots]);
   const spaces = useSpaces();
+  const primaryId = useApp((s) => s.pairing?.serverId ?? null);
+  const settingsHost = usePrefs((p) => p.settingsHost);
   // A panel goes in a space the person may change.
   const places = useMemo(() => spaces.filter((space) => space.can === "own" || space.can === "edit"), [spaces]);
   const [place, setPlace] = useState<string | undefined>(spaceId);
+  const [chosenHost, setChosenHost] = useState<string | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
   const [start, setStart] = useState<PanelStart | null>(null);
   const [refresh, setRefresh] = useState("never");
@@ -40,17 +46,37 @@ export default function NewPanel() {
   const [asking, setAsking] = useState(false);
   if (!canCreate || !canChat) return <Sheet title="New panel"><EmptyState title="Your team role can't create panels" /></Sheet>;
   const space = places.find((one) => one.id === place) ?? places[0];
-  const bot = chosen ?? shown[0]?.id ?? null;
-  const ready = !!bot && !!space && !!text.trim() && !asking;
+  const mergedSources = space?.merged?.sources ?? [];
+  const defaultMergedHost =
+    (settingsHost && mergedSources.some((s) => s.hostId === settingsHost) ? settingsHost : null) ??
+    (primaryId && mergedSources.some((s) => s.hostId === primaryId) ? primaryId : null) ??
+    (mergedSources.length === 1 ? mergedSources[0]!.hostId : null);
+  const targetHostId = space?.merged ? (chosenHost && mergedSources.some((s) => s.hostId === chosenHost) ? chosenHost : defaultMergedHost) : null;
+  const hostBots = useMemo(() => {
+    if (!space?.merged) return shown;
+    if (!targetHostId) return shown;
+    const filtered = shown.filter((b) => hostOfId(b.id, primaryId) === targetHostId);
+    return filtered.length ? filtered : shown;
+  }, [shown, space?.merged, targetHostId, primaryId]);
+  const bot = (chosen && hostBots.some((b) => b.id === chosen) ? chosen : null) ?? hostBots[0]?.id ?? null;
+  const needsHostPick = !!space?.merged && mergedSources.length > 1 && !targetHostId;
+  const ready = !!bot && !!space && !needsHostPick && !!text.trim() && !asking;
   const every = REFRESH.find((choice) => choice.value === refresh) ?? REFRESH[0]!;
   const projectId = member ? undefined : panelProject(pickedProject, space, projects);
 
   const create = async () => {
     if (!ready || !bot || !space) return;
     setAsking(true);
-    const made = await attempt(
-      api["spaces.newPanel"]({ spaceId: space.id, botId: bot, prompt: text.trim(), ...(start && { start }), ...(projectId && { projectId }), ...(every.cron && { refresh: { cron: every.cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } }) }),
-    );
+    const payload = {
+      spaceId: space.id,
+      botId: bot,
+      prompt: text.trim(),
+      ...(targetHostId && { hostId: targetHostId }),
+      ...(start && { start }),
+      ...(projectId && { projectId }),
+      ...(every.cron && { refresh: { cron: every.cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } }),
+    };
+    const made = await attempt(api["spaces.newPanel"](payload as Parameters<typeof api["spaces.newPanel"]>[0]));
     setAsking(false);
     if (!made) return;
     router.back();
@@ -65,7 +91,7 @@ export default function NewPanel() {
       </View>
       <View>
         <Label>Bot</Label>
-        {shown.length ? <BotChips bots={shown} value={bot} onChange={(next) => next && setChosen(next)} /> : <T variant="subhead" color="muted">Make a bot first.</T>}
+        {hostBots.length ? <BotChips bots={hostBots} value={bot} onChange={(next) => next && setChosen(next)} /> : <T variant="subhead" color="muted">Make a bot first.</T>}
       </View>
       <View>
         <Label>Start from</Label>
@@ -96,6 +122,18 @@ export default function NewPanel() {
         <MenuView title="Space" actions={places.map((one) => ({ id: one.id, title: spaceTitle(one), state: one.id === space?.id ? ("on" as const) : ("off" as const) }))} onPressAction={({ nativeEvent }) => setPlace(nativeEvent.event)}>
           <Row title="Space" value={space ? spaceTitle(space) : "None"} trailing={<ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />} />
         </MenuView>
+        {mergedSources.length > 1 && (
+          <MenuView
+            title="Computer"
+            actions={mergedSources.map((src) => ({ id: src.hostId, title: src.hostName, state: src.hostId === targetHostId ? ("on" as const) : ("off" as const) }))}
+            onPressAction={({ nativeEvent }) => {
+              setChosenHost(nativeEvent.event);
+              setChosen(null);
+            }}
+          >
+            <Row title="Computer" value={mergedSources.find((src) => src.hostId === targetHostId)?.hostName ?? "Choose computer"} trailing={<ChevronRight size={16} color={colors.faint} strokeWidth={2.4} />} />
+          </MenuView>
+        )}
         {!member && !!projects?.length && (
           <MenuView
             title="Project"

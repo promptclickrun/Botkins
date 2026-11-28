@@ -20,9 +20,11 @@ type Props = {
   wide?: boolean;
   /** A last line of its own (on Home, the panel's space) in place of who updated it and when. */
   foot?: string;
+  /** Unified merged built-in space: host label shown when 2+ hosts contribute. */
+  hostLabel?: string;
 };
 
-export function PanelTile({ panel, spaceId, bot, changed = false, wide = false, foot }: Props) {
+export function PanelTile({ panel, spaceId, bot, changed = false, wide = false, foot, hostLabel }: Props) {
   const theme = useTheme();
   const { colors, dark } = theme;
   const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
@@ -34,7 +36,7 @@ export function PanelTile({ panel, spaceId, bot, changed = false, wide = false, 
   };
   const pin = () => setPanelPinned({ spaceId, panelId: panel.id }, !pinned);
   const pinWord = pinned ? "Take off Home" : "Pin to Home";
-  const last = foot ?? [bot?.name, "Updated " + ago(panel.updatedAt)].filter(Boolean).join(" · ");
+  const last = foot ?? [bot?.name, hostLabel, "Updated " + ago(panel.updatedAt)].filter(Boolean).join(" · ");
   const marks = (
     <>
       {pinned && !foot && <Pin size={14} color={colors.muted} strokeWidth={2.2} />}
@@ -54,9 +56,16 @@ export function PanelTile({ panel, spaceId, bot, changed = false, wide = false, 
         </View>
       ) : (
         <View style={{ flex: 1, flexDirection: "row", alignItems: "flex-start", gap: gap.sm }}>
-          <T variant="footnote" color="muted" numberOfLines={2} style={{ flex: 1 }}>
-            {panel.title}
-          </T>
+          <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+            <T variant="footnote" color="muted" numberOfLines={2}>
+              {panel.title}
+            </T>
+            {!!hostLabel && (
+              <T variant="caption" color="faint" numberOfLines={1}>
+                {hostLabel}
+              </T>
+            )}
+          </View>
           {marks}
         </View>
       )}
