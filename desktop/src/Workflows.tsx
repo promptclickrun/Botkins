@@ -17,6 +17,7 @@ import {
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowInspector } from "./WorkflowInspector";
 import { analyzeWorkflowFields } from "./workflowAnalysis";
+import { workflowRunStatusLabel } from "./workflowGithub";
 import { memberTeam } from "./teamAccess";
 import type {
   Bot,
@@ -572,7 +573,7 @@ export function WorkflowsView({
                         </span>
                         <span className="row-sub">
                           {wf.description || `${wf.nodes.length} steps · ${wf.edges.length} connections`}
-                          {latest ? ` · Last run: ${latest.status}` : ""}
+                          {latest ? ` · Last run: ${workflowRunStatusLabel(latest)}` : ""}
                         </span>
                       </span>
                     </button>

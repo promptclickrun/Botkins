@@ -1,11 +1,20 @@
 // A workflow's recent runs: each one's steps in order, with approve or reject, retry and cancel where they apply.
-import { ChevronDown, ChevronRight, ShieldCheck, TriangleAlert } from "lucide-react-native";
+import { ChevronDown, ChevronRight, ExternalLink, ShieldCheck, TriangleAlert } from "lucide-react-native";
 import { useState } from "react";
-import { ScrollView, View } from "react-native";
+import { Alert, Linking, ScrollView, View } from "react-native";
 import type { Workflow, WorkflowNode, WorkflowRun, WorkflowStepRun } from "@/link/types";
 import { api, attempt } from "@/state/link";
 import { Button, Dot, EmptyState, Field, Group, radius, Row, space, T, Tap, useShape, useTheme } from "@/ui";
-import { findGithubUncertainStep, GITHUB_UNCERTAIN_WARNING, hasGithubUncertainFailure, isGithubUncertainStep } from "./github";
+import {
+  canShowUncertainRetry,
+  findGithubUncertainStep,
+  GITHUB_UNCERTAIN_WARNING,
+  hasGithubUncertainFailure,
+  isGithubUncertainStep,
+  resolveGithubUncertainDetails,
+  workflowRunStatusLabel,
+  workflowStepStatusLabel,
+} from "./github";
 
 export function durLabel(start?: number | null, end?: number | null) {
   if (!start) return "";
@@ -17,13 +26,12 @@ export function durLabel(start?: number | null, end?: number | null) {
 
 export function statusTone(status: string): "success" | "warning" | "danger" | "accent" | undefined {
   if (status === "completed") return "success";
+  if (status === "githubUncertain") return "warning";
   if (status === "failed") return "danger";
   if (status === "waiting_approval") return "warning";
   if (status === "running") return "accent";
   return undefined;
 }
-
-const statusWord = (s: string) => (s === "waiting_approval" ? "Waiting for approval" : s.charAt(0).toUpperCase() + s.slice(1));
 
 /** Steps in the order the workflow draws them, then any the run has that the workflow no longer does. */
 function ordered(run: WorkflowRun, nodes: WorkflowNode[]): WorkflowStepRun[] {
@@ -57,21 +65,45 @@ function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: Workflo
   const failed = steps.find((s) => s.status === "failed");
   const uncertain = hasGithubUncertainFailure(run);
   const uncertainStep = findGithubUncertainStep(run);
+  const uncertainDetails = uncertain ? resolveGithubUncertainDetails(run, nodes) : null;
+  const showUncertainRetry = canShowUncertainRetry({ run, isOwner, canUse });
   const pendingApproval = run.pendingApproval;
   const respond = (decision: "approved" | "rejected") => {
     if (!pendingApproval) return;
     void attempt(api.workflowRespondApproval(run.id, pendingApproval.nodeId, decision, note.trim() || undefined), decision === "approved" ? "Approved" : "Rejected").then(() => setNote(""));
   };
+  const confirmUncertainRetry = (targetNodeId?: string | null) => {
+    if (!uncertainDetails) return;
+    Alert.alert(uncertainDetails.confirmTitle, uncertainDetails.confirmMessage, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Retry anyway",
+        style: "destructive",
+        onPress: () =>
+          void attempt(
+            api.workflowRetryRun(run.id, targetNodeId ?? uncertainDetails.nodeId ?? null, { allowUncertainRetry: true }),
+            "Retrying",
+          ),
+      },
+    ]);
+  };
   return (
     <Group>
       <Tap onPress={onToggle} accessibilityRole="button" accessibilityState={{ expanded: open }} style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md }}>
-        <Dot tone={statusTone(run.status)} />
+        <Dot tone={statusTone(uncertain ? "githubUncertain" : run.status)} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <T variant="callout" weight="700">
-            {statusWord(run.status)}
+            {workflowRunStatusLabel(run)}
           </T>
           <T variant="footnote" color="muted" numberOfLines={1}>
-            {[run.replay ? "Replayed event" : run.manual ? "Run by hand" : run.triggerKind || "Event", new Date(run.startedAt).toLocaleString(), durLabel(run.startedAt, run.finishedAt)].filter(Boolean).join(" · ")}
+            {[
+              uncertainDetails?.summary,
+              run.replay ? "Replayed event" : run.manual ? "Run by hand" : run.triggerKind || "Event",
+              new Date(run.startedAt).toLocaleString(),
+              durLabel(run.startedAt, run.finishedAt),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </T>
         </View>
         <Chevron size={18} color={colors.muted} />
@@ -96,7 +128,39 @@ function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: Workflo
 
       {open && (
         <View style={{ paddingHorizontal: space.md, paddingBottom: space.md }}>
-          {!!run.error && (
+          {uncertainDetails && (
+            <View style={{ padding: space.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, marginBottom: space.sm, gap: space.xs }}>
+              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xs }}>
+                <TriangleAlert size={14} color={colors.warning} />
+                <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="700">
+                  {uncertainDetails.statusLabel}
+                </T>
+              </View>
+              <T variant="footnote">
+                {uncertainDetails.summary} — {GITHUB_UNCERTAIN_WARNING}
+              </T>
+              <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
+                {!!uncertainDetails.url && (
+                  <Button
+                    title={uncertainDetails.target ? `Open ${uncertainDetails.target}` : "Open on GitHub"}
+                    icon={ExternalLink}
+                    variant="secondary"
+                    size="sm"
+                    onPress={() => void Linking.openURL(uncertainDetails.url!).catch(() => {})}
+                  />
+                )}
+                {showUncertainRetry && (
+                  <Button
+                    title="Retry anyway"
+                    variant="danger"
+                    size="sm"
+                    onPress={() => confirmUncertainRetry(uncertainDetails.nodeId)}
+                  />
+                )}
+              </View>
+            </View>
+          )}
+          {!!run.error && !uncertainDetails && (
             <View style={{ padding: space.sm, borderRadius: radius.sm, backgroundColor: colors.dangerSoft, marginBottom: space.sm }}>
               <T variant="footnote" color="danger">
                 {run.error}
@@ -109,7 +173,7 @@ function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: Workflo
               <View key={step.nodeId} style={{ flexDirection: "row", gap: space.md }}>
                 <View style={{ alignItems: "center", width: 12 }}>
                   <View style={{ marginTop: 6 }}>
-                    <Dot tone={statusTone(step.status)} />
+                    <Dot tone={statusTone(stepUncertain ? "githubUncertain" : step.status)} />
                   </View>
                   {i < steps.length - 1 && <View style={{ flex: 1, width: 2, backgroundColor: colors.line, marginTop: 4 }} />}
                 </View>
@@ -118,32 +182,12 @@ function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: Workflo
                     {step.label}
                   </T>
                   <T variant="caption" color="muted">
-                    {[statusWord(step.status), step.branch ? `took ${step.branch}` : "", durLabel(step.startedAt, step.finishedAt)].filter(Boolean).join(" · ")}
+                    {[workflowStepStatusLabel(step, run), step.branch ? `took ${step.branch}` : "", durLabel(step.startedAt, step.finishedAt)].filter(Boolean).join(" · ")}
                   </T>
                   {!!(step.error || step.summary) && (
                     <T variant="footnote" color={step.error ? "danger" : "ink2"} numberOfLines={6} selectable>
                       {step.error || step.summary}
                     </T>
-                  )}
-                  {stepUncertain && (
-                    <View style={{ padding: space.sm, borderRadius: radius.sm, backgroundColor: colors.warningSoft, gap: space.xs }}>
-                      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xs }}>
-                        <TriangleAlert size={14} color={colors.warning} />
-                        <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="600">
-                          {GITHUB_UNCERTAIN_WARNING}
-                        </T>
-                      </View>
-                      {isOwner && canUse && (
-                        <View style={{ flexDirection: "row" }}>
-                          <Button
-                            title="Retry anyway"
-                            variant="secondary"
-                            size="sm"
-                            onPress={() => void attempt(api.workflowRetryRun(run.id, null, { allowUncertainRetry: true }), "Retrying")}
-                          />
-                        </View>
-                      )}
-                    </View>
                   )}
                 </View>
               </View>
@@ -151,16 +195,20 @@ function RunCard({ run, nodes, canUse, isOwner, open, onToggle }: { run: Workflo
           })}
           {canUse && (
             <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
-              {run.status === "failed" && !uncertain && <Button title={failed ? `Retry ${failed.label}` : "Retry"} size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, failed?.nodeId), "Retrying")} />}
-              {run.status === "failed" && uncertain && !uncertainStep && isOwner && (
-                <Button title="Retry anyway" variant="secondary" size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, null, { allowUncertainRetry: true }), "Retrying")} />
-              )}
+              {run.status === "failed" && <Button title={failed ? `Retry ${failed.label}` : "Retry"} size="sm" onPress={() => void attempt(api.workflowRetryRun(run.id, failed?.nodeId), "Retrying")} />}
               {(run.status === "running" || run.status === "waiting_approval") && <Button title="Cancel run" variant="danger" size="sm" onPress={() => void attempt(api.workflowCancelRun(run.id), "Run cancelled")} />}
             </View>
           )}
         </View>
       )}
-      {!open && run.status === "failed" && failed && <Row title={failed.label} subtitle={failed.error} subtitleLines={2} tone="danger" />}
+      {!open && run.status === "failed" && failed && (
+        <Row
+          title={uncertainDetails ? uncertainDetails.statusLabel : failed.label}
+          subtitle={uncertainDetails ? uncertainDetails.summary : failed.error}
+          subtitleLines={2}
+          tone={uncertainDetails ? undefined : "danger"}
+        />
+      )}
     </Group>
   );
 }

@@ -2,7 +2,7 @@
 import * as Clipboard from "expo-clipboard";
 import { CheckCircle2, Copy, ExternalLink, KeyRound, Plus, RefreshCw, Trash2, TriangleAlert, X } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Linking, Modal, View } from "react-native";
+import { Alert, Linking, Modal, View } from "react-native";
 import type { WorkflowGithubCatalog, WorkflowGithubDelivery, WorkflowGithubStatus, WorkflowNode, WorkflowRun, WorkflowTriggerKind } from "@/link/types";
 import { useBots, useChats, useModels, useRoutines } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
@@ -18,6 +18,7 @@ import {
   latestGithubUncertainRunForNode,
   normalizeLabelColor,
   PR_ONLY_ACTIONS,
+  resolveGithubUncertainDetails,
   resolveOutputTargetRepos,
   shouldClearLabelsOnRepoChange,
   WORKFLOW_GITHUB_ACTION_OPTIONS,
@@ -631,6 +632,10 @@ function GithubOutputEditor({
   const [peopleModal, setPeopleModal] = useState(false);
   const [retryingUncertain, setRetryingUncertain] = useState(false);
   const uncertainRun = useMemo(() => latestGithubUncertainRunForNode(runs, nodeId), [runs, nodeId]);
+  const uncertainDetails = useMemo(
+    () => (uncertainRun ? resolveGithubUncertainDetails(uncertainRun, [{ id: nodeId, kind: "output", config: cfg }]) : null),
+    [uncertainRun, nodeId, cfg],
+  );
 
   const issueOnly = useMemo(() => isIssueOnlyGithubTrigger(triggerNodes), [triggerNodes]);
   const targetRepos = useMemo(() => resolveOutputTargetRepos(cfg, triggerNodes), [cfg, triggerNodes]);
@@ -689,32 +694,53 @@ function GithubOutputEditor({
 
   return (
     <View style={{ gap: space.lg }}>
-      {uncertainRun && (
+      {uncertainRun && uncertainDetails && (
         <View style={{ padding: space.md, borderRadius: radius.md, backgroundColor: colors.warningSoft, gap: space.sm }}>
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xs }}>
             <TriangleAlert size={16} color={colors.warning} />
-            <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="600">
-              {GITHUB_UNCERTAIN_WARNING}
+            <T variant="footnote" style={{ flex: 1, color: colors.warning }} weight="700">
+              {uncertainDetails.statusLabel}
             </T>
           </View>
-          {isOwner && (
-            <View style={{ flexDirection: "row" }}>
+          <T variant="footnote">
+            {uncertainDetails.summary} — {GITHUB_UNCERTAIN_WARNING}
+          </T>
+          <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
+            {!!uncertainDetails.url && (
+              <Button
+                title={uncertainDetails.target ? `Open ${uncertainDetails.target}` : "Open on GitHub"}
+                icon={ExternalLink}
+                variant="secondary"
+                size="sm"
+                onPress={() => void Linking.openURL(uncertainDetails.url!).catch(() => showToast("Couldn't open GitHub.", "error"))}
+              />
+            )}
+            {isOwner && (
               <Button
                 title="Retry anyway"
-                variant="secondary"
+                variant="danger"
                 size="sm"
                 loading={retryingUncertain}
                 onPress={() => {
-                  setRetryingUncertain(true);
-                  void attempt(api.workflowRetryRun(uncertainRun.id, null, { allowUncertainRetry: true }), "Retrying")
-                    .then((r) => {
-                      if (r) onRetried?.();
-                    })
-                    .finally(() => setRetryingUncertain(false));
+                  Alert.alert(uncertainDetails.confirmTitle, uncertainDetails.confirmMessage, [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Retry anyway",
+                      style: "destructive",
+                      onPress: () => {
+                        setRetryingUncertain(true);
+                        void attempt(api.workflowRetryRun(uncertainRun.id, nodeId, { allowUncertainRetry: true }), "Retrying")
+                          .then((r) => {
+                            if (r) onRetried?.();
+                          })
+                          .finally(() => setRetryingUncertain(false));
+                      },
+                    },
+                  ]);
                 }}
               />
-            </View>
-          )}
+            )}
+          </View>
         </View>
       )}
 
