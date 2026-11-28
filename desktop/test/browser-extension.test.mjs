@@ -12,7 +12,7 @@ import test from "node:test";
 import { LinkHost } from "../desktop/link/index.mjs";
 import { BROWSER_TOOLS } from "../desktop/link/browser.mjs";
 import * as lib from "../desktop/remote/link-client.mjs";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspaceText } from "./starter.mjs";
 
 function makeBackend(state) {
   const listeners = new Set();
@@ -472,7 +472,7 @@ async function runExtensionSecureFillE2E(t, { viaRelay }) {
   // Sentinel redaction audit across host logs, workspace snapshot, persisted store, phone updates, wire frames, and tool outputs.
   const allLogs = hostLogs.join("\n");
   const snapStr = JSON.stringify(ws.snapshot());
-  const diskStr = readFileSync(join(dir, "workspace.json"), "utf8");
+  const diskStr = readPersistedWorkspaceText(dir);
   const phoneStr = JSON.stringify(phoneUpdates);
   for (const sentinel of [sentinelEmail, sentinelPass]) {
     assert.equal(allLogs.includes(sentinel), false, "sentinel leaked into host logs");

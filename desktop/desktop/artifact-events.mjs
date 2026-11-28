@@ -203,9 +203,12 @@ export class ArtifactEvents {
       const chat = this.ws.state.chats.find((c) => c.id === run.chatId);
       if (!chat) continue;
       for (const step of run.steps ?? []) {
-        if (step.status !== "Done" || !step.input) continue;
+        if (step.status !== "Done") continue;
+        // A finished run's long input stays in the workspace database until it is asked for.
+        const input = step.input ?? (step.more ? this.ws.stepDetail?.(run.chatId, run.id, step.id, { maxChars: 0 })?.input : undefined);
+        if (!input) continue;
         let args;
-        try { args = JSON.parse(step.input); } catch { continue; }
+        try { args = JSON.parse(input); } catch { continue; }
         const botId = step.botId || chat.botId;
         const root = this.folder(chat, botId);
         for (const path of destinations(step.name, args)) this.record(chat, botId, run, root, path, step.finished ?? run.time, true);

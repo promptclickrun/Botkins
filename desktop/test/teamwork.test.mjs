@@ -329,7 +329,7 @@ test("mentioned records reach the model as text and files, stay on the message, 
   refuse([{ kind: "project", id: "gone" }], /project no longer exists/);
   refuse([{ kind: "team", id: "x" }], /Unknown mention/);
   refuse(Array.from({ length: 13 }, () => ({ kind: "project", id: project })), /up to 12 records/);
-  refuse([{ kind: "file", path: join(dir, "data", "workspace.json") }], /Only files in this bot's workspace/);
+  refuse([{ kind: "file", path: join(dir, "data", "workspace.db") }], /Only files in this bot's workspace/);
   refuse([{ kind: "file", path: join(files, "missing.md") }], /no longer exists: missing\.md/);
   writeFileSync(join(dir, "outside.txt"), "private");
   symlinkSync(join(dir, "outside.txt"), join(files, "link.txt"));

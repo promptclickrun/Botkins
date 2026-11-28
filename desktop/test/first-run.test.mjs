@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { Workspace } from "../desktop/workspace.mjs";
+import { readPersistedWorkspace } from "./starter.mjs";
 import { Providers, ModelProvider } from "../desktop/providers/index.mjs";
 import { CopilotProvider } from "../desktop/providers/copilot/index.mjs";
 import { agentTitle, matchModel, parseAgentFile, readAgents } from "../desktop/providers/copilot/agents.mjs";
@@ -64,7 +65,7 @@ test("a new workspace starts with no bots, and still opens and saves", (t) => {
   const ws = new Workspace(dir, fakeClient().client, () => {});
   assert.deepEqual(ws.state.bots, []);
   assert.deepEqual(ws.snapshot().bots, []);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "workspace.json"), "utf8")).bots, []);
+  assert.deepEqual(readPersistedWorkspace(dir).bots, []);
   // The first bot made in Botkins is the primary bot.
   const id = ws.addBot({ name: "Nova", role: "Helper", instructions: "Help.", face: "idle" });
   assert.equal(ws.state.bots[0].id, id);

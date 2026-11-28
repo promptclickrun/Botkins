@@ -408,7 +408,7 @@ export const WORKSPACE = {
   ...each("startDictation startLiveVoice endLiveVoice liveVoiceTool liveVoiceTranscript recordVoiceLine transcribe speak", no("window")), // the window's microphone and speaker
   ...each("testNotification requestScreenPermission allowLocalNetwork grantMacTool setPhoneScreen computerUseStatus requestComputerUsePermission", no("window")), // a notification or a permission the system asks for on the screen
   // ── What only the window uses to draw itself ──
-  ...each("sidePane frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
+  ...each("sidePane stepDetail frameAnswer frameOpenLink linkPreview previewChatPath thumbnailChatPath inspectChatPaths artifacts.thumbnail warmChat", no("window's own")),
 };
 
 /** The phone link's own calls: every `link.*` name of `LinkHost` (desktop/link/server.mjs). */

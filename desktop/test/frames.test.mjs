@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { FRAME_CSP, framePage } from "../desktop/frames.mjs";
 import { VIEW_GUARD, guardedPage, unshadow } from "../desktop/view-guard.mjs";
 import { fakeClient, tempDir } from "./fake-copilot.mjs";
@@ -34,7 +34,7 @@ test("a panel's html block is stored as a frame, out of the workspace file and t
   assert.match(block.frame, /^[0-9a-f-]{36}$/);
   assert.deepEqual(ws.state.frames.map((f) => [f.owner, f.botId]), [["panel:" + panel.id, "pip"]]);
   assert.deepEqual(files(), [block.frame + ".html", block.frame + ".json"]);
-  for (const text of [readFileSync(join(dir, "workspace.json"), "utf8"), JSON.stringify(ws.snapshot())])
+  for (const text of [readPersistedWorkspaceText(dir), JSON.stringify(ws.snapshot())])
     assert.doesNotMatch(text, /Sales<\/h1>|points/, "the page and its data stay out");
   assert.equal(ws.frames.html(block.frame), PAGE);
   assert.deepEqual(ws.frames.data(block.frame), { title: "Q3", points: [1, 2, 3] });

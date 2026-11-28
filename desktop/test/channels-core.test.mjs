@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { authorize, filterParts } from "../desktop/link/team.mjs";
 import { baseParts } from "../desktop/link/parts.mjs";
 import { CHANNEL_METHODS, remoteArgs } from "../desktop/link/methods.mjs";
@@ -619,7 +619,7 @@ test("Secret leaks: sentinel token never appears in workspace.json, snapshot, au
 
   // 3. workspace.json on disk never contains either sentinel token.
   ws.flushSave();
-  const wsFile = readFileSync(join(dir, "workspace.json"), "utf8");
+  const wsFile = readPersistedWorkspaceText(dir);
   assert.ok(!wsFile.includes(SENTINEL), "workspace.json must never contain bot token");
   assert.ok(!wsFile.includes("xapp-SENTINEL-APP-112233"), "workspace.json must never contain app token");
 

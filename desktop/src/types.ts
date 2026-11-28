@@ -1979,6 +1979,8 @@ declare global {
       stop(id: string): Promise<void>;
       /** Stops one helper or background command of the chat's turn, by its id (a helper's id is the id of the step that started it). "stop-helper-v1". */
       stopHelper(chatId: string, id: string): Promise<void>;
+      /** On-demand step input/output when loaded lazily from the SQLite store. */
+      stepDetail?(chatId: string, runId: string, stepId: string): Promise<{ input?: string; output?: string } | null>;
       /** The account behind one model provider. Without an id, the default provider (GitHub Copilot). */
       auth(providerId?: string): Promise<AuthStatus>;
       /** Starts that provider's sign-in in the person's browser and resolves when it is done. */
@@ -3077,6 +3079,8 @@ export type Step = {
   botId?: string;
   /** The computer can stop this helper or background command on its own: `stopHelper` ("stop-helper-v1"). Set only while it runs. */
   stoppable?: boolean;
+  /** The step's full input or output lives in SQLite and is read on demand when opened. */
+  more?: boolean;
 };
 export type Card = {
   id: string;

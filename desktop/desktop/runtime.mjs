@@ -1050,6 +1050,8 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     },
     stop: (id) => workspace.stop(id),
     stopHelper: (id, helperId) => workspace.stopHelper(id, helperId),
+    // On-demand step input/output for SQLite lazy steps (maxChars: 12000 for desktop detail views).
+    stepDetail: (chatId, runId, stepId) => workspace.stepDetail(String(chatId), String(runId), String(stepId), { maxChars: 12000 }),
     // Opening a chat readies its session, so the next message starts at once.
     warmChat: (id) => void workspace.prewarm(id),
     // Chat canvas (desktop/canvas.mjs)
@@ -1470,6 +1472,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
     },
+    stepDetail: (chatId, runId, stepId) => workspace.stepDetail(chatId, runId, stepId),
     // A bot's Botkin is kept on the bot (desktop/looks.mjs), so the link stores no looks of its own
     // and sends each bot's `look` as it is. A phone changes one through here.
     setLook: (botId, look) => workspace.updateBot(String(botId), { look }),
@@ -1735,7 +1738,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
       workspace.flushSave();
       return Promise.allSettled([formBrowser?.stop(), signIns.close(), providers.stop(), workspace.harness.stop(), bridge.stop(), link.stop(), codexVoice?.close()]).then((results) => {
         // Turns that ended while everything stopped wrote with `save`; anything still waiting goes now.
-        workspace.flushSave();
+        workspace.close();
         return results;
       });
     },

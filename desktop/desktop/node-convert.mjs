@@ -24,6 +24,7 @@ import { holderSessions } from "./providers/sessions.mjs";
 import { helperSessionId } from "./teamwork.mjs";
 import { nextTime } from "./panels.mjs";
 import { readWorkspace } from "./workspace-file.mjs";
+import { readWorkspaceState } from "./workspace-sqlite.mjs";
 import { peerCapabilities } from "./remote-teamwork.mjs";
 
 export const CONVERT_SCHEMA_VERSION = 1;
@@ -1196,7 +1197,14 @@ export function createConversionSnapshot(ws, jobId, meta = {}) {
     copied.push(name);
   };
 
-  copyIfExists("workspace.json");
+  if (ws.sqlite) {
+    // Checkpoint WAL and write a portable JSON snapshot alongside the backup copy so undo works cleanly.
+    const exported = JSON.stringify(ws.sqlite.exportState());
+    writeFileSync(join(dir, "workspace.json"), exported, { mode: 0o600 });
+    copied.push("workspace.json");
+  } else {
+    copyIfExists("workspace.json");
+  }
   copyIfExists("memory");
   copyIfExists("files");
   copyIfExists("frames");
@@ -1239,7 +1247,8 @@ export async function undoConversion(ws, { snapshotId, peers } = {}) {
   if (!snapshot) throw new Error("No conversion backup snapshot is available to undo.");
 
   const savedFile = join(snapshot.path, "workspace.json");
-  if (!existsSync(savedFile)) throw new Error("Conversion snapshot is missing workspace.json.");
+  const savedDb = join(snapshot.path, "workspace.db");
+  if (!existsSync(savedFile) && !existsSync(savedDb)) throw new Error("Conversion snapshot is missing workspace backup.");
 
   // Check if any active turns are running before restoring.
   if (ws.active.size > 0) {
@@ -1293,8 +1302,8 @@ export async function undoConversion(ws, { snapshotId, peers } = {}) {
     }
   }
 
-  // Reload workspace.json in-memory state.
-  const restored = readWorkspace(savedFile);
+  // Reload workspace state from the snapshot (JSON or SQLite).
+  const restored = existsSync(savedFile) ? readWorkspace(savedFile) : readWorkspaceState(snapshot.path);
   const restoredNodeHost = restored.nodeHost ?? {};
   delete restored.nodeHost;
   delete restored.hostDispatch;
@@ -1304,6 +1313,11 @@ export async function undoConversion(ws, { snapshotId, peers } = {}) {
 
   ws.state = restored;
   ws.state.panels ??= [];
+  ws.state.projects ??= [];
+  ws.state.spaces ??= [];
+  ws.state.tasks ??= [];
+  ws.state.workflows ??= [];
+  ws.state.workflowRuns ??= [];
   ws.nodeHost.enabled = restoredNodeHost.enabled === true;
   ws.nodeHost.name = safeText(restoredNodeHost.name, 80);
   ws.nodeHost.paused = restoredNodeHost.paused === true;

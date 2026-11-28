@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Workspace } from "./starter.mjs";
+import { Workspace, readPersistedWorkspaceText } from "./starter.mjs";
 import { fakeClient } from "./fake-copilot.mjs";
 import { baseParts } from "../desktop/link/parts.mjs";
 import { performSecureUse } from "../desktop/secure-input.mjs";
@@ -43,7 +43,7 @@ test("a secure answer reaches only its approved operation and leaves a label-onl
   await ws.send(chat, "Sign in securely");
   assert.equal(checked, true, ws.state.runs[0].detail);
   const state = ws.snapshot();
-  for (const surface of [JSON.stringify(state), JSON.stringify(baseParts(state, {})), JSON.stringify(response), used, readFileSync(join(dir, "workspace.json"), "utf8")])
+  for (const surface of [JSON.stringify(state), JSON.stringify(baseParts(state, {})), JSON.stringify(response), used, readPersistedWorkspaceText(dir)])
     for (const value of Object.values(content)) assert.ok(!surface.includes(value));
   assert.match(ws.chat(chat).messages.map(m => m.text).join(" "), /Username, Password/);
 });
@@ -384,7 +384,7 @@ test("page_fill accepts dotted field keys, resolves extension targets, surfaces 
 
   // 4. Sentinel redaction: neither sentinel appears in workspace snapshot, persisted workspace.json, or tool results.
   const snapJson = JSON.stringify(ws.snapshot());
-  const diskJson = readFileSync(join(dir, "workspace.json"), "utf8");
+  const diskJson = readPersistedWorkspaceText(dir);
   for (const sentinel of [sentinelEmail, sentinelPass]) {
     assert.equal(snapJson.includes(sentinel), false, "sentinel leaked into workspace snapshot");
     assert.equal(diskJson.includes(sentinel), false, "sentinel leaked into workspace.json");
