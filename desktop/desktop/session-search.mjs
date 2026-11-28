@@ -78,14 +78,16 @@ export class SessionSearch {
 
   /**
    * The chats that may be searched. `bot` keeps the chats that bot answers in and whose project it may
-   * use; `people` keeps the chats every one of them is in ("owner" or a member's id).
+   * use, plus the chats of tasks it handed out (it reviews that work, so it may read it); `people`
+   * keeps the chats every one of them is in ("owner" or a member's id).
    */
   searchable({ bot, people } = {}) {
     const state = this.ws.state;
+    const delegated = bot ? new Set((state.tasks ?? []).filter((t) => t.createdBy === bot.id && t.chatId).map((t) => t.chatId)) : null;
     return state.chats.filter((chat) => {
       if (chat.temporary || chat.hostDispatch || chat.helper) return false;
       if (bot) {
-        if (!this.botsOf(chat).includes(bot.id)) return false;
+        if (!this.botsOf(chat).includes(bot.id) && !delegated.has(chat.id)) return false;
         if (chat.projectId && !canUseProject(state, bot, chat.projectId)) return false;
       }
       if (people?.length && !people.every((person) => this.ws.inChat(chat.id, person))) return false;
@@ -215,7 +217,7 @@ export class SessionSearch {
     return [
       tool(
         "session_search",
-        "Search your past chats with the person (every harness, every chat you are in) for words or a \"quoted phrase\". Returns matching messages with chatId, title, index, time and a snippet, newest and best first. Use it before saying something doesn't exist or asking for context given before.",
+        "Search your past chats with the person (every harness, every chat you are in, and the chats of tasks you handed out) for words or a \"quoted phrase\". Returns matching messages with chatId, title, index, time and a snippet, newest and best first. Use it before saying something doesn't exist or asking for context given before.",
         {
           query: { ...str, description: "Words that must all appear, or a \"quoted phrase\"." },
           limit: { type: "integer", minimum: 1, maximum: LIMIT_MAX, description: "Default " + LIMIT + "." },
