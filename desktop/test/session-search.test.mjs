@@ -113,3 +113,22 @@ test("the owner's search covers every bot's chats and skips scratch spaces", (t)
   assert.equal(found.results.length, 2);
   assert.equal(found.chats, 2);
 });
+
+test("a bot finds the chats of tasks it handed out, and no other task chats", (t) => {
+  const { ws, say, turn } = setup(t);
+  const handed = ws.createChat("scout", "Task · Relay deploy");
+  say(handed, ["user", "Deploy the relay worker"], ["assistant", "Deployed relay worker version 42."]);
+  const notMine = ws.createChat("scout", "Task · Other relay job");
+  say(notMine, ["user", "relay worker cleanup for the person"]);
+  ws.state.tasks = [
+    { id: "t1", title: "Relay deploy", botId: "scout", createdBy: "pip", chatId: handed, status: "review" },
+    { id: "t2", title: "Other relay job", botId: "scout", createdBy: "person", chatId: notMine, status: "done" },
+  ];
+  const now = ws.createChat("pip");
+  say(now, ["user", "did the relay deploy go out?"]);
+  const tools = turn(now, "pip");
+  const found = call(tools, "session_search", { query: "relay worker" });
+  assert.deepEqual([...new Set(found.results.map((hit) => hit.chatId))], [handed]);
+  assert.match(call(tools, "session_read", { chatId: handed }).messages.at(-1).text, /version 42/);
+  assert.throws(() => tools.get("session_read").handler({ chatId: notMine }), /no chat/);
+});
