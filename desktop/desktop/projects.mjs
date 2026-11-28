@@ -263,6 +263,9 @@ export class Projects {
         chat.mode = "default";
       }
     for (const panel of this.ws.state.panels ?? []) if (panel.projectId === id) delete panel.projectId;
+    // Its tasks stay on the board, tied to no project; its working notes stay only on their tasks (desktop/notes.mjs).
+    for (const task of this.ws.state.tasks ?? []) if (task.projectId === id) delete task.projectId;
+    this.ws.notes?.removeProject(id);
     for (const bot of this.ws.state.bots)
       if (bot.access?.projects) bot.access.projects = bot.access.projects.filter((p) => p !== id);
     this.ws.save();

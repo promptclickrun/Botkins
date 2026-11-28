@@ -232,6 +232,9 @@ export function scopeRemoteSnapshot(snap, { hostId, hostName, member = false, te
     ...(hasText(task.botId) && { botId: s(task.botId) }),
     ...(hasText(task.chatId) && { chatId: s(task.chatId) }),
     ...(hasText(task.projectId) && { projectId: s(task.projectId) }),
+    // What a task is tied to names other tasks of the same host (desktop/tasks.mjs, `links`).
+    ...(hasText(task.parentId) && { parentId: s(task.parentId) }),
+    ...(Array.isArray(task.dependsOn) && { dependsOn: task.dependsOn.map(s) }),
     ...meta,
   }));
 

@@ -56,7 +56,8 @@ test("in a chat of two people each message reaches the model with its author", a
   await ws.send(id, "Plan the trip");
   assert.equal(lastSent(log), "[Botkins: this chat has several people: Colt (owner, id owner), Avery (member, id m_avery). Each message starts with its speaker's name in brackets; the latest is from Colt.]\n[Colt] Plan the trip");
   await ws.send(id, "Add a beach day", { author: avery });
-  assert.match(lastSent(log), /the latest is from Avery\.\]\n\[Avery\] Add a beach day$/);
+  // A member's first turn in the owner's chat is told, once, which of the session's tools it hasn't (desktop/session-prompts.mjs toolChanges).
+  assert.match(lastSent(log), /the latest is from Avery\.\]\n\[Avery\] Add a beach day\n\n\[Botkins: your tools changed\]\nNot in this turn \(still listed, but they answer that they aren't available\): [^\n]*\bscript_command_create\b[^\n]*\.$/);
   assert.doesNotMatch(lastSent(log), /not the owner/, "the people line already says who the owner is");
   assert.deepEqual(ws.chat(id).messages.filter((m) => m.role === "user").map((m) => m.text), ["Plan the trip", "Add a beach day"]);
 });

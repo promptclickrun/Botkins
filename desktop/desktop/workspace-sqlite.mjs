@@ -7,7 +7,7 @@
 // - WAL mode (`PRAGMA journal_mode = WAL`), `PRAGMA synchronous = NORMAL`, `PRAGMA foreign_keys = ON`.
 // - Normalized tables for bots, chats, messages, runs, run_steps (input/output stored in dedicated
 //   columns so long tool payloads can load lazily on demand), tasks, routines, projects, spaces,
-//   panels, plus a `kv` table for singleton settings and smaller collections.
+//   panels, notes, plus a `kv` table for singleton settings and smaller collections.
 // - Incremental dirty-row persistence: `save()` and `saveSoon()` flush only rows touched since
 //   the last commit inside one transaction, keeping per-turn save cost O(touched) rather than
 //   O(total history).
@@ -139,6 +139,17 @@ CREATE TABLE IF NOT EXISTS tasks (
   data TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  task_id TEXT,
+  project_id TEXT,
+  bot_id TEXT,
+  kind TEXT,
+  created_at INTEGER,
+  data TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workflows (
   id TEXT PRIMARY KEY,
   sort_order INTEGER NOT NULL,
@@ -171,6 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_run_steps_status ON run_steps(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_chat ON tasks(chat_id);
+CREATE INDEX IF NOT EXISTS idx_notes_task ON notes(task_id);
+CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id);
 CREATE INDEX IF NOT EXISTS idx_panels_space ON panels(space_id);
 CREATE INDEX IF NOT EXISTS idx_panels_chat ON panels(chat_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_wf ON workflow_runs(workflow_id);
@@ -179,7 +192,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_created ON workflow_runs(created_at
 `;
 
 const TABLE_COLLECTION_KEYS = new Set([
-  "bots", "chats", "runs", "tasks", "projects", "spaces", "panels", "workflows", "workflowRuns",
+  "bots", "chats", "runs", "tasks", "notes", "projects", "spaces", "panels", "workflows", "workflowRuns",
 ]);
 
 /** Keys that are transient / never persisted into kv. */
@@ -336,13 +349,14 @@ export function countStateRecords(state) {
     if (Array.isArray(run?.steps)) runSteps += run.steps.length;
   }
   const tasks = Array.isArray(state.tasks) ? state.tasks.length : 0;
+  const notes = Array.isArray(state.notes) ? state.notes.filter((note) => note && typeof note === "object").length : 0;
   const projects = Array.isArray(state.projects) ? state.projects.length : 0;
   const spaces = Array.isArray(state.spaces) ? state.spaces.length : 0;
   const panels = Array.isArray(state.panels) ? state.panels.length : 0;
   const workflows = Array.isArray(state.workflows) ? state.workflows.length : 0;
   const workflowRuns = Array.isArray(state.workflowRuns) ? state.workflowRuns.length : 0;
   const kvKeys = Object.keys(state).filter((k) => !SKIP_KV_KEYS.has(k) && state[k] !== undefined).length;
-  return { bots, chats, messages, routines, runs, runSteps, tasks, projects, spaces, panels, workflows, workflowRuns, kvKeys };
+  return { bots, chats, messages, routines, runs, runSteps, tasks, notes, projects, spaces, panels, workflows, workflowRuns, kvKeys };
 }
 
 /**
@@ -358,6 +372,7 @@ export function countDbRecords(db) {
     runs: count("SELECT COUNT(*) AS c FROM runs"),
     runSteps: count("SELECT COUNT(*) AS c FROM run_steps"),
     tasks: count("SELECT COUNT(*) AS c FROM tasks"),
+    notes: count("SELECT COUNT(*) AS c FROM notes"),
     projects: count("SELECT COUNT(*) AS c FROM projects"),
     spaces: count("SELECT COUNT(*) AS c FROM spaces"),
     panels: count("SELECT COUNT(*) AS c FROM panels"),
@@ -399,6 +414,17 @@ function uniqueRoutineId(schedule, index, seen) {
   return dedup;
 }
 
+/** A working note's own columns (desktop/notes.mjs), between its id and order and its data. */
+function noteColumns(note) {
+  return [
+    typeof note?.taskId === "string" ? note.taskId : null,
+    typeof note?.projectId === "string" ? note.projectId : null,
+    typeof note?.botId === "string" ? note.botId : null,
+    typeof note?.kind === "string" ? note.kind : null,
+    Number.isFinite(note?.at) ? note.at : null,
+  ];
+}
+
 /**
  * Assign a stable unique primary key for rows in top-level tables (bots, chats, runs, tasks, etc.).
  */
@@ -433,6 +459,7 @@ function importStateIntoDb(db, state) {
   const insRun = db.prepare("INSERT INTO runs (id, sort_order, chat_id, status, created_at, finished_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)");
   const insStep = db.prepare("INSERT INTO run_steps (run_id, id, seq, name, status, started_at, finished_at, input, output, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const insTask = db.prepare("INSERT INTO tasks (id, sort_order, bot_id, chat_id, status, priority, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const insNote = db.prepare("INSERT INTO notes (id, sort_order, task_id, project_id, bot_id, kind, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
   const insWorkflow = db.prepare("INSERT INTO workflows (id, sort_order, name, enabled, created_at, data) VALUES (?, ?, ?, ?, ?, ?)");
   const insWorkflowRun = db.prepare("INSERT INTO workflow_runs (id, sort_order, workflow_id, status, created_at, data) VALUES (?, ?, ?, ?, ?, ?)");
 
@@ -446,6 +473,7 @@ function importStateIntoDb(db, state) {
       DELETE FROM messages;
       DELETE FROM chats;
       DELETE FROM tasks;
+      DELETE FROM notes;
       DELETE FROM workflow_runs;
       DELETE FROM workflows;
       DELETE FROM panels;
@@ -594,6 +622,13 @@ function importStateIntoDb(db, state) {
         Number.isFinite(task.createdAt) ? task.createdAt : null,
         JSON.stringify(task),
       );
+    }
+
+    const noteSeen = new Set();
+    for (let i = 0; i < (state.notes ?? []).length; i++) {
+      const note = state.notes[i];
+      if (!note || typeof note !== "object") continue;
+      insNote.run(uniqueRowId(note, i, noteSeen, "note"), i, ...noteColumns(note), JSON.stringify(note));
     }
 
     const wfSeen = new Set();
@@ -833,6 +868,8 @@ export class SqliteWorkspaceStore {
     this._panelsOrder = [];
     this._tasksSnap = new Map();
     this._tasksOrder = [];
+    this._notesSnap = new Map();
+    this._notesOrder = [];
     this._workflowsSnap = new Map();
     this._workflowsOrder = [];
     this._workflowRunsSnap = new Map();
@@ -866,6 +903,9 @@ export class SqliteWorkspaceStore {
 
       upsertTask: db.prepare("INSERT OR REPLACE INTO tasks (id, sort_order, bot_id, chat_id, status, priority, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
       deleteTask: db.prepare("DELETE FROM tasks WHERE id = ?"),
+
+      upsertNote: db.prepare("INSERT OR REPLACE INTO notes (id, sort_order, task_id, project_id, bot_id, kind, created_at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+      deleteNote: db.prepare("DELETE FROM notes WHERE id = ?"),
 
       upsertWorkflow: db.prepare("INSERT OR REPLACE INTO workflows (id, sort_order, name, enabled, created_at, data) VALUES (?, ?, ?, ?, ?, ?)"),
       deleteWorkflow: db.prepare("DELETE FROM workflows WHERE id = ?"),
@@ -1020,6 +1060,20 @@ export class SqliteWorkspaceStore {
         state.tasks.push(task);
         this._tasksOrder.push(row.id);
         this._tasksSnap.set(row.id, snapshotValue(task));
+      }
+    }
+
+    // 6a. working notes (desktop/notes.mjs takes them out of the state and keeps them itself)
+    this._notesSnap.clear();
+    this._notesOrder = [];
+    const noteRows = db.prepare("SELECT id, data FROM notes ORDER BY sort_order").all();
+    if (noteRows.length) {
+      state.notes = [];
+      for (const row of noteRows) {
+        const note = JSON.parse(row.data);
+        state.notes.push(note);
+        this._notesOrder.push(row.id);
+        this._notesSnap.set(row.id, snapshotValue(note));
       }
     }
 
@@ -1273,6 +1327,8 @@ export class SqliteWorkspaceStore {
     if (panels.length || exportEmpty.has("panels")) state.panels = panels.map((r) => JSON.parse(r.data));
     const tasks = db.prepare("SELECT data FROM tasks ORDER BY sort_order").all();
     if (tasks.length || exportEmpty.has("tasks")) state.tasks = tasks.map((r) => JSON.parse(r.data));
+    const notes = db.prepare("SELECT data FROM notes ORDER BY sort_order").all();
+    if (notes.length) state.notes = notes.map((r) => JSON.parse(r.data));
     const workflows = db.prepare("SELECT data FROM workflows ORDER BY sort_order").all();
     if (workflows.length || exportEmpty.has("workflows")) state.workflows = workflows.map((r) => JSON.parse(r.data));
     const workflowRuns = db.prepare("SELECT data FROM workflow_runs ORDER BY sort_order").all();
@@ -1311,7 +1367,7 @@ export class SqliteWorkspaceStore {
   }
 
   /**
-   * Sync a simple id-keyed collection table (`bots`, `projects`, `spaces`, `panels`, `tasks`).
+   * Sync a simple id-keyed collection table (`bots`, `projects`, `spaces`, `panels`, `tasks`, `notes`).
    * Only writes rows whose contents or sort_order changed, and deletes removed rows.
    */
   _syncSimpleTable(items, prevSnap, prevOrder, prefix, upsertFn, deleteStmt) {
@@ -1694,6 +1750,12 @@ export class SqliteWorkspaceStore {
           JSON.stringify(task),
         ),
         this._stmt.deleteTask,
+      );
+      // New notes are added at the end, so one new note writes one row.
+      this._notesOrder = this._syncSimpleTable(
+        state.notes, this._notesSnap, this._notesOrder, "note",
+        (id, i, note) => this._stmt.upsertNote.run(id, i, ...noteColumns(note), JSON.stringify(note)),
+        this._stmt.deleteNote,
       );
       this._workflowsOrder = this._syncSimpleTable(
         state.workflows, this._workflowsSnap, this._workflowsOrder, "wf",

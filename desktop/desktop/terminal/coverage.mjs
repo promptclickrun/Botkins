@@ -273,6 +273,7 @@ export const WORKSPACE = {
   moveTask: cmd("tasks move"),
   startTask: cmd("tasks start"),
   deleteTask: cmd("tasks remove"),
+  deleteNote: cmd("notes remove"),
   wikiTree: cmd("wiki tree"),
   wikiPage: cmd("wiki show"),
   searchWiki: cmd("wiki search"),
@@ -669,6 +670,8 @@ export const CHANGES = {
   "tasks.move": (args, value) => value?.title ?? args?.[0],
   "tasks.start": (args, value) => value?.title ?? args?.[0],
   "tasks.remove": (args, value) => value?.title ?? args?.[0],
+  // A working note is named by its id: never its words, which a bot wrote.
+  "notes.remove": (args, value) => value?.removed ?? args?.[0],
   // ── The wiki (control-wiki.mjs) ──
   // (By the page's or section's path: the name that the wiki gives it, not its text.)
   "wiki.add": (args, value) => value?.path ?? args?.[0]?.title,
@@ -824,7 +827,7 @@ export const MORE_READS = {
   bots: ["bots.flags", "bots.proactive", "bots.memory", "bots.sections", "bots.sections.get", "bots.importable", "bots.import.preview", "templates.list", "templates.get", "templates.import.preview", "templates.browse", "templates.market"],
   chats: ["chats.list", "chats.get", "chats.search", "chats.queue", "chats.helpers", "chats.mentions", "chats.aside", "chats.sections", "chats.projectLook", "chats.messages"], // (`chats.aside` asks the chat's model a question that the chat does not keep.)
   routines: ["routines.get", "routines.runs", "routines.review", "routines.when", "routines.schedules", "workflows.list", "workflows.export", "workflows.deliveries", "github.status", "github.installUrl"],
-  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
+  projects: ["projects.list", "projects.get", "projects.artifacts", "projects.changes", "projects.diff", "jobs.list", "jobs.setup", "jobs.status", "todos.list", "todos.get", "tasks.list", "tasks.get", "notes.list", "notes.get", "artifacts.list", "artifacts.read", "artifacts.resolve"],
   wiki: ["wiki.tree", "wiki.find", "wiki.page", "wiki.search", "wiki.history", "wiki.version", "wiki.exportPlan"],
   prefs: ["preferences.get", "preferences.harnesses", "usage.report", "usage.export", "cache.info", "workspace.stats", "macTools.status"],
   credentials: ["credentials.list", "credentials.grants", "credentials.audit", "credentials.vault", "credentials.managers", "protonPass.installPlan", "protonPass.signInRead", "providers.usage", "providers.installPlan", "providers.install.read", "providers.install.input", "providers.install.cancel"],

@@ -1,4 +1,4 @@
-// Projects, to-dos, tasks and artifacts: the control socket's calls for the command line (desktop/terminal/control.mjs adds them).
+// Projects, to-dos, tasks, working notes and artifacts: the control socket's calls for the command line (desktop/terminal/control.mjs adds them).
 // A call is `"<area>.<verb>"([...args], context)`. `handlers` are the app's own calls.
 //
 // Each call is thin: it finds a project, a to-do, a task or a bot by the name a person typed, and hands the
@@ -12,6 +12,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { LANES, PRIORITIES } from "../tasks.mjs";
+import { NOTE_KINDS } from "../notes.mjs";
 import { PROJECT_COLORS } from "../projects.mjs";
 import { ControlError } from "./socket.mjs";
 import { needsScriptYes } from "./script-yes.mjs";
@@ -121,6 +122,21 @@ export function projectsApi({ workspace, handlers, bot }) {
   const tasks = () => state().tasks ?? [];
   const task = (ref) => pick(tasks(), ref, "task", "botkins tasks list", (entry) => entry.title);
   const botName = (id) => state().bots.find((entry) => entry.id === id)?.name ?? null;
+  const tied = (t) => ({ id: t.id, title: t.title, status: t.status });
+  const note = (id) => {
+    const found = workspace.notes.find(text(id, 80, "a note's id"));
+    if (!found) throw new ControlError("There is no note with the id " + id + ". See `botkins notes list`.", "NOT_FOUND");
+    return found;
+  };
+  /** What ties a task, from what a caller gave: `project` and `parent` by name or id (null for none), `after` as a list of tasks to wait on (an empty list for none). */
+  const ties = (data) => {
+    if (data.after !== undefined && data.after !== null && !Array.isArray(data.after)) throw new ControlError("Give the tasks to wait on as a list.", "BAD_ARGUMENT");
+    return {
+      ...(data.project !== undefined && { projectId: data.project === null ? null : project(data.project).id }),
+      ...(data.parent !== undefined && { parentId: data.parent === null ? null : task(data.parent).id }),
+      ...(data.after !== undefined && { dependsOn: (data.after ?? []).map((ref) => task(ref).id) }),
+    };
+  };
   const taskView = (t) => ({
     id: t.id,
     title: t.title,
@@ -132,6 +148,12 @@ export function projectsApi({ workspace, handlers, bot }) {
     createdBy: t.createdBy === "person" ? "person" : (botName(t.createdBy) ?? "a bot"),
     ...(t.review && { review: t.review }),
     ...(t.reviewerBotId && { reviewerBotId: t.reviewerBotId, reviewer: botName(t.reviewerBotId) ?? "a bot" }),
+    // What the task is tied to (desktop/tasks.mjs, `links`): its project, the task it is a part of, and the tasks it waits on.
+    ...(projects().some((p) => p.id === t.projectId) && { project: named(projects().find((p) => p.id === t.projectId)) }),
+    ...(tasks().some((other) => other.id === t.parentId) && { parent: tied(tasks().find((other) => other.id === t.parentId)) }),
+    ...(t.dependsOn?.length && { dependsOn: t.dependsOn.map((id) => tasks().find((other) => other.id === id)).filter(Boolean).map(tied) }),
+    ...(workspace.tasks.waitingOn(t).length && { waitingOn: workspace.tasks.waitingOn(t).map(tied) }),
+    ...(workspace.tasks.subtasks(t).length && { subtasks: workspace.tasks.subtasks(t).map(tied) }),
     ...(t.problem && { problem: t.problem }),
     ...(t.result && { result: t.result }),
     ...(t.chatId && { chatId: t.chatId }),
@@ -395,14 +417,15 @@ export function projectsApi({ workspace, handlers, bot }) {
         botId: data.bot ? bot(data.bot).id : null,
         ...(data.priority !== undefined && { priority: oneOf(PRIORITIES, data.priority, "A priority") }),
         ...(data.status !== undefined && { status: oneOf(LANES, data.status, "A status") }),
+        ...ties(data),
       });
       return taskView(task(id));
     },
-    /** Changes { title?, details?, bot? (null for no bot), priority? }. The app's save takes the whole task, so what is not given is as it was. */
+    /** Changes { title?, details?, bot? (null for no bot), priority?, project?, parent?, after? }. The app's save takes the whole task, so what is not given is as it was. */
     async "tasks.edit"([ref, patch = {}, mark]) {
       const found = task(ref);
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
-      if (!["title", "details", "bot", "priority"].some((key) => patch[key] !== undefined)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
+      if (!["title", "details", "bot", "priority", "project", "parent", "after"].some((key) => patch[key] !== undefined)) throw new ControlError("Give what to change.", "BAD_ARGUMENT");
       const after = { title: patch.title ?? found.title, body: patch.details ?? found.body };
       needsScriptYes(workspace, (typeof after.body === "string" && after.body.trim()) || after.title, mark, "This task");
       await handlers.saveTask({
@@ -411,6 +434,7 @@ export function projectsApi({ workspace, handlers, bot }) {
         body: patch.details ?? found.body,
         botId: patch.bot === undefined ? found.botId : patch.bot === null ? null : bot(patch.bot).id,
         priority: patch.priority === undefined ? found.priority : oneOf(PRIORITIES, patch.priority, "A priority"),
+        ...ties(patch),
       });
       return taskView(task(found.id));
     },
@@ -435,6 +459,26 @@ export function projectsApi({ workspace, handlers, bot }) {
       const found = task(ref);
       await handlers.deleteTask(found.id);
       return { removed: found.id, title: found.title };
+    },
+
+    // ── Working notes: what bots left each other on a task or in a project (desktop/notes.mjs) ──
+    /** The notes, oldest first. `options`: { task?, project?, bot?, kind?, resolved? }. Resolved notes are left out unless `resolved` is true. */
+    "notes.list"([options = {}]) {
+      if (!options || typeof options !== "object" || Array.isArray(options)) throw new ControlError("Give a task, a project or a bot, or nothing for every note.", "BAD_ARGUMENT");
+      const ofTask = options.task === undefined ? null : task(options.task).id;
+      const ofProject = options.project === undefined ? null : project(options.project).id;
+      const ofBot = options.bot === undefined ? null : bot(options.bot).id;
+      const kind = options.kind === undefined ? null : oneOf(NOTE_KINDS, options.kind, "A kind");
+      return workspace.notes.list
+        .filter((note) => (options.resolved === true || !note.resolved) && (!ofTask || note.taskId === ofTask) && (!ofProject || note.projectId === ofProject) && (!ofBot || note.botId === ofBot) && (!kind || note.kind === kind))
+        .map((note) => workspace.notes.view(note));
+    },
+    "notes.get": ([id]) => workspace.notes.view(note(id)),
+    /** The person's own delete: the note is gone. */
+    async "notes.remove"([id]) {
+      const found = note(id);
+      await handlers.deleteNote(found.id);
+      return { removed: found.id, kind: found.kind, by: found.by };
     },
 
     // ── Artifacts: the files that a bot made or showed, kept for each bot ──

@@ -41,6 +41,7 @@ function formatCounts(counts) {
       ["runs", String(counts.runs)],
       ["run_steps", String(counts.runSteps)],
       ["tasks", String(counts.tasks)],
+      ["notes", String(counts.notes)],
       ["projects", String(counts.projects)],
       ["spaces", String(counts.spaces)],
       ["panels", String(counts.panels)],

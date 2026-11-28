@@ -1,4 +1,4 @@
-// Projects, to-dos, tasks and artifacts: the commands (cli/commands/index.mjs adds them).
+// Projects, to-dos, tasks, working notes and artifacts: the commands (cli/commands/index.mjs adds them).
 // `projectsCommands` maps a top-level word to a group `{ summary, commands }`: `botkins projects`,
 // `botkins todos`, `botkins tasks`, `botkins jobs` and `botkins artifacts`.
 //
@@ -86,6 +86,10 @@ const taskText = (t) =>
   [
     safe(t.title) + "   " + t.id,
     "Status: " + t.status + (t.reviewer ? " (reviewing: " + safe(t.reviewer) + ")" : "") + ". Priority: " + t.priority + ". Bot: " + (t.bot ? safe(t.bot) : "none") + ". Added by: " + safe(t.createdBy) + (t.review ? ". Review: " + t.review : "") + ".",
+    t.project ? "Project: " + safe(t.project.name) : null,
+    t.parent ? "Part of: " + safe(t.parent.title) + " (" + t.parent.status + ")" : null,
+    t.dependsOn?.length ? "Waits on: " + t.dependsOn.map((other) => safe(other.title) + " (" + other.status + ")").join(", ") + (t.waitingOn?.length ? "" : ". All of them are finished.") : null,
+    t.subtasks?.length ? "Parts: " + t.subtasks.map((other) => safe(other.title) + " (" + other.status + ")").join(", ") : null,
     t.problem ? "Problem: " + safeLines(t.problem) : null,
     t.details ? "Details: " + safeLines(t.details) : null,
     t.result ? "Result: " + safeLines(t.result) : null,
@@ -94,6 +98,15 @@ const taskText = (t) =>
   ]
     .filter((line) => line !== null)
     .join("\n");
+/** What ties a task, as the options of `tasks add` and `tasks edit`. */
+const TIES = {
+  project: { type: "string", value: "project", about: "The project it belongs to: its bot shares that project's working notes" },
+  parent: { type: "string", value: "task", about: "The task it is a part of" },
+  after: { type: "string", value: "task", multiple: true, about: "A task it waits on: it starts only when that one is Done (give it more than once for several)" },
+};
+/** A sentence for a Ready task that waits on others, or "". */
+const waits = (t) => (t.waitingOn?.length ? " It waits on " + t.waitingOn.map((other) => safe(other.title)).join(", ") + ", and starts once " + (t.waitingOn.length > 1 ? "they are" : "it is") + " Done." : "");
+const noteLine = (n) => "[" + n.kind + "] " + safe(n.text) + "\n    " + safe(n.by) + ", " + ago(Date.parse(n.at)) + (n.unattended ? ", with nobody watching" : "") + (n.task ? ", on " + safe(n.task.title) : "") + (n.project ? ", in " + safe(n.project) : "") + (n.resolved ? ". Resolved by " + safe(n.resolved.by) + (n.resolved.reason ? ": " + safe(n.resolved.reason) : "") : "") + "   " + n.id;
 const artifactName = (item) => safe(item.name ?? item.id);
 const size = (bytes) => (bytes === null || bytes === undefined ? "" : bytes < 1024 ? bytes + " B" : bytes < 1048576 ? Math.round(bytes / 102.4) / 10 + " KB" : Math.round(bytes / 104857.6) / 10 + " MB");
 const artifactTable = (items) => table(["NAME", "KIND", "SIZE", "WHEN", "SOURCE", "ID"], items.map((item) => [artifactName(item), item.kind, size(item.size), ago(item.time), item.source, item.id]));
@@ -453,7 +466,7 @@ export const projectsCommands = {
 
   tasks: {
     summary: "The task board: work that a bot does, and that you review",
-    details: "A task has a title, details, a bot and a priority. It moves between lanes: later, ready, working, review, blocked and done (archived is out of sight). Only Botkins puts a task in working. A task that is Ready and has a bot starts by itself when the bot is free, and a task that finishes waits in review for you.",
+    details: "A task has a title, details, a bot and a priority. It moves between lanes: later, ready, working, review, blocked and done (archived is out of sight). Only Botkins puts a task in working. A task that is Ready and has a bot starts by itself when the bot is free, and a task that finishes waits in review for you. A task can belong to a project, be a part of another task, and wait on other tasks (--project, --parent, --after): one that waits starts only when those are Done.",
     commands: {
       list: {
         summary: "List the tasks",
@@ -473,36 +486,49 @@ export const projectsCommands = {
       },
       add: {
         summary: "Add a task",
-        usage: "botkins tasks add <title>… [--details <text>] [--details-file <path>] [--bot <bot>] [--priority <priority>] [--status <lane>] [--yes]",
-        options: { ...YES, details: { type: "string", value: "text", about: "What the task is, in more words (8000 characters at most)" }, "details-file": { type: "string", value: "path", about: "The details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, priority: { type: "string", value: "priority", about: "low, normal (the default), high or urgent" }, status: { type: "string", value: "lane", about: "later (the default) or ready" } },
+        usage: "botkins tasks add <title>… [--details <text>] [--details-file <path>] [--bot <bot>] [--priority <priority>] [--status <lane>] [--project <project>] [--parent <task>] [--after <task>]… [--yes]",
+        options: { ...YES, ...TIES, details: { type: "string", value: "text", about: "What the task is, in more words (8000 characters at most)" }, "details-file": { type: "string", value: "path", about: "The details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, priority: { type: "string", value: "priority", about: "low, normal (the default), high or urgent" }, status: { type: "string", value: "lane", about: "later (the default) or ready" } },
         arguments: [{ name: "title", required: true, many: true }],
-        details: "A task with --status ready and a bot starts by itself when the bot is free: a turn of the bot's model, in a chat of its own. Without --status, it waits in Later. A task whose details (else its title) are `/name words` of a script command runs that script with no model: the command, its words and its script are shown and you are asked first (with no terminal it needs --yes).",
+        details: "A task with --status ready and a bot starts by itself when the bot is free: a turn of the bot's model, in a chat of its own. Without --status, it waits in Later. With --after it starts only when each task it waits on is Done, and its message then carries their results. With --project its bot reads and writes that project's working notes (`botkins notes`); the task's chat does not work in the project's folder. A task whose details (else its title) are `/name words` of a script command runs that script with no model: the command, its words and its script are shown and you are asked first (with no terminal it needs --yes).",
         async run(context) {
           const title = context.args.join(" ");
           if (!title) throw usage("Give the task a title.");
           const o = context.options;
           const details = await longText(context, "details", "details");
-          const data = { title, ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o.priority !== undefined && { priority: o.priority }), ...(o.status !== undefined && { status: o.status }) };
+          const data = { title, ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o.priority !== undefined && { priority: o.priority }), ...(o.status !== undefined && { status: o.status }), ...(o.project !== undefined && { project: o.project }), ...(o.parent !== undefined && { parent: o.parent }), ...(o.after !== undefined && { after: o.after }) };
           const added = await withScriptYes(context, (marks) => context.client.call("tasks.add", data, ...marks));
           if (added === undefined) return EXIT.failed;
-          context.print(added, (t) => "Added the task " + safe(t.title) + " (" + t.status + (t.bot ? ", for " + safe(t.bot) : "") + ")." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : ""));
+          context.print(added, (t) => "Added the task " + safe(t.title) + " (" + t.status + (t.bot ? ", for " + safe(t.bot) : "") + ")." + (t.status === "ready" && t.bot && t.waitingOn?.length ? waits(t) : t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : ""));
         },
       },
       edit: {
-        summary: "Change a task's title, details, bot or priority",
-        usage: "botkins tasks edit <task> [--title <text>] [--details <text>] [--details-file <path>] [--bot <bot>] [--no-bot] [--priority <priority>] [--yes]",
-        options: { ...YES, title: { type: "string", value: "text", about: "A new title" }, details: { type: "string", value: "text", about: "New details" }, "details-file": { type: "string", value: "path", about: "New details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, "no-bot": { type: "boolean", about: "Give the task to no bot" }, priority: { type: "string", value: "priority", about: PRIORITIES.replaceAll(" or ", ", ") } },
-        details: "Only what you name changes. A task that is working cannot be changed: wait until it stops. Giving a Ready task a bot makes it start by itself when the bot is free. A task that is a script command (`/name words`) asks first, as `tasks add` does.",
+        summary: "Change a task's title, details, bot, priority, or what it is tied to",
+        usage: "botkins tasks edit <task> [--title <text>] [--details <text>] [--details-file <path>] [--bot <bot>] [--no-bot] [--priority <priority>] [--project <project>] [--no-project] [--parent <task>] [--no-parent] [--after <task>]… [--no-after] [--yes]",
+        options: { ...YES, ...TIES, "no-project": { type: "boolean", about: "Take the task out of its project" }, "no-parent": { type: "boolean", about: "Make the task a part of no other" }, "no-after": { type: "boolean", about: "Let the task wait on no other" }, title: { type: "string", value: "text", about: "A new title" }, details: { type: "string", value: "text", about: "New details" }, "details-file": { type: "string", value: "path", about: "New details from a file (\"-\" reads standard input)" }, bot: { type: "string", value: "bot", about: "The bot that does it" }, "no-bot": { type: "boolean", about: "Give the task to no bot" }, priority: { type: "string", value: "priority", about: PRIORITIES.replaceAll(" or ", ", ") } },
+        details: "Only what you name changes. A task that is working cannot be changed: wait until it stops. Giving a Ready task a bot makes it start by itself when the bot is free. --after replaces the list of tasks it waits on with the ones you give. A task that is a script command (`/name words`) asks first, as `tasks add` does.",
         async run(context) {
           const ref = one(context, "Name the task (its title or id).");
           const o = context.options;
           if (o.bot !== undefined && o["no-bot"]) throw usage("Give --bot or --no-bot, not both.");
+          for (const name of ["project", "parent", "after"]) if (o[name] !== undefined && o["no-" + name]) throw usage("Give --" + name + " or --no-" + name + ", not both.");
           const details = await longText(context, "details", "details");
-          const patch = { ...(o.title !== undefined && { title: o.title }), ...(details !== undefined && { details }), ...(o.bot !== undefined && { bot: o.bot }), ...(o["no-bot"] && { bot: null }), ...(o.priority !== undefined && { priority: o.priority }) };
-          if (!Object.keys(patch).length) throw usage("Give what to change: --title, --details, --bot, --no-bot or --priority.");
+          const patch = {
+            ...(o.title !== undefined && { title: o.title }),
+            ...(details !== undefined && { details }),
+            ...(o.bot !== undefined && { bot: o.bot }),
+            ...(o["no-bot"] && { bot: null }),
+            ...(o.priority !== undefined && { priority: o.priority }),
+            ...(o.project !== undefined && { project: o.project }),
+            ...(o["no-project"] && { project: null }),
+            ...(o.parent !== undefined && { parent: o.parent }),
+            ...(o["no-parent"] && { parent: null }),
+            ...(o.after !== undefined && { after: o.after }),
+            ...(o["no-after"] && { after: [] }),
+          };
+          if (!Object.keys(patch).length) throw usage("Give what to change: --title, --details, --bot, --no-bot, --priority, --project, --parent or --after.");
           const changed = await withScriptYes(context, (marks) => context.client.call("tasks.edit", ref, patch, ...marks));
           if (changed === undefined) return EXIT.failed;
-          context.print(changed, (t) => "Changed the task " + safe(t.title) + "." + (t.status === "ready" && t.bot ? " It is Ready, so it starts by itself when " + safe(t.bot) + " is free." : ""));
+          context.print(changed, (t) => "Changed the task " + safe(t.title) + "." + (t.status === "ready" && t.bot && t.waitingOn?.length ? waits(t) : t.status === "ready" && t.bot ? " It is Ready, so it starts by itself when " + safe(t.bot) + " is free." : ""));
         },
       },
       move: {
@@ -520,7 +546,7 @@ export const projectsCommands = {
               : context.client.call("tasks.move", context.args[0], context.args[1], ...marks),
           );
           if (moved === undefined) return EXIT.failed;
-          context.print(moved, (t) => "The task " + safe(t.title) + " is now " + t.status + "." + (t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : t.status === "ready" ? " It has no bot yet. Give it one with `botkins tasks edit " + word(t.title, "<the task>") + " --bot <bot>`." : ""));
+          context.print(moved, (t) => "The task " + safe(t.title) + " is now " + t.status + "." + (t.status === "ready" && t.bot && t.waitingOn?.length ? waits(t) : t.status === "ready" && t.bot ? " It starts by itself when " + safe(t.bot) + " is free: a turn of the bot's model." : t.status === "ready" ? " It has no bot yet. Give it one with `botkins tasks edit " + word(t.title, "<the task>") + " --bot <bot>`." : ""));
         },
       },
       start: {
@@ -548,6 +574,43 @@ export const projectsCommands = {
           show(context, "This deletes the task " + safe(found.title) + " (" + found.status + ").");
           if (!(await confirm(context, "Delete the task?"))) return EXIT.failed;
           context.print(await context.client.call("tasks.remove", found.id), (gone) => "Deleted the task " + safe(gone.title) + ".");
+        },
+      },
+    },
+  },
+
+  notes: {
+    summary: "Working notes: what bots left each other on a task or in a project",
+    details: "A bot leaves a short note on the task it works on, or in its chat's project: a finding, a decision, a blocker or a handoff. The next bot there reads it. A bot can write one in work that nobody watches (a task, a routine), where it can only read its memory and the wiki, so a note is shown to bots as another bot's words and never as an instruction. You read the notes here and delete the ones you don't want kept. Bots write and resolve them with their own tools (note_add, note_list, note_resolve).",
+    commands: {
+      list: {
+        summary: "List the notes",
+        usage: "botkins notes list [--task <task>] [--project <project>] [--bot <bot>] [--kind <kind>] [--resolved]",
+        options: { task: { type: "string", value: "task", about: "Only the notes on this task" }, project: { type: "string", value: "project", about: "Only the notes in this project" }, bot: { type: "string", value: "bot", about: "Only the notes this bot wrote" }, kind: { type: "string", value: "kind", about: "finding, decision, blocker or handoff" }, resolved: { type: "boolean", about: "Also the notes that were resolved or replaced" } },
+        details: "Oldest first. A note that says \"with nobody watching\" was written in a task, a routine or a workflow.",
+        async run(context) {
+          const o = context.options;
+          const options = { ...(o.task !== undefined && { task: o.task }), ...(o.project !== undefined && { project: o.project }), ...(o.bot !== undefined && { bot: o.bot }), ...(o.kind !== undefined && { kind: o.kind }), ...(o.resolved && { resolved: true }) };
+          context.print(await context.client.call("notes.list", options), (list) => (list.length ? list.map(noteLine).join("\n") : "No notes. Bots leave them with note_add while they work on a task or in a project."));
+        },
+      },
+      show: {
+        summary: "Show one note",
+        usage: "botkins notes show <note>",
+        async run(context) {
+          context.print(await context.client.call("notes.get", one(context, "Name the note by its id (see `botkins notes list`).")), noteLine);
+        },
+      },
+      remove: {
+        summary: "Delete a note",
+        usage: "botkins notes remove <note> [--yes]",
+        options: YES,
+        details: "A deleted note is gone: no bot reads it again. It asks first; with no terminal it needs --yes.",
+        async run(context) {
+          const found = await context.client.call("notes.get", one(context, "Name the note by its id (see `botkins notes list`)."));
+          show(context, "This deletes the note " + found.id + " that " + safe(found.by) + " wrote:\n  " + safe(found.text));
+          if (!(await confirm(context, "Delete the note?"))) return EXIT.failed;
+          context.print(await context.client.call("notes.remove", found.id), (gone) => "Deleted the note " + gone.removed + ".");
         },
       },
     },
