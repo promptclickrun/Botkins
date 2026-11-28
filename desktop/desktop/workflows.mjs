@@ -1654,7 +1654,7 @@ export class Workflows {
    * Retries a failed (or rejected/cancelled) run from `fromNodeId` (or its first failed step),
    * using the workflow's CURRENT node settings and preserving completed upstream outputs.
    */
-  retryRun(runId, fromNodeId = null) {
+  retryRun(runId, fromNodeId = null, options = {}) {
     const run = this.getRun(runId);
     if (ACTIVE_STATUSES.has(run.status)) throw new Error("This run is already active.");
     const wf = this.get(run.workflowId);
@@ -1711,6 +1711,7 @@ export class Workflows {
     run.pendingApproval = null;
     run.retriedAt = Date.now();
     run.retryPass = (Number(run.retryPass) || 0) + 1;
+    run.allowUncertainRetry = options?.allowUncertainRetry === true;
     this.ws.save();
 
     this.launchExecution(run.id);
@@ -2197,6 +2198,7 @@ export class Workflows {
         actionStore: this.githubActionStore,
         runModel: invokeModel,
         pass: Number(run.retryPass ?? 0) || 0,
+        allowUncertainRetry: run.allowUncertainRetry === true,
       });
     }
 

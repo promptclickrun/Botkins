@@ -50,9 +50,12 @@ const MAX_ACTION_LEDGER_ENTRIES = 500;
 const CATALOG_LIMIT = 500;
 const VALID_CLOSE_REASONS = new Set(["completed", "not_planned"]);
 
-function makeCodedError(code, message) {
+function makeCodedError(code, message, meta = {}) {
   const err = new Error(message);
   err.code = code;
+  if (meta.httpStatus !== undefined) err.httpStatus = meta.httpStatus;
+  if (meta.fromGitHub !== undefined) err.fromGitHub = meta.fromGitHub;
+  if (meta.definiteNotSent !== undefined) err.definiteNotSent = meta.definiteNotSent;
   return err;
 }
 
@@ -130,7 +133,7 @@ export function extractGithubItemNumber(raw) {
 }
 
 /** Maps a GitHub HTTP error status & body to a typed, redacted error code. */
-export function mapGithubHttpError(status, bodyText = "", headers = {}) {
+export function mapGithubHttpError(status, bodyText = "", headers = {}, { fromGitHub = true } = {}) {
   const codeNum = Number(status) || 0;
   const raw = String(bodyText ?? "")
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]+\b/g, "[redacted]")
@@ -139,30 +142,36 @@ export function mapGithubHttpError(status, bodyText = "", headers = {}) {
     .trim()
     .slice(0, 300);
 
+  const meta = { httpStatus: codeNum, fromGitHub: Boolean(fromGitHub && codeNum >= 400 && codeNum < 600) };
+
   const isRateLimit =
     codeNum === 429 ||
     String(headers?.["x-ratelimit-remaining"] ?? "") === "0" ||
     /rate limit|secondary rate limit|abuse detection/i.test(raw);
 
   if (codeNum === 401) {
-    return makeCodedError("notConnected", "GitHub authentication is missing or expired (notConnected).");
+    return makeCodedError("notConnected", "GitHub authentication is missing or expired (notConnected).", meta);
   }
   if (isRateLimit) {
-    return makeCodedError("invalid", `GitHub rate limit exceeded: ${raw || "try again later"} (invalid).`);
+    return makeCodedError("invalid", `GitHub rate limit exceeded: ${raw || "try again later"} (invalid).`, meta);
   }
   if (codeNum === 403) {
     if (/\blocked\b/i.test(raw)) {
-      return makeCodedError("locked", "GitHub conversation is locked (locked).");
+      return makeCodedError("locked", "GitHub conversation is locked (locked).", meta);
     }
-    return makeCodedError("noWrite", `GitHub credentials lack write permission for this repository: ${raw || "403 Forbidden"} (noWrite).`);
+    return makeCodedError("noWrite", `GitHub credentials lack write permission for this repository: ${raw || "403 Forbidden"} (noWrite).`, meta);
   }
   if (codeNum === 404 || codeNum === 410) {
-    return makeCodedError("noAccess", `GitHub repository or item was not found or is inaccessible (noAccess).`);
+    return makeCodedError("noAccess", `GitHub repository or item was not found or is inaccessible (noAccess).`, meta);
   }
-  if (codeNum >= 500) {
-    return makeCodedError("unreachable", `GitHub API is temporarily unavailable (${codeNum}) (unreachable).`);
+  if (codeNum === 0 || codeNum >= 500) {
+    return makeCodedError(
+      "unreachable",
+      `GitHub API is temporarily unavailable (${codeNum || "unreachable"}) (unreachable).`,
+      { httpStatus: codeNum, fromGitHub: Boolean(fromGitHub && codeNum >= 500) },
+    );
   }
-  return makeCodedError("invalid", `GitHub rejected the request (${codeNum || "error"}): ${raw || "invalid request"} (invalid).`);
+  return makeCodedError("invalid", `GitHub rejected the request (${codeNum}): ${raw || "invalid request"} (invalid).`, meta);
 }
 
 function parseJsonObjectOrArray(text) {
@@ -216,6 +225,17 @@ export function filterByCatalog(candidates, catalogItems) {
   return matched;
 }
 
+const TRANSIENT_GH_CODES = new Set([
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "EPIPE",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+]);
+
 /**
  * Creates a default GitHub REST/CLI client for native GitHub output steps.
  * Prefers a GitHub App installation token when `getInstallationToken(repo)` returns one;
@@ -225,6 +245,7 @@ export function createDefaultGithubOutputClient(options = {}) {
   const searchPath = options.searchPath;
   const auth = options.auth ?? null;
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const execGhApi = typeof options.execGhApi === "function" ? options.execGhApi : null;
   const getInstallationToken =
     typeof options.getInstallationToken === "function" ? options.getInstallationToken : async () => null;
   const apiBase = String(options.apiBase || "https://api.github.com").replace(/\/+$/, "");
@@ -247,7 +268,7 @@ export function createDefaultGithubOutputClient(options = {}) {
     if (!res.ok) {
       // DELETE label 404 is treated as idempotent success by callers.
       if (method === "DELETE" && res.status === 404) return { ok: true, status: 404, data: null };
-      throw mapGithubHttpError(res.status, text, headers);
+      throw mapGithubHttpError(res.status, text, headers, { fromGitHub: true });
     }
     let data = null;
     if (text.trim()) {
@@ -268,27 +289,29 @@ export function createDefaultGithubOutputClient(options = {}) {
       args.push("--input", "-");
     }
     try {
-      const result = await new Promise((resolve, reject) => {
-        const child = execFile(
-          bin,
-          args,
-          { timeout: 25_000, maxBuffer: 4 * 1024 * 1024, env },
-          (err, stdout, stderr) => {
-            if (err) {
-              err.stdout = stdout;
-              err.stderr = stderr;
-              reject(err);
-            } else {
-              resolve({ stdout: stdout || "", stderr: stderr || "" });
+      const result = execGhApi
+        ? await execGhApi({ bin, args, body, env })
+        : await new Promise((resolve, reject) => {
+            const child = execFile(
+              bin,
+              args,
+              { timeout: 25_000, maxBuffer: 4 * 1024 * 1024, env },
+              (err, stdout, stderr) => {
+                if (err) {
+                  err.stdout = stdout;
+                  err.stderr = stderr;
+                  reject(err);
+                } else {
+                  resolve({ stdout: stdout || "", stderr: stderr || "" });
+                }
+              },
+            );
+            if (body !== undefined && child.stdin) {
+              child.stdin.end(JSON.stringify(body));
             }
-          },
-        );
-        if (body !== undefined && child.stdin) {
-          child.stdin.end(JSON.stringify(body));
-        }
-      });
+          });
       let data = null;
-      if (result.stdout.trim()) {
+      if (String(result?.stdout || "").trim()) {
         try {
           data = JSON.parse(result.stdout);
         } catch {
@@ -298,10 +321,50 @@ export function createDefaultGithubOutputClient(options = {}) {
       return { ok: true, status: 200, data };
     } catch (err) {
       const combined = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`;
+      const isKilledOrTransient =
+        err?.killed === true ||
+        Boolean(err?.signal) ||
+        TRANSIENT_GH_CODES.has(String(err?.code || "")) ||
+        /ETIMEDOUT|ECONNRESET|timed?\s*out|connection reset|TLS handshake timeout|unexpected EOF/i.test(combined);
+
+      if (isKilledOrTransient) {
+        const redacted = combined
+          .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]+\b/g, "[redacted]")
+          .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[redacted]")
+          .trim()
+          .slice(0, 300);
+        throw makeCodedError(
+          "unreachable",
+          `GitHub CLI request did not complete cleanly (${redacted || err?.code || "timeout"}) (unreachable).`,
+          { fromGitHub: false },
+        );
+      }
+
       const statusMatch = /\bHTTP\s+(\d{3})\b/i.exec(combined) || /\bstatus\s+(\d{3})\b/i.exec(combined);
-      const status = statusMatch ? Number(statusMatch[1]) : /not logged in|authentication/i.test(combined) ? 401 : 422;
-      if (method === "DELETE" && status === 404) return { ok: true, status: 404, data: null };
-      throw mapGithubHttpError(status, combined);
+      if (statusMatch) {
+        const status = Number(statusMatch[1]);
+        if (method === "DELETE" && status === 404) return { ok: true, status: 404, data: null };
+        throw mapGithubHttpError(status, combined, {}, { fromGitHub: true });
+      }
+
+      if (/not logged in|please run:\s*gh auth login|to authenticate with github|no github hosts/i.test(combined)) {
+        throw makeCodedError(
+          "notConnected",
+          "GitHub CLI is not authenticated. Run `gh auth login` or connect GitHub first (notConnected).",
+          { fromGitHub: false, definiteNotSent: true },
+        );
+      }
+
+      const redacted = combined
+        .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]+\b/g, "[redacted]")
+        .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, "[redacted]")
+        .trim()
+        .slice(0, 300);
+      throw makeCodedError(
+        "unreachable",
+        `GitHub CLI failed without a GitHub HTTP status (${redacted || "unknown error"}) (unreachable).`,
+        { fromGitHub: false },
+      );
     }
   }
 
@@ -630,6 +693,41 @@ async function chooseFromCatalog({ kind, catalog, promptContext, runModel, maxIt
   return validated;
 }
 
+function findSendingRecords(actionStore, runId, stepId, actionKey) {
+  const found = [];
+  const seen = new Set();
+  if (typeof actionStore?.findSending === "function") {
+    for (const rec of actionStore.findSending(runId, stepId) ?? []) {
+      if (rec?.status === "sending" && rec.runId === runId && rec.stepId === stepId) {
+        const k = rec.actionKey || actionKey;
+        if (!seen.has(k)) {
+          seen.add(k);
+          found.push(rec);
+        }
+      }
+    }
+  } else if (typeof actionStore?.list === "function") {
+    for (const rec of actionStore.list() ?? []) {
+      if (rec?.status === "sending" && rec.runId === runId && rec.stepId === stepId) {
+        const k = rec.actionKey || actionKey;
+        if (!seen.has(k)) {
+          seen.add(k);
+          found.push(rec);
+        }
+      }
+    }
+  }
+  const direct = actionStore?.get?.(actionKey);
+  if (direct?.status === "sending" && direct.stepId === stepId) {
+    const k = direct.actionKey || actionKey;
+    if (!seen.has(k)) {
+      seen.add(k);
+      found.push(direct);
+    }
+  }
+  return found;
+}
+
 /**
  * Executes a `destination: "github"` output node inside a workflow run.
  *
@@ -640,8 +738,10 @@ async function chooseFromCatalog({ kind, catalog, promptContext, runModel, maxIt
  *    fetches options from the repo and rejects values outside the real catalog.
  * 4. Echo guard: strips external-event frames and refuses posting raw event text (`githubEventText`).
  * 5. Write-before-call idempotency: persists `status: "sending"` with `actionKey = ${runId}:${nodeId}:${pass}`
- *    before the API call. On restart/retry: `"done"` reuses result without double-posting; `"sending"`
- *    retries repeatable actions and fails closed (`githubUncertain`) on non-repeatable actions.
+ *    before the API call. Before calling, scans for ANY `sending` ledger row for `(runId, stepId)` across all
+ *    passes. On restart/retry: `"done"` at the same key reuses result without double-posting; `"sending"`
+ *    retries repeatable actions and fails closed (`githubUncertain`) on non-repeatable actions while keeping
+ *    the `sending` row intact unless `allowUncertainRetry` is explicitly set.
  */
 export async function executeGithubOutputNode({
   wf,
@@ -651,6 +751,7 @@ export async function executeGithubOutputNode({
   actionStore,
   runModel,
   pass = 0,
+  allowUncertainRetry = false,
 }) {
   if (!wf?.id || !run?.id || !node?.id) {
     throw makeCodedError("workflowOnly", "GitHub output steps may only run inside an active workflow run.");
@@ -666,8 +767,9 @@ export async function executeGithubOutputNode({
   const isExternalTrigger = ["github", "webhook", "channel"].includes(run.triggerKind) && !run.manual;
   const { repository, number, pullRequest } = resolveGithubOutputTarget(cfg, run);
 
-  const actionPass = Number.isInteger(pass) && pass >= 0 ? pass : Number(run.retryCount ?? 0) || 0;
+  const actionPass = Number.isInteger(pass) && pass >= 0 ? pass : Number(run.retryPass ?? 0) || 0;
   const actionKey = `${run.id}:${node.id}:${actionPass}`;
+  const overrideUncertain = Boolean(allowUncertainRetry || cfg.allowUncertainRetry === true || run.allowUncertainRetry === true);
 
   // 1. Check write-before-call idempotency ledger BEFORE making any side-effecting call.
   const existing = actionStore?.get?.(actionKey);
@@ -684,12 +786,29 @@ export async function executeGithubOutputNode({
       },
     };
   }
-  if (existing?.status === "sending" && existing.stepId === node.id && !REPEATABLE_GITHUB_ACTIONS.has(action)) {
-    actionStore?.delete?.(actionKey);
-    throw makeCodedError(
-      "githubUncertain",
-      `Previous attempt for non-repeatable GitHub action "${action}" did not finish cleanly; refusing to double-post (githubUncertain).`,
-    );
+
+  // Look for ANY prior `sending` row for this (runId, stepId) across all passes so `retryRun`
+  // (which increments `pass`) still catches an interrupted non-repeatable write.
+  const sendingRows = findSendingRecords(actionStore, run.id, node.id, actionKey);
+  if (sendingRows.length > 0) {
+    if (!REPEATABLE_GITHUB_ACTIONS.has(action)) {
+      if (!overrideUncertain) {
+        // Keep the `sending` row(s) intact so a subsequent retry also fails closed until explicitly overridden.
+        throw makeCodedError(
+          "githubUncertain",
+          `Previous attempt for non-repeatable GitHub action "${action}" did not finish cleanly; refusing to double-post (githubUncertain).`,
+        );
+      }
+      for (const rec of sendingRows) {
+        actionStore?.delete?.(rec.actionKey || actionKey);
+      }
+    } else {
+      for (const rec of sendingRows) {
+        if (rec.actionKey && rec.actionKey !== actionKey) {
+          actionStore?.delete?.(rec.actionKey);
+        }
+      }
+    }
   }
 
   // 2. Prepare action parameters (text/body/title, labels, assignees, reviewers) with echo guard & catalog validation.
@@ -847,10 +966,13 @@ export async function executeGithubOutputNode({
       stateReason: VALID_CLOSE_REASONS.has(stateReason) ? stateReason : undefined,
     });
   } catch (err) {
-    // On definitive pre-flight/client rejection (4xx) where GitHub did not execute, leave sending record cleared
-    // for repeatable actions; keep sending record only on network/unknown errors for non-repeatable actions so
-    // a retry fails closed with `githubUncertain` rather than double-posting.
-    if (REPEATABLE_GITHUB_ACTIONS.has(action) || ["notConnected", "locked", "noWrite", "noAccess", "invalid"].includes(err?.code)) {
+    // Only clear the `sending` row on non-repeatable actions when we know GitHub did not execute
+    // the write: a definite 4xx HTTP status returned by GitHub (including 429 rate-limit) or a
+    // local pre-flight auth refusal (`definiteNotSent`). Keep `sending` on timeouts, kills,
+    // network drops, 5xx, or unknown errors so a retry fails closed with `githubUncertain`.
+    const definiteGitHub4xx =
+      err?.fromGitHub === true && Number(err?.httpStatus) >= 400 && Number(err?.httpStatus) < 500;
+    if (REPEATABLE_GITHUB_ACTIONS.has(action) || definiteGitHub4xx || err?.definiteNotSent === true) {
       actionStore?.delete?.(actionKey);
     }
     throw err;

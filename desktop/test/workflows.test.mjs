@@ -1765,6 +1765,7 @@ test("GitHub output write-before-call sending ledger prevents double-post on res
     get: (k) => storeMap.get(k) ?? null,
     set: (k, v) => storeMap.set(k, v),
     delete: (k) => storeMap.delete(k),
+    list: () => [...storeMap.values()],
   };
 
   let calls = 0;
@@ -1804,6 +1805,7 @@ test("GitHub output write-before-call sending ledger prevents double-post on res
   assert.equal(calls, 1);
 
   // 3) Simulated crash mid-call on non-repeatable "comment" leaves status:"sending" -> restart fails closed with githubUncertain
+  //    AND keeps the sending row intact even across pass increments until explicitly overridden.
   storeMap.set("r2:o1:0", {
     actionKey: "r2:o1:0",
     workflowId: wf.id,
@@ -1817,10 +1819,31 @@ test("GitHub output write-before-call sending ledger prevents double-post on res
     createdAt: Date.now(),
   });
   await assert.rejects(
-    () => executeGithubOutputNode({ wf, run: makeRun("r2"), node: nodeComment, client, actionStore, pass: 0 }),
+    () => executeGithubOutputNode({ wf, run: makeRun("r2"), node: nodeComment, client, actionStore, pass: 1 }),
+    (err) => err?.code === "githubUncertain",
+  );
+  // Sending row is NOT deleted on throw -> second retry also fails closed instead of silently double-posting
+  assert.equal(storeMap.get("r2:o1:0")?.status, "sending");
+  await assert.rejects(
+    () => executeGithubOutputNode({ wf, run: makeRun("r2"), node: nodeComment, client, actionStore, pass: 2 }),
     (err) => err?.code === "githubUncertain",
   );
   assert.equal(calls, 1);
+
+  // Explicit override clears the uncertain sending row and allows the person-authorized retry
+  const overridden = await executeGithubOutputNode({
+    wf,
+    run: makeRun("r2"),
+    node: nodeComment,
+    client,
+    actionStore,
+    pass: 3,
+    allowUncertainRetry: true,
+  });
+  assert.equal(overridden.reused, false);
+  assert.equal(storeMap.has("r2:o1:0"), false);
+  assert.equal(storeMap.get("r2:o1:3")?.status, "done");
+  assert.equal(calls, 2);
 
   // 4) Simulated crash mid-call on repeatable "label.add" retries safely
   assert.equal(REPEATABLE_GITHUB_ACTIONS.has("label.add"), true);
@@ -1837,16 +1860,155 @@ test("GitHub output write-before-call sending ledger prevents double-post on res
     createdAt: Date.now(),
   });
   const nodeLabel = { id: "o2", kind: "output", config: { destination: "github", action: "label.add", labels: ["bug"] } };
-  const retried = await executeGithubOutputNode({ wf, run: makeRun("r3"), node: nodeLabel, client, actionStore, pass: 0 });
+  const retried = await executeGithubOutputNode({ wf, run: makeRun("r3"), node: nodeLabel, client, actionStore, pass: 1 });
   assert.equal(retried.reused, false);
-  assert.equal(storeMap.get("r3:o2:0").status, "done");
-  assert.equal(calls, 2);
+  assert.equal(storeMap.has("r3:o2:0"), false);
+  assert.equal(storeMap.get("r3:o2:1").status, "done");
+  assert.equal(calls, 3);
 
   // 5) Refuses execution outside a workflow run
   await assert.rejects(
     () => executeGithubOutputNode({ wf: null, run: null, node: nodeComment, client, actionStore }),
     (err) => err?.code === "workflowOnly",
   );
+});
+
+test("Workflows.retryRun fails closed with githubUncertain after an interrupted comment without double-posting", async (t) => {
+  let executeCalls = 0;
+  let shouldThrow = true;
+  const { ws } = setup(t, {
+    workflows: {
+      githubOutputClient: {
+        async executeAction() {
+          executeCalls++;
+          if (shouldThrow) {
+            throw new Error("ECONNRESET socket hang up");
+          }
+          return { objectIds: ["comment:900"] };
+        },
+      },
+    },
+  });
+
+  const wf = ws.workflows.create({
+    name: "Uncertain retry flow",
+    nodes: [
+      { id: "tg", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/app"], events: ["pr.opened"] } },
+      { id: "o1", kind: "output", label: "Post comment", config: { destination: "github", action: "comment", body: "Automated review" } },
+    ],
+    edges: [{ id: "e1", from: "tg", to: "o1" }],
+  });
+
+  // 1) Initial run fails mid-call on a non-HTTP error -> ledger row remains in status:"sending"
+  const run = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "pr.opened", { number: 88, title: "PR 88" }, { itemType: "pr", pullRequest: true }),
+  );
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.equal(executeCalls, 1);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
+
+  // 2) Calling real Workflows.retryRun (increments retryPass to 1) catches the sending row at pass 0 -> githubUncertain, 0 new calls
+  shouldThrow = false;
+  ws.workflows.retryRun(run.id);
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.match(ws.workflows.getRun(run.id).error, /githubUncertain/);
+  assert.equal(executeCalls, 1);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
+
+  // 3) A second plain retryRun STILL fails closed with githubUncertain (sending row was preserved)
+  ws.workflows.retryRun(run.id);
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.match(ws.workflows.getRun(run.id).error, /githubUncertain/);
+  assert.equal(executeCalls, 1);
+
+  // 4) Explicit allowUncertainRetry override clears the stale sending row and completes the comment
+  ws.workflows.retryRun(run.id, null, { allowUncertainRetry: true });
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "completed");
+  assert.equal(executeCalls, 2);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`], undefined);
+  assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:3`]?.status, "done");
+});
+
+test("gh fallback maps timeout/kill/no-status errors to unreachable and preserves sending row on comment", async (t) => {
+  const mkErr = (props) => Object.assign(new Error(props.message || "gh failed"), props);
+
+  // 1) Timeout / killed gh process -> unreachable (sending row preserved)
+  let ghErr = mkErr({ killed: true, signal: "SIGTERM", code: "ETIMEDOUT", stderr: "", message: "Command failed: gh api" });
+  const ghClient = createDefaultGithubOutputClient({
+    execGhApi: async () => {
+      throw ghErr;
+    },
+  });
+
+  const { ws } = setup(t, {
+    workflows: {
+      githubOutputClient: ghClient,
+    },
+  });
+
+  const wf = ws.workflows.create({
+    name: "gh timeout comment",
+    nodes: [
+      { id: "tg", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/app"], events: ["issue.opened"] } },
+      { id: "o1", kind: "output", label: "Comment", config: { destination: "github", action: "comment", body: "Triage update" } },
+    ],
+    edges: [{ id: "e1", from: "tg", to: "o1" }],
+  });
+
+  const runTimeout = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "issue.opened", { number: 15, title: "Slow API" }, { itemType: "issue", pullRequest: false }),
+  );
+  await ws.workflows.waitForRun(runTimeout.id);
+  assert.equal(ws.workflows.getRun(runTimeout.id).status, "failed");
+  assert.match(ws.workflows.getRun(runTimeout.id).error, /unreachable/);
+  assert.equal(ws.state.workflowGithubActions[`${runTimeout.id}:o1:0`]?.status, "sending");
+
+  // Retrying that timed-out run fails closed with githubUncertain instead of double-posting
+  ws.workflows.retryRun(runTimeout.id);
+  await ws.workflows.waitForRun(runTimeout.id);
+  assert.equal(ws.workflows.getRun(runTimeout.id).status, "failed");
+  assert.match(ws.workflows.getRun(runTimeout.id).error, /githubUncertain/);
+
+  // 2) Unknown gh error with no HTTP status -> unreachable (sending row preserved)
+  ghErr = mkErr({ stderr: "Post https://api.github.com/...: EOF", message: "exit status 1" });
+  const runNoStatus = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "issue.opened", { number: 16, title: "Drop" }, { itemType: "issue", pullRequest: false }),
+  );
+  await ws.workflows.waitForRun(runNoStatus.id);
+  assert.match(ws.workflows.getRun(runNoStatus.id).error, /unreachable/);
+  assert.equal(ws.state.workflowGithubActions[`${runNoStatus.id}:o1:0`]?.status, "sending");
+
+  // 3) Definite GitHub 429 rate-limit -> maps to invalid AND clears sending row (GitHub did not execute it)
+  ghErr = mkErr({ stderr: "gh: API rate limit exceeded (HTTP 429)" });
+  const runRateLimit = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "issue.opened", { number: 17, title: "Rate limited" }, { itemType: "issue", pullRequest: false }),
+  );
+  await ws.workflows.waitForRun(runRateLimit.id);
+  assert.match(ws.workflows.getRun(runRateLimit.id).error, /invalid/);
+  assert.equal(ws.state.workflowGithubActions[`${runRateLimit.id}:o1:0`], undefined);
+
+  // 4) Definite GitHub 422 validation error -> maps to invalid AND clears sending row
+  ghErr = mkErr({ stderr: "gh: Validation Failed (HTTP 422)" });
+  const run422 = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "issue.opened", { number: 18, title: "Bad req" }, { itemType: "issue", pullRequest: false }),
+  );
+  await ws.workflows.waitForRun(run422.id);
+  assert.match(ws.workflows.getRun(run422.id).error, /invalid/);
+  assert.equal(ws.state.workflowGithubActions[`${run422.id}:o1:0`], undefined);
 });
 
 test("GitHub output client prefers GitHub App installation token and maps HTTP errors cleanly", async () => {
