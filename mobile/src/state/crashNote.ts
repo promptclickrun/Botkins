@@ -1,12 +1,12 @@
-// What the phone keeps of an error that took the app down, or that a screen could not draw
+// What the phone keeps of an error nothing in the app caught, or that a screen could not draw
 // through: when, what it said, and where in the code. Plain logic, so tests run it; lastCrash.ts
 // writes it to the phone and Settings › About shows it.
 
 export type CrashNote = {
   /** When, in ms. */
   at: number;
-  /** "fatal": the app closed. "screen": a screen failed to draw and the app stayed open. */
-  kind: "fatal" | "screen";
+  /** "error": an error nothing caught; the app stayed open. "screen": a screen failed to draw and showed a way back. */
+  kind: "error" | "screen";
   message: string;
   /** The first lines of where it happened. */
   stack: string;
@@ -47,7 +47,7 @@ export function parseCrashNote(text: string | null | undefined): CrashNote | nul
   try {
     const saved = JSON.parse(text) as Partial<CrashNote> | null;
     if (!saved || typeof saved.at !== "number" || typeof saved.message !== "string") return null;
-    return { at: saved.at, kind: saved.kind === "screen" ? "screen" : "fatal", message: saved.message, stack: typeof saved.stack === "string" ? saved.stack : "", ...(typeof saved.version === "string" && { version: saved.version }) };
+    return { at: saved.at, kind: saved.kind === "screen" ? "screen" : "error", message: saved.message, stack: typeof saved.stack === "string" ? saved.stack : "", ...(typeof saved.version === "string" && { version: saved.version }) };
   } catch {
     return null;
   }
@@ -56,7 +56,7 @@ export function parseCrashNote(text: string | null | undefined): CrashNote | nul
 /** The note as text to copy and send. */
 export function crashText(note: CrashNote): string {
   return [
-    (note.kind === "fatal" ? "Botkins closed" : "A screen failed") + " at " + new Date(note.at).toISOString() + (note.version ? " (version " + note.version + ")" : ""),
+    (note.kind === "error" ? "An error" : "A screen failed") + " at " + new Date(note.at).toISOString() + (note.version ? " (version " + note.version + ")" : ""),
     note.message,
     note.stack,
   ]

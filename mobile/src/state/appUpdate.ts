@@ -60,11 +60,17 @@ AppState.addEventListener("change", (next) => {
   }
 });
 
+/**
+ * The computer whose app Settings shows and updates: the one whose `meta` the phone holds. With
+ * several computers joined that is the one Settings is for, which need not be the primary one.
+ */
+export const updatedComputer = (state: { parts: { meta?: { serverId?: string } }; pairing?: { serverId: string } | null }) => state.parts.meta?.serverId ?? state.pairing?.serverId;
+
 /** The restart under way on the computer in use, if this phone started one, with what the banner says. */
 export function useRestarting(): (PendingRestart & { stage: RestartStage }) | null {
   const pending = useUpdateRestart((state) => state.pending);
   const stage = useUpdateRestart((state) => state.stage);
-  const serverId = useApp((state) => state.pairing?.serverId);
+  const serverId = useApp(updatedComputer);
   return pending && pending.serverId === serverId ? { ...pending, stage } : null;
 }
 
@@ -74,11 +80,11 @@ async function settle() {
   const pending = useUpdateRestart.getState().pending;
   if (!pending) return;
   const state = useApp.getState();
-  const step = restartStep(pending, state.pairing?.serverId, Date.now());
+  const step = restartStep(pending, updatedComputer(state), Date.now());
   if (step.kind === "drop") return done();
   if (step.kind === "gave-up") {
     done();
-    return showToast(gaveUpLine(state.pairing?.name ?? "your computer", state.link === "online"), "error");
+    return showToast(gaveUpLine(state.parts.meta?.name || state.pairing?.name || "your computer", state.link === "online"), "error");
   }
   if (useUpdateRestart.getState().stage !== step.stage) useUpdateRestart.setState({ stage: step.stage });
   if (asking || state.link !== "online") return;

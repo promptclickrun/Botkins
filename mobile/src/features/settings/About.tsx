@@ -26,7 +26,7 @@ export default function About() {
   const online = useOnline();
   // What the computer's app runs on (its Settings › About). An older computer, or one out of reach, shows only its version.
   const [info, setInfo] = useState<ReturnType<Calls["appInfo"]>>();
-  // The last error that closed the app or stopped a screen, if the phone kept one.
+  // The last error nothing in the app caught, or that stopped a screen, if the phone kept one.
   const [crash, setCrash] = useState(readLastCrash);
   useEffect(() => {
     if (!online) return;
@@ -57,7 +57,7 @@ export default function About() {
       )}
       {crash && (
         <>
-          <Label>{crash.kind === "fatal" ? "Last time the app closed" : "Last screen that failed"}</Label>
+          <Label>{crash.kind === "error" ? "Last error" : "Last screen that failed"}</Label>
           <Group>
             <View style={{ padding: space.lg, gap: space.sm }}>
               <T variant="footnote" color="muted">

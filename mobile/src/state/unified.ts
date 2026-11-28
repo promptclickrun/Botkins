@@ -789,6 +789,13 @@ export function unscopeValueForHost<T>(value: T, targetHostId: string, depth = 0
 
 /** Methods that belong to the selected settings computer when no scoped ID is present. */
 const SETTINGS_HOST_METHODS = new Set([
+  // The computer's own app: what it runs and its updates. Settings shows the chosen computer's
+  // name and version (its `meta`), so "Update" must update that computer and no other.
+  "appInfo",
+  "appUpdateStatus",
+  "checkAppUpdate",
+  "installAppUpdate",
+  "setAppUpdateAuto",
   "setPreferences",
   "setAppearance",
   "setApproval",

@@ -9,6 +9,7 @@ import type { GithubAgentRepoConfig, GithubAgentStatus } from "@/link/types";
 import { useBots, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { showToast } from "@/state/store";
+import { AppUpdates } from "./AppUpdates";
 import { computerLacksGithub, githubNotice } from "./githubNotice";
 import { Button, EmptyState, Field, Group, Label, Page, Row, space, T } from "@/ui";
 
@@ -60,10 +61,12 @@ export default function GithubSettings() {
     setLoading(false);
   }, [owner]);
 
+  // Asked again when the link comes back and when the computer's version changes: after an update it restarts, and this page then works by itself.
+  const version = meta?.version;
   useEffect(() => {
     if (online && owner) void load(true);
     else setLoading(false);
-  }, [online, owner, load]);
+  }, [online, owner, load, version]);
 
   if (!owner) {
     return (
@@ -86,6 +89,8 @@ export default function GithubSettings() {
         <Stack.Screen options={{ title: "GitHub" }} />
         {/* Which computer answered, and what it runs: with several computers joined, it is the one Settings is for. */}
         <EmptyState {...githubNotice(meta)} action="Check again" onAction={() => void load(true)} />
+        {/* The way out, here: the computer's own update, started from this phone. The page looks again when the computer is back on its new version. */}
+        <AppUpdates key={meta?.serverId} name={meta?.name?.trim() || "Your computer"} />
       </Page>
     );
 
