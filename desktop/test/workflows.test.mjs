@@ -1830,6 +1830,15 @@ test("GitHub output write-before-call sending ledger prevents double-post on res
   );
   assert.equal(calls, 1);
 
+  // A saved step config cannot override the guard (members with workflow "manage" can edit configs)
+  const nodeCfgOverride = { ...nodeComment, config: { ...nodeComment.config, allowUncertainRetry: true } };
+  await assert.rejects(
+    () => executeGithubOutputNode({ wf, run: makeRun("r2"), node: nodeCfgOverride, client, actionStore, pass: 2 }),
+    (err) => err?.code === "githubUncertain",
+  );
+  assert.equal(storeMap.get("r2:o1:0")?.status, "sending");
+  assert.equal(calls, 1);
+
   // Explicit override clears the uncertain sending row and allows the person-authorized retry
   const overridden = await executeGithubOutputNode({
     wf,
