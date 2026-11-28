@@ -1933,6 +1933,8 @@ export class Workflows {
     run.status = "running";
     run.finishedAt = null;
     run.error = null;
+    run.errorCode = null;
+    run.githubUncertain = null;
     run.pendingApproval = null;
     run.retriedAt = Date.now();
     run.retryPass = (Number(run.retryPass) || 0) + 1;
@@ -2135,6 +2137,8 @@ export class Workflows {
         step.startedAt = Date.now();
         step.finishedAt = null;
         step.error = null;
+        step.errorCode = null;
+        step.githubUncertain = null;
         this.ws.save();
 
         try {
@@ -2170,8 +2174,29 @@ export class Workflows {
           step.status = "failed";
           step.finishedAt = Date.now();
           step.error = err?.message || String(err);
+          const uncertain =
+            err?.githubUncertain && typeof err.githubUncertain === "object"
+              ? {
+                  nodeId: node.id,
+                  stepLabel: node.label,
+                  action: String(err.githubUncertain.action || "comment"),
+                  repository: String(err.githubUncertain.repository || ""),
+                  number: Number.isInteger(err.githubUncertain.number) ? err.githubUncertain.number : null,
+                  pullRequest: typeof err.githubUncertain.pullRequest === "boolean" ? err.githubUncertain.pullRequest : null,
+                  url: typeof err.githubUncertain.url === "string" ? err.githubUncertain.url : null,
+                }
+              : null;
+          step.errorCode =
+            err?.code === "githubUncertain" || uncertain
+              ? "githubUncertain"
+              : typeof err?.code === "string" && err.code
+                ? err.code
+                : null;
+          if (uncertain) step.githubUncertain = uncertain;
           run.status = "failed";
           run.error = `${node.label}: ${step.error}`;
+          run.errorCode = step.errorCode;
+          if (uncertain) run.githubUncertain = uncertain;
           run.finishedAt = Date.now();
           this.ws.save();
           return;

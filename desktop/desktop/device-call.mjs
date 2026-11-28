@@ -55,6 +55,9 @@ export function deviceCall({ workspace, handlers, folders }) {
     if (name === "recordVoiceLine") return handlers[name](checked[0], checked[1], checked[2], checked[3], member, checked[4]);
     // A script command is the owner's to remove, turn off or replace, whatever a member's role lets them do to a skill (desktop/script-commands.mjs).
     if (member) {
+      if (name === "workflowRetryRun" && checked[2]?.allowUncertainRetry === true) {
+        throw new Error("Only the owner can retry an uncertain GitHub action.");
+      }
       const names = name === "removeSkill" || name === "setSkillEnabled" ? [checked[0]] : name === "skills.upload" ? checked[0]?.replace : name === "skillsCatalog.install" ? checked[1] : [];
       const scripts = workspace.state.skills?.scripts ?? {};
       if (Array.isArray(names) && names.some((skill) => typeof skill === "string" && Object.hasOwn(scripts, skill))) throw new Error("Only the owner can remove, turn off or replace a script command.");

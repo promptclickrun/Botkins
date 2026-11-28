@@ -3,17 +3,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  canShowUncertainRetry,
   deriveGithubAccessAlerts,
   extractCanonicalEvents,
   extractConfiguredRepos,
   filterLabelOptions,
+  GITHUB_UNCERTAIN_STATUS_LABEL,
   groupDeliveriesByOutcome,
   groupReposByOwner,
+  hasGithubUncertainFailure,
   isIssueOnlyGithubTrigger,
   latestReplayableDelivery,
   normalizeLabelColor,
+  resolveGithubUncertainDetails,
   resolveOutputTargetRepos,
   shouldClearLabelsOnRepoChange,
+  workflowRunStatusLabel,
+  workflowStepStatusLabel,
   type WorkflowGithubDelivery,
 } from "../src/features/workflows/github";
 
@@ -244,4 +250,56 @@ test("GithubPickers.tsx virtualizes repo, label, people, and delivery lists with
   const src = readFileSync(new URL("../src/features/workflows/GithubPickers.tsx", import.meta.url), "utf8");
   assert.match(src, /<SectionList\b/);
   assert.match(src, /<FlatList\b/);
+});
+
+test("mobile githubUncertain helpers detect state, format action/target/link, and restrict Retry anyway to owner", () => {
+  const run = {
+    id: "run-gh-1",
+    status: "failed",
+    errorCode: "githubUncertain",
+    error: 'Post comment: Previous attempt for non-repeatable GitHub action "comment" on org/repo#42 did not finish cleanly; refusing to double-post (githubUncertain).',
+    githubUncertain: {
+      nodeId: "o1",
+      stepLabel: "Post comment",
+      action: "comment",
+      repository: "org/repo",
+      number: 42,
+      pullRequest: false,
+      url: "https://github.com/org/repo/issues/42",
+    },
+    steps: {
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Post comment",
+        status: "failed",
+        errorCode: "githubUncertain",
+        error: "refusing to double-post (githubUncertain)",
+        githubUncertain: {
+          nodeId: "o1",
+          stepLabel: "Post comment",
+          action: "comment",
+          repository: "org/repo",
+          number: 42,
+          pullRequest: false,
+          url: "https://github.com/org/repo/issues/42",
+        },
+      },
+    },
+  };
+
+  assert.equal(hasGithubUncertainFailure(run), true);
+  assert.equal(workflowRunStatusLabel(run), GITHUB_UNCERTAIN_STATUS_LABEL);
+  assert.equal(workflowStepStatusLabel(run.steps.o1, run), GITHUB_UNCERTAIN_STATUS_LABEL);
+
+  const details = resolveGithubUncertainDetails(run);
+  assert.ok(details);
+  assert.equal(details.actionLabel, "Post comment");
+  assert.equal(details.target, "org/repo#42");
+  assert.equal(details.url, "https://github.com/org/repo/issues/42");
+
+  // Owner with permission sees Retry anyway; member or lacking permission does not
+  assert.equal(canShowUncertainRetry({ run, isOwner: true, canUse: true }), true);
+  assert.equal(canShowUncertainRetry({ run, isOwner: false, canUse: true }), false);
+  assert.equal(canShowUncertainRetry({ run, isOwner: true, canUse: false }), false);
 });

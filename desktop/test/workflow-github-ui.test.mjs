@@ -406,3 +406,109 @@ test("Workflows.tsx starter template uses valid {{state}} field (not broken {{st
   assert.doesNotMatch(src, /\{\{status\}\}/);
   assert.match(src, /destination:\s*"chat"/);
 });
+
+test("desktop workflowGithub.ts detects githubUncertain state, builds action/target/link details, and gates Retry anyway to owner", () => {
+  const nodes = [
+    { id: "tg", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["promptclickrun/Botkins"] } },
+    { id: "o1", kind: "output", label: "Post review comment", config: { destination: "github", action: "comment" } },
+  ];
+
+  // Structured githubUncertain metadata on run/step
+  const uncertainRun = {
+    id: "run-u1",
+    status: "failed",
+    errorCode: "githubUncertain",
+    error: 'Post review comment: Previous attempt for non-repeatable GitHub action "comment" on promptclickrun/Botkins#352 did not finish cleanly; refusing to double-post (githubUncertain).',
+    githubUncertain: {
+      nodeId: "o1",
+      stepLabel: "Post review comment",
+      action: "comment",
+      repository: "promptclickrun/Botkins",
+      number: 352,
+      pullRequest: true,
+      url: "https://github.com/promptclickrun/Botkins/pull/352",
+    },
+    steps: {
+      tg: { nodeId: "tg", kind: "trigger", label: "GH", status: "completed" },
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Post review comment",
+        status: "failed",
+        errorCode: "githubUncertain",
+        error: 'Previous attempt for non-repeatable GitHub action "comment" on promptclickrun/Botkins#352 did not finish cleanly; refusing to double-post (githubUncertain).',
+        githubUncertain: {
+          nodeId: "o1",
+          stepLabel: "Post review comment",
+          action: "comment",
+          repository: "promptclickrun/Botkins",
+          number: 352,
+          pullRequest: true,
+          url: "https://github.com/promptclickrun/Botkins/pull/352",
+        },
+      },
+    },
+  };
+
+  assert.equal(gh.hasGithubUncertainFailure(uncertainRun), true);
+  assert.equal(gh.workflowRunStatusLabel(uncertainRun), gh.GITHUB_UNCERTAIN_STATUS_LABEL);
+  assert.equal(gh.workflowStepStatusLabel(uncertainRun.steps.o1, uncertainRun), gh.GITHUB_UNCERTAIN_STATUS_LABEL);
+
+  const details = gh.resolveGithubUncertainDetails(uncertainRun, nodes);
+  assert.ok(details);
+  assert.equal(details.action, "comment");
+  assert.equal(details.actionLabel, "Post comment");
+  assert.equal(details.target, "promptclickrun/Botkins#352");
+  assert.equal(details.url, "https://github.com/promptclickrun/Botkins/pull/352");
+  assert.match(details.confirmMessage, /promptclickrun\/Botkins#352/);
+
+  // Owner sees Retry anyway; member does not
+  assert.equal(gh.canShowUncertainRetry({ run: uncertainRun, isOwner: true }), true);
+  assert.equal(gh.canShowUncertainRetry({ run: uncertainRun, isOwner: false }), false);
+  assert.equal(gh.canShowUncertainRetry({ run: uncertainRun, isOwner: true, step: uncertainRun.steps.o1 }), true);
+  assert.equal(gh.canShowUncertainRetry({ run: uncertainRun, isOwner: false, step: uncertainRun.steps.o1 }), false);
+  assert.equal(gh.canShowUncertainRetry({ run: uncertainRun, isOwner: true, step: uncertainRun.steps.tg }), false);
+
+  // Fallback for legacy persisted run with only error text and run context (no structured githubUncertain object)
+  const legacyUncertainRun = {
+    id: "run-u2",
+    status: "failed",
+    error: 'Post review comment: Previous attempt for non-repeatable GitHub action "review.approve" did not finish cleanly; refusing to double-post (githubUncertain).',
+    context: { repository: "acme/api", number: 19, pull_request: true },
+    steps: {
+      o1: {
+        nodeId: "o1",
+        kind: "output",
+        label: "Approve PR",
+        status: "failed",
+        error: 'Previous attempt for non-repeatable GitHub action "review.approve" did not finish cleanly; refusing to double-post (githubUncertain).',
+      },
+    },
+  };
+  const legacyDetails = gh.resolveGithubUncertainDetails(legacyUncertainRun, nodes);
+  assert.ok(legacyDetails);
+  assert.equal(legacyDetails.action, "review.approve");
+  assert.equal(legacyDetails.actionLabel, "Approve PR");
+  assert.equal(legacyDetails.target, "acme/api#19");
+  assert.equal(legacyDetails.url, "https://github.com/acme/api/pull/19");
+
+  // Non-uncertain failed run does not trigger uncertain state or Retry anyway
+  const plainFailed = {
+    id: "run-f1",
+    status: "failed",
+    error: "Step failed: 422 Validation Failed",
+    steps: { o1: { nodeId: "o1", kind: "output", label: "Post", status: "failed", error: "422 Validation Failed" } },
+  };
+  assert.equal(gh.hasGithubUncertainFailure(plainFailed), false);
+  assert.equal(gh.workflowRunStatusLabel(plainFailed), "Failed");
+  assert.equal(gh.resolveGithubUncertainDetails(plainFailed, nodes), null);
+  assert.equal(gh.canShowUncertainRetry({ run: plainFailed, isOwner: true }), false);
+});
+
+test("desktop/desktop/link and mobile/link-host stay byte-identical for team.mjs and methods.mjs", () => {
+  for (const file of ["team.mjs", "methods.mjs"]) {
+    const desktopCopy = readFileSync(new URL(`../desktop/link/${file}`, import.meta.url), "utf8");
+    const mobileCopy = readFileSync(new URL(`../../mobile/link-host/${file}`, import.meta.url), "utf8");
+    assert.equal(desktopCopy, mobileCopy, `${file} drifted between desktop/desktop/link and mobile/link-host`);
+  }
+});

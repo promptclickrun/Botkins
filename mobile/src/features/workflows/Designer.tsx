@@ -11,7 +11,7 @@ import { Alert, Modal, Platform, ScrollView, Switch, useWindowDimensions, View }
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { openChat } from "@/features/chat/navigate";
 import type { Workflow, WorkflowNode, WorkflowTriggerKind } from "@/link/types";
-import { useBots, useCan, useWorkflowRuns, useWorkflows } from "@/state/hooks";
+import { useBots, useCan, useMember, useWorkflowRuns, useWorkflows } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { BackdropLayer, Button, EmptyState, Group, haptic, IconButton, Label, Loading, radius, Row, Segmented, Sheet, space, switchColors, T, Tap, tint, useShape, useTheme, useTextPrompt } from "@/ui";
@@ -91,6 +91,7 @@ function Designer({ id }: { id: string }) {
   const canCreate = useCan("today", "create");
   const canDelete = useCan("today", "delete");
   const canUse = useCan("today", "use");
+  const isOwner = !useMember();
   const shape = useShape();
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
@@ -330,7 +331,7 @@ function Designer({ id }: { id: string }) {
       <Stack.Screen options={{ headerRight }} />
       {toolbar}
       {tab === "runs" ? (
-        <RunsView workflow={workflow} runs={runs} nodes={draft.nodes} canUse={canUse} />
+        <RunsView workflow={workflow} runs={runs} nodes={draft.nodes} canUse={canUse} isOwner={isOwner} />
       ) : view === "canvas" ? (
         <Canvas
           graph={draft}

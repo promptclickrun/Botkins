@@ -37,7 +37,9 @@ import {
   mapGithubHttpError,
   stripExternalEventFrames,
 } from "../desktop/workflow-github-output.mjs";
-import { authorize } from "../desktop/link/team.mjs";
+import { authorize, defaultTeam } from "../desktop/link/team.mjs";
+import { remoteArgs } from "../desktop/link/methods.mjs";
+import { deviceCall } from "../desktop/device-call.mjs";
 import { exportWorkflow, parseImportedWorkflow, WORKFLOW_SCHEMA_VERSION } from "../desktop/workflow-port.mjs";
 import { EventEmitter } from "node:events";
 import {
@@ -1899,14 +1901,21 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
     edges: [{ id: "e1", from: "tg", to: "o1" }],
   });
 
-  // 1) Initial run fails mid-call on a non-HTTP error -> ledger row remains in status:"sending"
+  // 1) Initial run fails mid-call on a non-HTTP error -> ledger row remains in status:"sending" and run records githubUncertain metadata
   const run = ws.workflows.startRun(
     wf,
     wf.nodes[0],
     buildGithubTriggerPayload("org/app", "pr.opened", { number: 88, title: "PR 88" }, { itemType: "pr", pullRequest: true }),
   );
   await ws.workflows.waitForRun(run.id);
-  assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  const initialRun = ws.workflows.getRun(run.id);
+  assert.equal(initialRun.status, "failed");
+  assert.equal(initialRun.errorCode, "githubUncertain");
+  assert.equal(initialRun.githubUncertain?.action, "comment");
+  assert.equal(initialRun.githubUncertain?.repository, "org/app");
+  assert.equal(initialRun.githubUncertain?.number, 88);
+  assert.equal(initialRun.githubUncertain?.url, "https://github.com/org/app/pull/88");
+  assert.equal(initialRun.steps.o1.errorCode, "githubUncertain");
   assert.equal(executeCalls, 1);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
 
@@ -1915,6 +1924,7 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
   ws.workflows.retryRun(run.id);
   await ws.workflows.waitForRun(run.id);
   assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, "githubUncertain");
   assert.match(ws.workflows.getRun(run.id).error, /githubUncertain/);
   assert.equal(executeCalls, 1);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`]?.status, "sending");
@@ -1930,6 +1940,8 @@ test("Workflows.retryRun fails closed with githubUncertain after an interrupted 
   ws.workflows.retryRun(run.id, null, { allowUncertainRetry: true });
   await ws.workflows.waitForRun(run.id);
   assert.equal(ws.workflows.getRun(run.id).status, "completed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, null);
+  assert.equal(ws.workflows.getRun(run.id).githubUncertain, null);
   assert.equal(executeCalls, 2);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:0`], undefined);
   assert.equal(ws.state.workflowGithubActions[`${run.id}:o1:3`]?.status, "done");
@@ -2116,6 +2128,92 @@ test("bot workflow_create and workflow_update accept expanded GitHub trigger and
   });
   assert.equal(updated.nodes[1].config.action, "label.add");
   assert.equal(updated.nodes[1].config.labelsFrom, "agent");
+});
+
+test("host enforces owner-only allowUncertainRetry on workflowRetryRun across Link authorize, remoteArgs, and deviceCall", async (t) => {
+  let executeCalls = 0;
+  let shouldThrow = true;
+  const { ws } = setup(t, {
+    workflows: {
+      githubOutputClient: {
+        async executeAction() {
+          executeCalls++;
+          if (shouldThrow) throw new Error("ECONNRESET socket hang up");
+          return { objectIds: ["comment:901"] };
+        },
+      },
+    },
+  });
+
+  const wf = ws.workflows.create({
+    name: "Owner-only uncertain retry",
+    nodes: [
+      { id: "tg", kind: "trigger", triggerKind: "github", label: "GH", config: { repos: ["org/app"], events: ["pr.opened"] } },
+      { id: "o1", kind: "output", label: "Post comment", config: { destination: "github", action: "comment", body: "Automated review" } },
+    ],
+    edges: [{ id: "e1", from: "tg", to: "o1" }],
+  });
+
+  const run = ws.workflows.startRun(
+    wf,
+    wf.nodes[0],
+    buildGithubTriggerPayload("org/app", "pr.opened", { number: 77, title: "PR 77" }, { itemType: "pr", pullRequest: true }),
+  );
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).errorCode, "githubUncertain");
+  assert.equal(executeCalls, 1);
+
+  // Build team with a member who has full today permissions (including "use") via r_collab
+  const team = defaultTeam();
+  team.groups.push({ id: "g_collab", name: "Collaborators", roleId: "r_collab" });
+  team.members.push({ id: "m_collab", name: "Collab", groupId: "g_collab", deviceIds: ["d_collab"] });
+  const memberPrincipal = { kind: "member", memberId: "m_collab", name: "Collab", groupId: "g_collab" };
+  const ownerPrincipal = { kind: "owner" };
+
+  // 1) remoteArgs validates and preserves allowUncertainRetry: true while stripping unknown keys
+  assert.deepEqual(
+    remoteArgs("workflowRetryRun", [run.id, "o1", { allowUncertainRetry: true, extra: "drop" }]),
+    [run.id, "o1", { allowUncertainRetry: true }],
+  );
+  assert.deepEqual(remoteArgs("workflowRetryRun", [run.id, "o1"]), [run.id, "o1"]);
+  assert.deepEqual(remoteArgs("workflowRetryRun", [run.id]), [run.id]);
+  assert.throws(() => remoteArgs("workflowRetryRun", [""]), /Choose a workflow run/);
+
+  // 2) Link authorize: member plain retry is allowed (today:use), but member allowUncertainRetry is rejected
+  assert.equal(authorize(memberPrincipal, team, "workflowRetryRun", [run.id, "o1"]), "");
+  const memberRefusal = authorize(memberPrincipal, team, "workflowRetryRun", [run.id, "o1", { allowUncertainRetry: true }]);
+  assert.match(memberRefusal, /Only the owner/i);
+  assert.equal(authorize(ownerPrincipal, team, "workflowRetryRun", [run.id, "o1", { allowUncertainRetry: true }]), "");
+
+  // 3) Host deviceCall defense-in-depth: rejects member allowUncertainRetry even if sent by hand, allows owner
+  const call = deviceCall({
+    workspace: ws,
+    handlers: {
+      workflowRetryRun: (runId, nodeId, options) =>
+        ws.workflows.retryRun(runId, nodeId ?? null, options && typeof options === "object" ? { allowUncertainRetry: options.allowUncertainRetry === true } : {}),
+    },
+    folders: {},
+  });
+
+  shouldThrow = false;
+  await assert.rejects(
+    () => call("workflowRetryRun", [run.id, "o1", { allowUncertainRetry: true }], { principal: memberPrincipal }),
+    /Only the owner/i,
+  );
+  assert.equal(executeCalls, 1, "rejected member call must not execute GitHub write");
+
+  // Plain member retry goes through deviceCall but still fails closed with githubUncertain (no double-post)
+  await call("workflowRetryRun", [run.id, "o1"], { principal: memberPrincipal });
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "failed");
+  assert.equal(ws.workflows.getRun(run.id).errorCode, "githubUncertain");
+  assert.equal(executeCalls, 1);
+
+  // Owner call with allowUncertainRetry succeeds and posts
+  await call("workflowRetryRun", [run.id, "o1", { allowUncertainRetry: true }], { principal: ownerPrincipal });
+  await ws.workflows.waitForRun(run.id);
+  assert.equal(ws.workflows.getRun(run.id).status, "completed");
+  assert.equal(executeCalls, 2);
 });
 
 

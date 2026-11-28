@@ -511,7 +511,8 @@
 .wf-status-running {
   color: var(--accent-text);
 }
-.wf-status-waiting_approval {
+.wf-status-waiting_approval,
+.wf-status-github_uncertain {
   color: var(--warning);
 }
 .wf-status-pending,
@@ -1110,6 +1111,12 @@
 .wf-run-row-main strong {
   text-transform: capitalize;
 }
+.wf-run-row-main strong.wf-run-status-uncertain,
+.wf-run-detail-title.wf-run-status-uncertain,
+.wf-step-card-meta.wf-run-status-uncertain {
+  text-transform: none;
+  color: var(--warning);
+}
 .wf-run-row-main span {
   font-size: 11px;
   color: var(--muted);
@@ -1178,6 +1185,68 @@
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12px;
+}
+.wf-uncertain-box {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  color: var(--ink);
+  font-size: 12px;
+}
+.wf-uncertain-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--warning);
+  font-weight: 600;
+}
+.wf-uncertain-head svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.wf-uncertain-detail {
+  line-height: 1.45;
+  color: var(--ink);
+}
+.wf-uncertain-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.wf-uncertain-actions,
+.wf-step-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wf-uncertain-btn {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.wf-step-uncertain-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--warning-soft);
+  color: var(--ink);
+  font-size: 11.5px;
 }
 .wf-step-list {
   display: flex;

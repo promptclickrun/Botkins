@@ -56,7 +56,19 @@ function makeCodedError(code, message, meta = {}) {
   if (meta.httpStatus !== undefined) err.httpStatus = meta.httpStatus;
   if (meta.fromGitHub !== undefined) err.fromGitHub = meta.fromGitHub;
   if (meta.definiteNotSent !== undefined) err.definiteNotSent = meta.definiteNotSent;
+  if (meta.githubUncertain !== undefined) err.githubUncertain = meta.githubUncertain;
   return err;
+}
+
+export function buildGithubTargetUrl(repository, number, pullRequest = null) {
+  const repo = String(repository ?? "").trim();
+  if (!repo || !REPO_RE.test(repo)) return null;
+  const num = Number(number);
+  if (Number.isInteger(num) && num > 0) {
+    const seg = pullRequest === true ? "pull" : "issues";
+    return `https://github.com/${repo}/${seg}/${num}`;
+  }
+  return `https://github.com/${repo}/issues`;
 }
 
 /**
@@ -794,9 +806,25 @@ export async function executeGithubOutputNode({
     if (!REPEATABLE_GITHUB_ACTIONS.has(action)) {
       if (!overrideUncertain) {
         // Keep the `sending` row(s) intact so a subsequent retry also fails closed until explicitly overridden.
+        const first = sendingRows[0];
+        const uncertainRepo = first?.repository || repository;
+        const uncertainNum = first?.number ?? number ?? null;
+        const uncertainPr = typeof first?.pullRequest === "boolean" ? first.pullRequest : pullRequest;
+        const uncertainAction = first?.action || action;
+        const uncertainUrl = buildGithubTargetUrl(uncertainRepo, uncertainNum, uncertainPr);
+        const targetLabel = uncertainNum ? `${uncertainRepo}#${uncertainNum}` : uncertainRepo;
         throw makeCodedError(
           "githubUncertain",
-          `Previous attempt for non-repeatable GitHub action "${action}" did not finish cleanly; refusing to double-post (githubUncertain).`,
+          `Previous attempt for non-repeatable GitHub action "${uncertainAction}" on ${targetLabel} did not finish cleanly; refusing to double-post (githubUncertain).`,
+          {
+            githubUncertain: {
+              action: uncertainAction,
+              repository: uncertainRepo,
+              number: uncertainNum,
+              pullRequest: typeof uncertainPr === "boolean" ? uncertainPr : null,
+              url: uncertainUrl,
+            },
+          },
         );
       }
       for (const rec of sendingRows) {
@@ -944,6 +972,7 @@ export async function executeGithubOutputNode({
     stepId: node.id,
     repository,
     number,
+    pullRequest: typeof pullRequest === "boolean" ? pullRequest : null,
     action,
     status: "sending",
     objectIds: preIds,
@@ -974,6 +1003,14 @@ export async function executeGithubOutputNode({
       err?.fromGitHub === true && Number(err?.httpStatus) >= 400 && Number(err?.httpStatus) < 500;
     if (REPEATABLE_GITHUB_ACTIONS.has(action) || definiteGitHub4xx || err?.definiteNotSent === true) {
       actionStore?.delete?.(actionKey);
+    } else if (err && typeof err === "object") {
+      err.githubUncertain = {
+        action,
+        repository,
+        number: number ?? null,
+        pullRequest: typeof pullRequest === "boolean" ? pullRequest : null,
+        url: buildGithubTargetUrl(repository, number, pullRequest),
+      };
     }
     throw err;
   }
