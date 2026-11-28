@@ -167,7 +167,8 @@ try {
     await page.waitForTimeout(300);
     await settings.screenshot({ path: join(shots, "your-picture-dark.png") });
   }
-  // Remove takes it away again.
+  // Remove takes it away again (confirm dialog guards destructive removal).
+  page.once("dialog", (dialog) => dialog.accept());
   await picture.getByRole("button", { name: "Remove" }).click();
   await expect(picture).toContainText("No picture yet");
   assert.deepEqual(errors, []);

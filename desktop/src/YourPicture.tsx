@@ -5,11 +5,12 @@ import { ImageUp, Trash2 } from "lucide-react";
 import { AVATAR_TYPES, avatarFromFile } from "./avatarImage";
 import { PersonBadge } from "./PersonBadge";
 import { viewerOf } from "./peopleView";
+import { confirmRemovePhoto } from "./profileLogic";
 import { Group, errorText } from "./SettingsRows";
 import type { State } from "./types";
 
-export function YourPicture({ state }: { state: State }) {
-  const input = useRef<HTMLInputElement>(null);
+export function useDesktopPicture(state: State) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const me = viewerOf(state);
@@ -32,20 +33,47 @@ export function YourPicture({ state }: { state: State }) {
     }
   };
 
+  const openPicker = () => inputRef.current?.click();
+
+  const handleFile = (file: File | undefined) => {
+    if (file) void change(() => avatarFromFile(file));
+  };
+
+  const removeWithConfirm = () => {
+    confirmRemovePhoto((msg) => window.confirm(msg), () => void change(async () => null));
+  };
+
+  return {
+    inputRef,
+    busy,
+    error,
+    me,
+    name,
+    emoji,
+    avatar,
+    openPicker,
+    handleFile,
+    removeWithConfirm,
+  };
+}
+
+export function YourPicture({ state }: { state: State }) {
+  const pic = useDesktopPicture(state);
+
   return (
     <Group title="Your picture" footer="People on your team see it beside your messages and when someone mentions you. It stays on this computer's team, not in your hosted profile.">
       <div className="your-picture">
-        <PersonBadge person={{ id: me, name, avatar, emoji }} size={64} className="your-picture-preview" />
+        <PersonBadge person={{ id: pic.me, name: pic.name, avatar: pic.avatar, emoji: pic.emoji }} size={64} className="your-picture-preview" />
         <div className="your-picture-body">
-          <span className="set-name">{avatar ? "Your picture is set." : "No picture yet. People see your initial."}</span>
-          {error && <span className="your-picture-error" role="alert">{error}</span>}
+          <span className="set-name">{pic.avatar ? "Your picture is set." : "No picture yet. People see your initial."}</span>
+          {pic.error && <span className="your-picture-error" role="alert">{pic.error}</span>}
           <div className="your-picture-actions">
-            <button type="button" className="set-button" disabled={busy} onClick={() => input.current?.click()}>
+            <button type="button" className="set-button" disabled={pic.busy} onClick={pic.openPicker}>
               <ImageUp size={14} aria-hidden="true" />
-              <span>{busy ? "Saving…" : "Upload picture…"}</span>
+              <span>{pic.busy ? "Saving…" : "Upload picture…"}</span>
             </button>
-            {avatar && (
-              <button type="button" className="set-button" disabled={busy} onClick={() => void change(async () => null)}>
+            {pic.avatar && (
+              <button type="button" className="set-button" disabled={pic.busy} onClick={pic.removeWithConfirm}>
                 <Trash2 size={14} aria-hidden="true" />
                 <span>Remove</span>
               </button>
@@ -53,7 +81,7 @@ export function YourPicture({ state }: { state: State }) {
           </div>
         </div>
         <input
-          ref={input}
+          ref={pic.inputRef}
           type="file"
           accept={AVATAR_TYPES}
           hidden
@@ -61,7 +89,7 @@ export function YourPicture({ state }: { state: State }) {
           onChange={(e) => {
             const file = e.target.files?.[0];
             e.target.value = "";
-            if (file) void change(() => avatarFromFile(file));
+            pic.handleFile(file);
           }}
         />
       </div>

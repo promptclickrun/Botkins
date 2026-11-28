@@ -67,7 +67,7 @@ export default function RootLayout() {
     if (booted) void loadProfile(pairings.length);
   }, [booted, pairings.length]);
   useEffect(() => {
-    const inSetupFlow = pathname === "/profile" || pathname.startsWith("/pair") || pathname === "/join" || pathname === "/setup";
+    const inSetupFlow = pathname === "/profile" || pathname.startsWith("/profile/") || pathname.startsWith("/pair") || pathname === "/join" || pathname === "/setup";
     if (!booted || !profileLoaded || !profilePrompt || inSetupFlow) return;
     const timer = setTimeout(() => router.push({ pathname: "/profile", params: { prompt: profilePrompt } }), 0);
     return () => clearTimeout(timer);
@@ -231,7 +231,9 @@ export default function RootLayout() {
               <Stack.Screen name="artifacts/index" />
               <Stack.Screen name="artifacts/view" />
             </Stack.Protected>
-            <Stack.Screen name="profile" />
+            <Stack.Screen name="profile/index" />
+            <Stack.Screen name="profile/computers" />
+            <Stack.Screen name="profile/devices" />
             <Stack.Screen name="pair/index" options={{ ...sheet, sheetAllowedDetents: [0.5] }} />
             <Stack.Screen name="pair/scan" options={{ presentation: "fullScreenModal", headerShown: false, animation: "slide_from_bottom" }} />
             <Stack.Screen name="pair/manual" options={{ ...sheet, sheetAllowedDetents: [0.62, 1] }} />
