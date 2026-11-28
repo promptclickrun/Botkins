@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, Users } from "lucide-react";
 import { BotAvatar } from "./Avatar";
 import { ProjectPicker } from "./ProjectChanges";
+import { canUseProject } from "./access";
 import type { ChatMode, State } from "./types";
 import "./groups.css";
 
@@ -14,16 +15,19 @@ const GROUP_MAX = 6;
  */
 export default function NewChat({
   state,
+  project: preset,
   open,
   fail,
 }: {
   state: State;
+  /** A project the chat is made in, chosen before the dialog opened (a project's Chats). Only bots that may use it are offered. */
+  project?: string;
   /** Shows the new chat. */
   open: (id: string) => Promise<void>;
   fail: (e: unknown) => void;
 }) {
   const [picked, setPicked] = useState<string[]>([]);
-  const [projectId, setProjectId] = useState<string>();
+  const [projectId, setProjectId] = useState<string | undefined>(preset);
   const [folder, setFolder] = useState<string>();
   const [mode, setMode] = useState<ChatMode>("default");
   const [busy, setBusy] = useState(false);
@@ -37,7 +41,9 @@ export default function NewChat({
       // A chat in a project is made with it, so the backend checks every bot's access first
       // and the session opens in the project's folder.
       const project = state.projects?.find((p) => p.id === projectId);
-      if (project && picked.length && ids.length === picked.length) id = await api.startProjectChat(ids, project.id, project.folder ? mode : "default", folder);
+      // A project picked before the dialog opened applies to any start; the bot's own settings say what it may do.
+      if (project && preset) id = await api.startProjectChat(ids, project.id);
+      else if (project && picked.length && ids.length === picked.length) id = await api.startProjectChat(ids, project.id, project.folder ? mode : "default", folder);
       else if (ids.length > 1) id = await api.createGroupChat(ids);
       else id = await api.createChat(ids[0]);
       await open(id);
@@ -48,12 +54,16 @@ export default function NewChat({
     }
   }
   const group = picked.length > 1;
+  const fixed = preset ? state.projects?.find((p) => p.id === preset) : undefined;
+  // In a project, only the bots that may use it.
+  const bots = fixed ? state.bots.filter((b) => canUseProject(state, b, fixed)) : state.bots;
   return (
     <>
-      <p className="chat-pick-intro">Pick a bot. Tick bots to add a project or start a group chat.</p>
+      <p className="chat-pick-intro">{fixed ? "Pick a bot. Tick bots to start a group chat." : "Pick a bot. Tick bots to add a project or start a group chat."}</p>
       {/* The bots as rows of one card: the tick box picks, the row starts a chat at once. */}
+      {fixed && !bots.length && <p className="muted">No bot can use {fixed.name} yet. Give one access on the project's Access tab.</p>}
       <div className="chat-pick group">
-        {state.bots.map((b) => {
+        {bots.map((b) => {
           const on = picked.includes(b.id);
           const full = !on && picked.length >= GROUP_MAX;
           return (
@@ -78,7 +88,7 @@ export default function NewChat({
           );
         })}
       </div>
-      {picked.length > 0 && (
+      {picked.length > 0 && !fixed && (
         <ProjectPicker
           state={state}
           botIds={picked}
