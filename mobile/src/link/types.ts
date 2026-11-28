@@ -1366,6 +1366,7 @@ export type Appearance = {
   /** Missing on older computers means the desktop's usual default: on. */
   avatarAnimations?: boolean;
 };
+export type BotNotificationFilter = { mode: "all" | "only"; ids: string[] };
 export type NotificationSettings = {
   replies: boolean;
   routines: boolean;
@@ -1373,6 +1374,8 @@ export type NotificationSettings = {
   /** One plain reminder when something is left waiting on a person, with no model. On from the start. Missing on a computer without "proactive-team-v1". */
   reminders?: boolean;
   quietHours: { enabled: boolean; from: string; to: string };
+  bots?: BotNotificationFilter;
+  mutedBots?: string[];
 };
 export type Preferences = {
   fastMode?: FastMode;
@@ -2215,7 +2218,17 @@ export type PluginConfigValue = string | CredentialRef | null;
 /** What a phone wants to be told about. `previews` off shows "New message" with no text. */
 /** `updates`: a newer Botkins for the computer is out ("app-update-v1"). A computer from before leaves it out; it counts as on. */
 /** `spaces`: notes and changes in the person's spaces ("space-alerts-v1"). A computer from before leaves it out; it counts as on. */
-export type PushPrefs = { replies: boolean; requests: boolean; routines: boolean; previews: boolean; activities: boolean; updates?: boolean; spaces?: boolean };
+export type PushPrefs = {
+  replies: boolean;
+  requests: boolean;
+  routines: boolean;
+  previews: boolean;
+  activities: boolean;
+  updates?: boolean;
+  spaces?: boolean;
+  bots?: BotNotificationFilter;
+  mutedBots?: string[];
+};
 /**
  * The computer's own Botkins and its updates ("app-update-v1"; docs/link-contract.md). `message` is
  * the computer's sentence (why it can't install, what failed), shown as it comes. `auto` is there

@@ -521,12 +521,26 @@ test("notification decisions follow the toggles, focus, quiet hours and run kind
 
 test("notification settings are validated and merged", () => {
   const s = changeSettings(defaultSettings, { notifications: { replies: false, quietHours: { enabled: true, from: "23:30" } } });
-  assert.deepEqual(s.notifications, { replies: false, routines: true, requests: true, reminders: true, quietHours: { enabled: true, from: "23:30", to: "07:00" } });
+  assert.deepEqual(s.notifications, {
+    replies: false,
+    routines: true,
+    requests: true,
+    reminders: true,
+    quietHours: { enabled: true, from: "23:30", to: "07:00" },
+    bots: { mode: "all", ids: [] },
+    mutedBots: [],
+  });
   assert.equal(changeSettings(s, { notifications: { reminders: false } }).notifications.reminders, false);
+  const filtered = changeSettings(s, { notifications: { bots: { mode: "only", ids: ["pip", "pip"] }, mutedBots: ["scout"] } });
+  assert.deepEqual(filtered.notifications.bots, { mode: "only", ids: ["pip"] });
+  assert.deepEqual(filtered.notifications.mutedBots, ["scout"]);
   assert.throws(() => changeSettings(s, { notifications: { reminders: "yes" } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { quietHours: { from: "24:00" } } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { replies: "yes" } }), /Invalid notification/);
   assert.throws(() => changeSettings(s, { notifications: { sound: true } }), /Invalid notification/);
+  assert.throws(() => changeSettings(s, { notifications: { bots: { mode: "bogus", ids: [] } } }), /Invalid notification/);
+  assert.throws(() => changeSettings(s, { notifications: { bots: { mode: "only", ids: [123] } } }), /Invalid notification/);
+  assert.throws(() => changeSettings(s, { notifications: { mutedBots: "pip" } }), /Invalid notification/);
 });
 
 test("usage totals by day, model and bot over 7, 30 and 90 days", () => {

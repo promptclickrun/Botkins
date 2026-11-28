@@ -26,9 +26,11 @@ import { ALL_CARD, cardOver } from "../../link-host/cards.mjs";
 import { botsWithWork, hasWork, MAX_CARDS, phoneCard } from "./cards";
 import { answerPendingAsks } from "./device";
 import { api, attempt, callHost, chatOnScreen, holdBackgroundLink, isUnifiedActive, onChatOnScreen, pooledEntries, restIfAway, switchComputer, syncForPush, tellOthers, wakeForNotification } from "./link";
+import { hostPushRecords, mergePushPrefs, planBotMuteUpdate, planPushPrefsUpdate, PUSH_DEFAULTS } from "./pushPrefs";
 import { routeForNotification } from "./pushRouting";
 import { hostOfId, idForHost, unscopeId } from "./unified";
 import { useApp } from "./store";
+import { useMemo } from "react";
 import { createRegistrar } from "./pushRegistrar";
 
 const KEY = "botkins.push.v1";
@@ -57,10 +59,72 @@ type PushStore = {
 };
 export const usePush = create<PushStore>(() => ({ wanted: false, status: native ? "off" : "unsupported", problem: null }));
 
-export const pushDefaults: PushPrefs = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true, spaces: true };
-/** This phone's choices as the computer holds them, or null while notifications are off there. */
+export const pushDefaults: PushPrefs = PUSH_DEFAULTS;
+/** This phone's choices as the computer(s) hold them, or null while notifications are off. */
 export function usePushPrefs(): PushPrefs | null {
-  return useApp((state) => (state.pairing ? (state.parts.phones?.[state.pairing.deviceId]?.push ?? null) : null));
+  const pairing = useApp((state) => state.pairing);
+  const pairings = useApp((state) => state.pairings);
+  const unified = useApp((state) => state.unified);
+  const unifiedHosts = useApp((state) => state.unifiedHosts);
+  const phones = useApp((state) => state.parts.phones);
+  return useMemo(() => {
+    if (!pairing) return null;
+    if (!unified) return phones?.[pairing.deviceId]?.push ?? null;
+    const includedIds = new Set(unifiedHosts.filter((h) => h.included).map((h) => h.id));
+    const includedPairings = pairings.filter((p) => includedIds.has(p.serverId));
+    return mergePushPrefs(hostPushRecords(phones, includedPairings.length ? includedPairings : [pairing]));
+  }, [pairing, pairings, unified, unifiedHosts, phones]);
+}
+
+/**
+ * Updates push prefs on the active host, or across every connected included host in unified mode
+ * (splitting host-scoped `bots.ids` and `mutedBots` to each owning host with unscoped IDs).
+ */
+export async function updatePushPrefs(patch: Partial<PushPrefs>): Promise<void> {
+  if (!isUnifiedActive()) {
+    await api["link.push.prefs"](patch);
+    return;
+  }
+  const primaryId = useApp.getState().pairing?.serverId ?? null;
+  const targets = pooledEntries().filter(
+    (e) => e.link === "online" && e.parts.meta?.capabilities.includes("push-v1") && e.parts.phones?.[e.pairing.deviceId]?.push != null,
+  );
+  if (!targets.length) {
+    await api["link.push.prefs"](patch);
+    return;
+  }
+  const plans = planPushPrefsUpdate(
+    patch,
+    targets.map((t) => ({ serverId: t.pairing.serverId })),
+    primaryId,
+  );
+  await Promise.all(plans.map(({ serverId, prefs }) => callHost(serverId, "link.push.prefs", prefs)));
+}
+
+/**
+ * Mutes or unmutes a single bot on this phone by writing `mutedBots` to the bot's owning host
+ * with unscoped bot IDs (handles both single-host and unified mode).
+ */
+export async function setBotNotificationsMuted(botId: string, muted: boolean): Promise<void> {
+  const state = useApp.getState();
+  const primaryId = state.pairing?.serverId ?? null;
+  if (!isUnifiedActive()) {
+    const current = state.pairing ? (state.parts.phones?.[state.pairing.deviceId]?.push?.mutedBots ?? []) : [];
+    const next = new Set(current);
+    if (muted) next.add(botId);
+    else next.delete(botId);
+    await api["link.push.prefs"]({ mutedBots: [...next] });
+    return;
+  }
+  const entries = pooledEntries();
+  const currentScoped: string[] = [];
+  for (const e of entries) {
+    const push = state.parts.phones?.[e.pairing.deviceId]?.push;
+    if (push?.mutedBots) currentScoped.push(...push.mutedBots);
+  }
+  const plan = planBotMuteUpdate(botId, muted, currentScoped, primaryId);
+  if (!plan) return;
+  await callHost(plan.serverId, "link.push.prefs", { mutedBots: plan.mutedBots });
 }
 
 const canPush = () => !!useApp.getState().parts.meta?.capabilities.includes("push-v1");

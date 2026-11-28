@@ -399,6 +399,25 @@ export function scopePartsForHost(
         };
       }
       out.proactive = { ...p, bots };
+    } else if (name === "phones" && value && typeof value === "object") {
+      const phones = value as NonNullable<Parts["phones"]>;
+      const next: NonNullable<Parts["phones"]> = {};
+      for (const [did, info] of Object.entries(phones)) {
+        if (!info) continue;
+        const push = info.push
+          ? {
+              ...info.push,
+              ...(info.push.bots
+                ? { bots: { mode: info.push.bots.mode, ids: (info.push.bots.ids ?? []).map((id) => s(id)) } }
+                : {}),
+              ...(info.push.mutedBots
+                ? { mutedBots: info.push.mutedBots.map((id) => s(id)) }
+                : {}),
+            }
+          : undefined;
+        next[did] = push ? { ...info, push } : info;
+      }
+      out.phones = next;
     } else if (name === "asks" && Array.isArray(value)) {
       out.asks = (value as DeviceAsk[]).map((ask) => ({
         ...ask,
@@ -470,10 +489,12 @@ export function mergeUnifiedParts(
   let anyProactiveEnabled = false;
   const proactiveBots: ProactivePart["bots"] = {};
   let proactiveChatMode: ProactivePart["chatMode"];
+  const phones: NonNullable<Parts["phones"]> = {};
 
   for (const h of hosts) {
     if (!h.synced) continue;
     const p = h.parts;
+    if (p.phones) Object.assign(phones, p.phones);
     if (p.bots) bots.push(...p.bots);
     if (p.sections) sections.push(...p.sections);
     if (p.chatSections) chatSections.push(...p.chatSections);
@@ -535,6 +556,9 @@ export function mergeUnifiedParts(
   merged.spaces = mergedSpaces;
   merged.asks = asks;
   merged.live = live;
+  if (Object.keys(phones).length) {
+    merged.phones = phones;
+  }
   if (Object.keys(proactiveBots).length || anyProactiveEnabled) {
     merged.proactive = { enabled: anyProactiveEnabled, ...(proactiveChatMode && { chatMode: proactiveChatMode }), bots: proactiveBots };
   }

@@ -1,15 +1,17 @@
 import { MenuView } from "@react-native-menu/menu";
 import { type Href, router, Stack, useLocalSearchParams } from "expo-router";
-import { AudioLines, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, Sparkles, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
-import { useMemo } from "react";
+import { AudioLines, Bell, BellOff, BookmarkPlus, Brain, Copy, Download, Eye, EyeOff, Folder, FolderKanban, MessageCircle, Palette, Pin, Plus, Repeat, ScreenShare, ScrollText, Sparkles, SquarePen, Star, Trash2, Users, Wrench } from "lucide-react-native";
+import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
 import { openChat } from "@/features/chat/navigate";
 import { newBotChat, openBotChat } from "@/features/chat/open";
 import { describeChoice, useDefaultProvider } from "@/features/models/shared";
 import type { Bot } from "@/link/types";
 import { shareFrom } from "@/state/files";
-import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability, useChats, useMember, useModels, usePart, useRoutines, useSettings, useSkills, useCanArrange } from "@/state/hooks";
+import { isConversation, useBot, useBotActivity, useBots, useCan, useCapability, useChats, useMember, useModels, useOnline, usePart, useRoutines, useSettings, useSkills, useCanArrange } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
+import { setBotNotificationsMuted, usePush, usePushPrefs } from "@/state/push";
+import { isBotMuted } from "@/state/pushPrefs";
 import { useApp } from "@/state/store";
 import { ago, cadenceLabel } from "@/state/time";
 import { AvatarMotion, BotAvatar, brand, Button, EmptyState, Group, IconTile, Label, Loading, Page, ProviderIcon, Row, space, T, Tap, useTextPrompt, useTheme } from "@/ui";
@@ -75,6 +77,17 @@ function BotDetail({ bot }: { bot: Bot }) {
   const proactiveSupported = useCapability(PROACTIVE_CAPABILITY);
   const proactivePart = usePart("proactive");
   const me = myself(usePart("meta"));
+  const online = useOnline();
+  const push = usePush();
+  const pushPrefs = usePushPrefs();
+  const [pendingMuted, setPendingMuted] = useState<boolean | null>(null);
+  const pushActive = push.wanted && push.status === "on" && pushPrefs != null;
+  const muted = pendingMuted ?? isBotMuted(pushPrefs, bot.id);
+  const toggleNotifications = async (enabled: boolean) => {
+    setPendingMuted(!enabled);
+    await attempt(setBotNotificationsMuted(bot.id, !enabled));
+    setPendingMuted(null);
+  };
   // Where the bot's agent stands for the person looking, in a word and one line (the same words as on its own page).
   const standing = proactiveStanding(proactivePart, proactivePart?.bots?.[bot.id], me);
   const looksOutForMe = !!peopleOf(proactivePart?.bots?.[bot.id])[me];
@@ -166,7 +179,17 @@ function BotDetail({ bot }: { bot: Bot }) {
         {!member && <Row leading={<IconTile icon={FolderKanban} color={colors.info} />} title="Access" value={projects ? grantSummary(settings, bot, projects) : undefined} chevron onPress={() => router.push(("/bot/access?id=" + encodeURIComponent(bot.id)) as Href)} />}
       </Group>
 
-      {(canManage || canArrange || !member) && <Group>
+      {(canManage || canArrange || !member || pushActive) && <Group>
+        {pushActive && (
+          <Row
+            leading={<IconTile icon={muted ? BellOff : Bell} color={muted ? colors.muted : colors.ink2} />}
+            title="Notifications"
+            subtitle={muted ? "Replies, routines, and spaces muted" : "Approvals and @mentions always come through"}
+            toggled={!muted}
+            disabled={!online}
+            onToggle={(enabled) => void toggleNotifications(enabled)}
+          />
+        )}
         {!member && <Row leading={<IconTile icon={ScreenShare} color={brand.tide} />} title="Control computer" subtitle={"Watch " + bot.name + " work on your computer"} chevron onPress={() => router.push("/remote")} />}
         {canArrange && <Row leading={<IconTile icon={Pin} color={colors.ink2} />} title="Pinned" toggled={!!bot.pinned} onToggle={(pinned) => void attempt(api.setBotFlags(bot.id, { pinned }))} />}
         {canManage && !member && sections && (

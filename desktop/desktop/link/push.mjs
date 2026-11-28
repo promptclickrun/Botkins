@@ -43,7 +43,20 @@ export const PUSH_INFO = "botkins/push/v1";
 export const PUSH_AAD = "botkins-push-v1";
 /** `updates`: a newer Botkins for this computer is out ("app-update-v1"). A phone registered before it existed counts as wanting it. */
 // `spaces`: notes and changes in a person's spaces ("space-alerts-v1", space-alerts.mjs).
-export const DEFAULT_PREFS = { replies: true, requests: true, routines: true, previews: true, activities: true, updates: true, spaces: true };
+export const DEFAULT_PREFS = {
+  replies: true,
+  requests: true,
+  routines: true,
+  previews: true,
+  activities: true,
+  updates: true,
+  spaces: true,
+  bots: { mode: "all", ids: [] },
+  mutedBots: [],
+};
+const BOOL_PREFS = ["replies", "requests", "routines", "previews", "activities", "updates", "spaces"];
+const MAX_BOT_IDS = 200;
+const MAX_BOT_ID_LEN = 128;
 /** A version the computer may name in an update notice ("0.16.5", "1.0.0-beta.2"). */
 const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,40})?$/;
 /** The Swift type the phone's Live Activity is declared with. Apple matches a push to it by this name. */
@@ -86,10 +99,81 @@ export function cleanTarget(target) {
   return { token, env, ...(start && { start }), ...(cards && { cards }) };
 }
 
+function cleanBotIds(value) {
+  if (!Array.isArray(value)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (!id || id.length > MAX_BOT_ID_LEN || id.includes("\0") || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= MAX_BOT_IDS) break;
+  }
+  return out;
+}
+
+function cleanBotsFilter(value, fallback = DEFAULT_PREFS.bots) {
+  const baseMode = fallback?.mode === "only" ? "only" : "all";
+  const baseIds = cleanBotIds(fallback?.ids) ?? [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { mode: baseMode, ids: baseIds };
+  const mode = value.mode === "only" ? "only" : value.mode === "all" ? "all" : baseMode;
+  const ids = value.ids !== undefined ? (cleanBotIds(value.ids) ?? baseIds) : baseIds;
+  return { mode, ids };
+}
+
 export function cleanPrefs(prefs, base = DEFAULT_PREFS) {
-  const next = { ...base };
-  for (const name of Object.keys(DEFAULT_PREFS)) if (typeof prefs?.[name] === "boolean") next[name] = prefs[name];
+  const next = { ...DEFAULT_PREFS };
+  for (const name of BOOL_PREFS) {
+    if (typeof base?.[name] === "boolean") next[name] = base[name];
+    if (typeof prefs?.[name] === "boolean") next[name] = prefs[name];
+  }
+  const baseBots = cleanBotsFilter(base?.bots, DEFAULT_PREFS.bots);
+  const baseMuted = cleanBotIds(base?.mutedBots) ?? [];
+  next.bots = prefs?.bots !== undefined ? cleanBotsFilter(prefs.bots, baseBots) : baseBots;
+  next.mutedBots = prefs?.mutedBots !== undefined ? (cleanBotIds(prefs.mutedBots) ?? baseMuted) : baseMuted;
   return next;
+}
+
+/** Whether per-agent notification filters allow a notification from `botId`. */
+export function allowsBot(prefs, botId) {
+  if (!botId) return true;
+  const muted = Array.isArray(prefs?.mutedBots) ? prefs.mutedBots : [];
+  if (muted.includes(botId)) return false;
+  const filter = prefs?.bots;
+  if (filter?.mode === "only") {
+    const ids = Array.isArray(filter.ids) ? filter.ids : [];
+    return ids.includes(botId);
+  }
+  return true;
+}
+
+/**
+ * Whether `run` is a worker turn inside a delegated task chat whose task is created & reviewed by a
+ * bot ("one voice per job"). When true, the worker's own completion/failure stays quiet because the
+ * reviewing creator bot's reply speaks to the person instead. If the creator bot no longer exists,
+ * returns false so the person is still notified directly.
+ */
+export function isCreatorReviewedWorkerRun(run, chat, state) {
+  if (!run || !chat || !state) return false;
+  const tasks = Array.isArray(state.tasks) ? state.tasks : null;
+  if (!tasks?.length) return false;
+  const task =
+    (run.taskId ? tasks.find((t) => t?.id === run.taskId) : null) ??
+    tasks.find((t) => t?.chatId && t.chatId === chat.id);
+  if (!task) return false;
+  // Only suppress worker turns in the task's own chat (never the creator bot's review turn in its chat).
+  if (task.chatId && task.chatId !== chat.id) return false;
+  const creatorId = task.createdBy;
+  if (!creatorId || creatorId === "person") return false;
+  // Must have a real creator bot still present; otherwise notify the person directly.
+  const bots = Array.isArray(state.bots) ? state.bots : [];
+  if (!bots.some((b) => b?.id === creatorId)) return false;
+  // Creator-reviewed task: review === "creator" or active reviewerBotId === creatorId.
+  // (Tasks with review === "person" or "auto" do not have a creator review turn speaking for them.)
+  if (task.review === "person" || task.review === "auto") return false;
+  return task.review === "creator" || task.reviewerBotId === creatorId;
 }
 
 /** What a chat's Live Activity shows now. `previews` off keeps step names out of it. */
@@ -316,9 +400,9 @@ export class Push {
     const mentions = (Array.isArray(state.mentions) ? state.mentions : []).filter((mention) => mention && typeof mention.id === "string" && typeof mention.person === "string");
     const mentionedRuns = new Set(mentions.filter((mention) => typeof mention.runId === "string" && mention.runId).map((mention) => mention.runId + ":" + mention.person));
     const sends = [];
-    // The chats whose turn ended at this look, for the card for all Botkins: it makes its sound for
-    // these. A turn the person stopped themselves ends quietly.
-    const ended = new Set();
+    // The chats whose turn ended at this look (chatId → botId), for the card for all Botkins: it
+    // makes its sound for these. A turn the person stopped themselves or a quiet delegated worker ends quietly.
+    const ended = new Map();
 
     if (!first && targets.length) {
       const chats = new Map((state.chats ?? []).map((chat) => [chat.id, chat]));
@@ -333,7 +417,11 @@ export class Push {
         else if (!working && was !== false) {
           const chat = chats.get(run.chatId);
           this.onFinish(sends, targets, state, run, chats, bots, mentionedRuns);
-          if (run.status !== "Stopped" && run.notify !== false && (!chat?.channel || this.kindOf(run, chat, state) !== null)) ended.add(run.chatId);
+          const finishKind = this.kindOf(run, chat, state);
+          if (run.status !== "Stopped" && run.notify !== false && finishKind !== null) {
+            const reply = [...(chat?.messages ?? [])].reverse().find((message) => message.runId === run.id && message.role !== "user" && !message.interim);
+            ended.set(run.chatId, reply?.botId ?? chat?.botId ?? null);
+          }
         }
         // Turns still under way: their Live Activities follow along.
         else if (working) this.onProgress(sends, targets, state, run);
@@ -361,11 +449,13 @@ export class Push {
     return true;
   }
 
-  wants(device, kind) {
+  wants(device, kind, botId = null) {
     const record = this.store.push(device.id);
     if (!record) return false;
     // A choice a phone never made (one added since it registered) is the default.
-    return (record.prefs[kind] ?? DEFAULT_PREFS[kind]) === true;
+    if ((record.prefs[kind] ?? DEFAULT_PREFS[kind]) !== true) return false;
+    if (botId && (kind === "replies" || kind === "routines" || kind === "spaces") && !allowsBot(record.prefs, botId)) return false;
+    return true;
   }
   /**
    * Whether a chat's alerts go to a device: only to the chat's people ("team-people-v1"), the one
@@ -489,6 +579,9 @@ export class Push {
       // A routine the person made quiet says nothing, here or on the computer.
       return entry?.notify === false ? null : "routines";
     }
+    // One voice per delegated job: a worker turn in a task chat whose task is created & reviewed
+    // by a bot stays quiet; the reviewing creator bot's reply notifies the person instead.
+    if (isCreatorReviewedWorkerRun(run, chat, state)) return null;
     if (chat.channel && !this.channelNotifies(chat, state)) return null;
     return "replies";
   }
@@ -508,7 +601,8 @@ export class Push {
         : null;
     // Text written on the way ("turn-timeline-v1": `interim`) is not the reply.
     const reply = [...(chat?.messages ?? [])].reverse().find((message) => message.runId === run.id && message.role !== "user" && !message.interim);
-    const bot = bots.get(reply?.botId ?? chat?.botId);
+    const botId = reply?.botId ?? chat?.botId ?? null;
+    const bot = bots.get(botId);
     const name = bot?.name ?? "Botkins";
     const failed = run.status !== "Completed";
     const watching = this.attention?.();
@@ -545,13 +639,13 @@ export class Push {
       let openChatId;
       if (explicit) {
         if (resolved.silent || !resolved.deviceIds.has(device.id)) continue;
-        if (!this.wants(device, kind)) continue;
+        if (!this.wants(device, kind, botId)) continue;
         if (run.delivery?.chatId && this.maySeeChat(device, deliveryChat)) openChatId = run.delivery.chatId;
         else if (canSeeChat) openChatId = run.chatId;
         if (openChatId && this.present(device.id, openChatId)) continue;
       } else {
         if (!canSeeChat) continue;
-        if (!this.wants(device, kind) || this.present(device.id, run.delivery?.chatId ?? run.chatId)) continue;
+        if (!this.wants(device, kind, botId) || this.present(device.id, run.delivery?.chatId ?? run.chatId)) continue;
         // An alert opens the chat a result was delivered to: it goes only to someone who is in that chat.
         if (run.delivery?.chatId && run.delivery.chatId !== run.chatId && !this.maySeeChat(device, deliveryChat)) continue;
         // The person is reading this chat on the computer itself: a reply there needs no second ping.
@@ -788,7 +882,7 @@ export class Push {
    * turn ended at this look, and the card stays quiet only when none of them is on it (a card found
    * over), when finished replies are switched off, or when the app is in front on that phone.
    */
-  cards(sends, targets, state, ended = new Set()) {
+  cards(sends, targets, state, ended = new Map()) {
     const now = this.now();
     let next = null;
     const later = (at) => (next = next == null ? at : Math.min(next, at));
@@ -843,7 +937,10 @@ export class Push {
           if (last?.overAt == null) {
             // Every chat on it has just ended: the card for all Botkins says so with its alert, and
             // a finished turn's notification then comes without a second sound.
-            const rings = cardKey === ALL_CARD && card.state.chats.some((chat) => ended.has(chat.id)) && this.wants(device, "replies") && !this.present(device.id);
+            const rings =
+              cardKey === ALL_CARD &&
+              card.state.chats.some((chat) => ended.has(chat.id) && this.wants(device, "replies", ended instanceof Map ? ended.get(chat.id) : null)) &&
+              !this.present(device.id);
             const finished = cardKey === ALL_CARD ? card.state.chats.filter((chat) => chimes?.get(chat.id)?.kind === "finish") : [];
             for (const chat of finished) {
               const { alert } = chimes.get(chat.id);

@@ -1493,6 +1493,7 @@ export type ProviderUsage = {
   /** One plain sentence when the last read failed; the limits are then the last known ones. */
   error?: string;
 };
+export type BotNotificationFilter = { mode: "all" | "only"; ids: string[] };
 export type NotificationSettings = {
   replies: boolean;
   routines: boolean;
@@ -1500,6 +1501,8 @@ export type NotificationSettings = {
   /** One plain reminder when something is left waiting on a person, with no model (desktop/reminders.mjs). Missing on an older computer. */
   reminders?: boolean;
   quietHours: { enabled: boolean; from: string; to: string };
+  bots?: BotNotificationFilter;
+  mutedBots?: string[];
 };
 
 declare global {
@@ -2926,7 +2929,7 @@ export type PhoneLink = {
    */
   relay: { enabled: boolean; connected: boolean; problem?: "taken" };
   /** The phones that get notifications, and what each wants to hear of. Never where they are sent. */
-  push?: { deviceId: string; name: string; prefs: { replies?: boolean; requests?: boolean; routines?: boolean; previews?: boolean; activities?: boolean } }[];
+  push?: { deviceId: string; name: string; prefs: { replies?: boolean; requests?: boolean; routines?: boolean; previews?: boolean; activities?: boolean; updates?: boolean; spaces?: boolean; bots?: BotNotificationFilter; mutedBots?: string[] } }[];
   /** What each phone lets bots use on it, by phone id and source: "read", or "interact" for read and change. */
   sources?: Record<string, Record<string, "off" | "read" | "interact">>;
   /**
