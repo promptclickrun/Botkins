@@ -839,6 +839,7 @@ const SETTINGS_HOST_METHODS = new Set([
   "githubAgentInstallUrl",
   "githubAgentRefresh",
   "githubAgentSetRepo",
+  "githubAgentSetSettings",
   "githubAgentUnbind",
   "claudeArtifacts.status",
   "claudeArtifacts.setModel",

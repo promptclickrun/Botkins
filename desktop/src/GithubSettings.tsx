@@ -95,6 +95,19 @@ export default function GithubSettings({ state }: { state: State }) {
     }
   };
 
+  const handleRelayTokenFallback = async (relayUserTokenFallback: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.githubAgentSetSettings({ relayUserTokenFallback });
+      setStatus(next);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const hasInstallations = (status?.installations?.length ?? 0) > 0;
   const appSlug = status?.appSlug || "botkins-agent";
 
@@ -294,6 +307,19 @@ export default function GithubSettings({ state }: { state: State }) {
             );
           })
         )}
+      </Group>
+
+      <Group
+        title="Fallback without App binding"
+        footer="Off by default. Bound rooms never send a personal token—the relay verifies access from your Botkins Agent binding, and public repositories need no token. Turn this on only if you use an unbound self-hosted relay for private repositories."
+      >
+        <SwitchRow
+          label="Send local gh token to relay when unbound"
+          help="When no live Botkins Agent binding exists, your local GitHub CLI token is sent to the relay to check private repository access."
+          checked={Boolean(status?.relayUserTokenFallback)}
+          disabled={busy}
+          onChange={(checked) => void handleRelayTokenFallback(checked)}
+        />
       </Group>
     </div>
   );

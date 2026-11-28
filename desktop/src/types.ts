@@ -599,6 +599,7 @@ export interface GithubAgentStatus {
   relayConnected: boolean;
   eventsOn: boolean;
   hasExpiredBindings?: boolean;
+  relayUserTokenFallback?: boolean;
   installations: GithubAgentInstallation[];
   repos: GithubAgentRepoConfig[];
   lastDelivery: {
@@ -1733,6 +1734,7 @@ declare global {
         repo: string,
         patch: { answerMentions?: boolean; defaultBotId?: string | null; allowlist?: string[] | string },
       ): Promise<GithubAgentStatus>;
+      githubAgentSetSettings(patch: { relayUserTokenFallback?: boolean }): Promise<GithubAgentStatus>;
       githubAgentUnbind(installationId: number): Promise<GithubAgentStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;

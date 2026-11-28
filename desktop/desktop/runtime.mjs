@@ -866,6 +866,7 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     githubAgentInstallUrl: () => workspace.githubAgent.installUrl(),
     githubAgentRefresh: () => workspace.githubAgent.refresh(),
     githubAgentSetRepo: (repo, patch) => workspace.githubAgent.setRepoConfig(repo, patch ?? {}),
+    githubAgentSetSettings: (patch) => workspace.githubAgent.setSettings(patch ?? {}),
     githubAgentUnbind: (installationId) => workspace.githubAgent.unbind(installationId),
     workflowExportText: (id) => JSON.stringify(workspace.workflows.exportJson(id, host.version), null, 2),
     workflowImportText: (raw, agentMap) => workspace.workflows.importJson(raw, agentMap ?? {}),
@@ -1609,6 +1610,12 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     const merged = [...new Set([...wfRepos, ...mentionRepos])].sort().slice(0, 100);
     link.setGithubRepos(merged);
   };
+  link.setGithubAuthProofProvider(async () => {
+    const token = await workspace.workflows.githubAuth?.getAuthToken?.();
+    return token ? { githubToken: token } : null;
+  });
+  link.setGithubInstallations(workspace.githubAgent.status().installations);
+  link.setGithubAllowUserTokenProof(workspace.githubAgent.relayUserTokenFallback());
   workspace.workflows.setGithubInstallationTokenProvider((repo) => link.getGithubInstallationToken(repo));
   workspace.githubAgent.setBridge({
     getInstallationToken: (repo, permissions) => link.getGithubInstallationToken(repo, permissions),
@@ -1618,12 +1625,19 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unbindInstallation: (installationId) => link.unbindGithubInstallation(installationId),
     isRelayConnected: () => Boolean(link.relayLink?.connected),
     onReposChanged: () => syncGithubSubscriptions(),
+    onRelayUserTokenFallbackChanged: (allow) => link.setGithubAllowUserTokenProof(allow),
   });
   link.on("relay", ({ connected }) => {
     workspace.workflows.onRelayStateChanged(connected);
     if (connected) {
-      syncGithubSubscriptions();
-      void workspace.githubAgent.refresh().catch(() => {});
+      // Fetch bound installations first so RelayHost knows whether a live Botkins Agent binding
+      // exists before deciding whether to attach an opt-in unbound user token on github-subscribe.
+      void workspace.githubAgent
+        .refresh()
+        .catch(() => {})
+        .finally(() => {
+          syncGithubSubscriptions();
+        });
     }
     push();
   });

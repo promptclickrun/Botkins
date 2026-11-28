@@ -819,24 +819,36 @@ export class LinkHost extends EventEmitter {
       onGithubDelivery: (frame) => this.emit("githubDelivery", frame),
       onGithubInstallations: (info) => this.emit("githubInstallations", info),
       getGithubAuthProof: this._githubAuthProofProvider ?? null,
+      githubAllowUserTokenProof: this._githubAllowUserTokenProof === true,
       log: (line) => this.log(line),
       WebSocket: this.relayOptions.WebSocket,
       timers: this.relayOptions.timers,
     });
     next.url = wanted.url;
+    if (this._githubInstallations?.length) next.setGithubInstallations(this._githubInstallations);
     if (this._githubRepos?.length) next.setGithubRepos(this._githubRepos);
     this.relayLink = next;
     next.start();
+  }
+  /** Seeds known bound GitHub App installations so RelayHost knows before its first relay sync. */
+  setGithubInstallations(installations) {
+    this._githubInstallations = Array.isArray(installations) ? [...installations] : [];
+    this.relayLink?.setGithubInstallations?.(this._githubInstallations);
   }
   /** Updates the GitHub `owner/repo` subscriptions registered on the active relay connection. */
   setGithubRepos(repos) {
     this._githubRepos = Array.isArray(repos) ? [...repos] : [];
     this.relayLink?.setGithubRepos(this._githubRepos);
   }
-  /** Registers an async callback returning ephemeral GitHub read-access proof tokens for legacy self-hosted relays. */
+  /** Registers an async callback returning ephemeral GitHub read-access proof tokens for unbound opt-in fallback. */
   setGithubAuthProofProvider(fn) {
     this._githubAuthProofProvider = typeof fn === "function" ? fn : null;
     this.relayLink?.setGithubAuthProofProvider(this._githubAuthProofProvider);
+  }
+  /** Controls whether an unbound room may send a personal `gh`/user token proof on `github-subscribe`. Off by default. */
+  setGithubAllowUserTokenProof(allow) {
+    this._githubAllowUserTokenProof = allow === true;
+    this.relayLink?.setGithubAllowUserTokenProof(this._githubAllowUserTokenProof);
   }
   /** Creates a signed 10-minute GitHub App install URL bound to this host's room key. */
   createGithubInstallUrl(appSlug) {

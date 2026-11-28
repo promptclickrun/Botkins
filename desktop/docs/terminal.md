@@ -462,10 +462,12 @@ botkins github status
 botkins github install
 botkins github refresh
 botkins github repo <owner/repo> --mentions on --bot Glory [--allowlist alice,bob]
+botkins github relay-token <on|off>
 botkins github unbind <installation-id>
 ```
 
 - `botkins github install` prints a signed 10-minute GitHub App install URL bound to this host's room key. After you install on GitHub, the relay verifies your installation via one-time OAuth, discards the user token immediately, and binds `installation_id` to this host's room.
+- `botkins github relay-token <on|off>` controls the unbound-room fallback (off by default). Bound rooms never send a personal `gh` token; when no live Botkins Agent binding exists and this option is turned on, your local `gh` token is sent to the relay to check private repository access. Public repositories need no token.
 - Turn on `--mentions on` for a repository to answer `@botkins-agent <bot name> ...` (or `@botkins-agent ...` using `--bot`) directly, with no workflow required. By default only the installer and repository collaborators with write permission (plus any `--allowlist` logins) can summon a bot; everyone else is ignored silently and logged in the delivery ledger. Replies acknowledge with 👀 and post as **Botkins Agent** starting with `**<BotName>** · Botkins`.
 
 ### Projects, to-dos, tasks and artifacts

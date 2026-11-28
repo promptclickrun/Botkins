@@ -319,6 +319,7 @@ for (const name of [
   "githubAgentInstallUrl",
   "githubAgentRefresh",
   "githubAgentSetRepo",
+  "githubAgentSetSettings",
   "githubAgentUnbind",
   "workflowExport",
   "workflowImport",

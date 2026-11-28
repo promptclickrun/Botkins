@@ -4436,6 +4436,7 @@ export class MockBackend {
         mentionHandle: "@botkins-agent",
         relayConnected: true,
         eventsOn: true,
+        relayUserTokenFallback: false,
         installations: [
           {
             installationId: 5896932,
@@ -4490,6 +4491,13 @@ export class MockBackend {
           : String(patch.allowlist || "").split(/[\s,]+/).map((u) => u.trim().replace(/^@+/, "").toLowerCase()).filter(Boolean);
       }
       this._githubAgent.eventsOn = this._githubAgent.repos.some((r) => r.answerMentions);
+      return structuredClone(this._githubAgent);
+    },
+    githubAgentSetSettings(patch = {}) {
+      this.githubAgentStatus();
+      if (patch && typeof patch === "object" && patch.relayUserTokenFallback !== undefined) {
+        this._githubAgent.relayUserTokenFallback = patch.relayUserTokenFallback === true;
+      }
       return structuredClone(this._githubAgent);
     },
     githubAgentUnbind(installationId) {

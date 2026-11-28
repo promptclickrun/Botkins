@@ -45,6 +45,7 @@ export function ensureGithubAgentState(state) {
   if (!Array.isArray(ga.installations)) ga.installations = [];
   if (!ga.repos || typeof ga.repos !== "object" || Array.isArray(ga.repos)) ga.repos = {};
   if (!ga.lastDelivery || typeof ga.lastDelivery !== "object") ga.lastDelivery = null;
+  if (typeof ga.relayUserTokenFallback !== "boolean") ga.relayUserTokenFallback = false;
   return ga;
 }
 
@@ -245,6 +246,8 @@ export class GithubAgentManager {
       typeof options.isRelayConnected === "function" ? options.isRelayConnected : () => false;
     this.onReposChanged =
       typeof options.onReposChanged === "function" ? options.onReposChanged : null;
+    this.onRelayUserTokenFallbackChanged =
+      typeof options.onRelayUserTokenFallbackChanged === "function" ? options.onRelayUserTokenFallbackChanged : null;
     this.runTurnOverride = typeof options.runTurn === "function" ? options.runTurn : null;
 
     this.waitingMentionTurns = new Map(); // turnRunId -> { resolve, reject }
@@ -262,6 +265,7 @@ export class GithubAgentManager {
     unbindInstallation,
     isRelayConnected,
     onReposChanged,
+    onRelayUserTokenFallbackChanged,
   } = {}) {
     if (typeof getInstallationToken === "function") this.getInstallationToken = getInstallationToken;
     if (typeof claimDelivery === "function") this.claimDelivery = claimDelivery;
@@ -270,6 +274,7 @@ export class GithubAgentManager {
     if (typeof unbindInstallation === "function") this.unbindInstallationFn = unbindInstallation;
     if (typeof isRelayConnected === "function") this.isRelayConnected = isRelayConnected;
     if (typeof onReposChanged === "function") this.onReposChanged = onReposChanged;
+    if (typeof onRelayUserTokenFallbackChanged === "function") this.onRelayUserTokenFallbackChanged = onRelayUserTokenFallbackChanged;
   }
 
   bindTurnEvents() {
@@ -410,11 +415,30 @@ export class GithubAgentManager {
       relayConnected: Boolean(this.isRelayConnected()),
       eventsOn,
       hasExpiredBindings,
+      relayUserTokenFallback: ga.relayUserTokenFallback === true,
       installations,
       repos,
       lastDelivery: ga.lastDelivery ? { ...ga.lastDelivery } : null,
       manageAppUrl: `https://github.com/apps/${slug}`,
     };
+  }
+
+  /** Returns whether this host opted in to sending a personal `gh`/user token proof when unbound. */
+  relayUserTokenFallback() {
+    return this.state.relayUserTokenFallback === true;
+  }
+
+  /** Updates owner-only GitHub Agent host settings (currently `relayUserTokenFallback`). */
+  setSettings(patch = {}) {
+    const ga = this.state;
+    if (patch && typeof patch === "object" && !Array.isArray(patch)) {
+      if (patch.relayUserTokenFallback !== undefined) {
+        ga.relayUserTokenFallback = patch.relayUserTokenFallback === true;
+      }
+    }
+    this.ws.save();
+    this.onRelayUserTokenFallbackChanged?.(ga.relayUserTokenFallback === true);
+    return this.status();
   }
 
   /** Creates a signed 10-minute GitHub App install URL bound to this host's room key. */

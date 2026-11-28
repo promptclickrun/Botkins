@@ -424,6 +424,9 @@ export function routinesApi({ workspace, handlers, bot, selection }) {
     async "github.setRepo"([repo, patch]) {
       return await handlers.githubAgentSetRepo(repo, patch ?? {});
     },
+    async "github.setSettings"([patch]) {
+      return await handlers.githubAgentSetSettings(patch ?? {});
+    },
     async "github.unbind"([installationId]) {
       return await handlers.githubAgentUnbind(installationId);
     },

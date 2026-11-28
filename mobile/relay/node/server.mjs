@@ -1057,25 +1057,27 @@ export function createRelay({
         return;
       }
 
+      // Always prefer the room's active Botkins Agent installation binding (`room_installation_repos`).
       let allowedRepos = [];
       let deniedRepos = [];
-      if (legacyUserTokenMode) {
+      for (const repo of checked.repos) {
+        if (githubBindings.resolveForRepo(this.name, repo) !== null) allowedRepos.push(repo);
+        else deniedRepos.push(repo);
+      }
+      // Fallback for unbound repos only when legacy user-token mode is explicitly enabled on this relay.
+      // Public repos stay allowed with no token; private repos require a valid proof token (never logged/stored).
+      if (deniedRepos.length > 0 && legacyUserTokenMode) {
         const cachedAllowed = activeRoomGithubSubs(this.name, checked.expiresAt);
-        const res = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
+        const res = await authorizeSubscribedRepos(deniedRepos, checked.proofs, {
           cachedAllowed,
           fetch,
           apiBase,
         });
-        allowedRepos = res.allowed;
+        allowedRepos = [...allowedRepos, ...res.allowed];
         deniedRepos = res.denied;
-      } else {
-        for (const repo of checked.repos) {
-          if (githubBindings.resolveForRepo(this.name, repo) !== null) allowedRepos.push(repo);
-          else deniedRepos.push(repo);
-        }
-        allowedRepos.sort();
-        deniedRepos.sort();
       }
+      allowedRepos.sort();
+      deniedRepos.sort();
       setRoomGithubSubs(this.name, allowedRepos, checked.expiresAt);
       send(
         ws,

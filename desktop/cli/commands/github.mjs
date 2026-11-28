@@ -17,6 +17,7 @@ export const githubCommands = {
               `App: @${s.appSlug} (${s.manageAppUrl})`,
               `Relay: ${s.relayConnected ? "connected" : "disconnected"}`,
               `Events: ${s.eventsOn ? "on" : "off"}`,
+              `Unbound relay token fallback: ${s.relayUserTokenFallback ? "on (sends local gh token to relay when unbound)" : "off"}`,
               `Last delivery: ${s.lastDelivery ? `${s.lastDelivery.event} on ${s.lastDelivery.repository} (${s.lastDelivery.receivedAt})` : "none"}`,
               "",
             ];
@@ -111,6 +112,23 @@ export const githubCommands = {
           }
           const updated = await context.client.call("github.setRepo", [repo, patch]);
           context.print(updated, () => `Updated GitHub settings for ${repo.toLowerCase()}.`);
+        },
+      },
+      "relay-token": {
+        summary: "Opt in or out of sending your local gh CLI token to the relay to check private repo access when no App binding exists",
+        usage: "botkins github relay-token <on|off>",
+        async run(context) {
+          const raw = String(context.positionals[0] ?? "").trim().toLowerCase();
+          if (raw !== "on" && raw !== "off") {
+            throw usage("Pass `on` or `off`. Off by default. When on and no Botkins Agent binding exists, your local gh token is sent to the relay to check private repo access.");
+          }
+          const allow = raw === "on";
+          const updated = await context.client.call("github.setSettings", [{ relayUserTokenFallback: allow }]);
+          context.print(updated, () =>
+            allow
+              ? "Unbound relay token fallback is on. When this host has no Botkins Agent binding, your local gh token is sent to the relay to check private repo access."
+              : "Unbound relay token fallback is off. Your local gh token will not be sent to the relay.",
+          );
         },
       },
       unbind: {

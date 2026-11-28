@@ -85,7 +85,7 @@ export const WORKFLOW_METHODS = [
   "workflowRotateWebhookSecret", "workflowExportText", "workflowImportText",
   "workflowGithubStatus", "workflowGithubSignInStart", "workflowGithubSignInCancel",
   "workflowGithubCatalog", "workflowGithubDeliveries", "workflowGithubReplayLast",
-  "githubAgentStatus", "githubAgentInstallUrl", "githubAgentRefresh", "githubAgentSetRepo", "githubAgentUnbind",
+  "githubAgentStatus", "githubAgentInstallUrl", "githubAgentRefresh", "githubAgentSetRepo", "githubAgentSetSettings", "githubAgentUnbind",
 ];
 /** External messaging Channel Hooks ("channels-v1", desktop/channels/index.mjs). Strictly owner-only. */
 export const CHANNEL_METHODS = [
@@ -628,6 +628,13 @@ export function remoteArgs(method, args, { deviceId, uploads } = {}) {
     const id = Number(args[0]);
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error("Choose a GitHub installation to disconnect.");
     return [id];
+  }
+  if (method === "githubAgentSetSettings") {
+    const rawPatch = args[0];
+    const patch = rawPatch && typeof rawPatch === "object" && !Array.isArray(rawPatch) ? rawPatch : {};
+    const out = {};
+    if (patch.relayUserTokenFallback !== undefined) out.relayUserTokenFallback = patch.relayUserTokenFallback === true;
+    return [out];
   }
   if (method === "githubAgentSetRepo") {
     const [repo, rawPatch] = args;

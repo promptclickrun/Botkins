@@ -1712,53 +1712,50 @@ export class Room extends DurableObject<Env> {
       return;
     }
 
-    let allowed: string[] = [];
-    let denied: string[] = [];
+    // Always prefer the room's active Botkins Agent installation binding (`room_installation_repos`).
+    const boundRes = await router.fetch(
+      new Request("https://github-router.internal/filter-bound-repos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ room, repos: checked.repos }),
+      }),
+    );
+    if (!boundRes.ok) {
+      sendText(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: "router_error" }));
+      return;
+    }
+    const boundData = (await boundRes.json()) as { allowed?: string[]; denied?: string[] };
+    let allowed: string[] = Array.isArray(boundData.allowed) ? boundData.allowed : [];
+    let denied: string[] = Array.isArray(boundData.denied) ? boundData.denied : [];
 
-    if (allowsLegacyUserTokenAuth(this.env)) {
+    // Fallback for unbound repos only when legacy user-token mode is explicitly enabled on this relay.
+    // Public repos stay allowed with no token; private repos require a valid proof token (never logged/stored).
+    if (denied.length > 0 && allowsLegacyUserTokenAuth(this.env)) {
       const cachedAllowed = new Set<string>();
-      if (checked.repos.length > 0) {
-        try {
-          const activeRes = await router.fetch(
-            new Request("https://github-router.internal/active", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ room }),
-            }),
-          );
-          if (activeRes.ok) {
-            const data = (await activeRes.json()) as { repos?: Array<{ repo: string; until: number }> };
-            const now = Date.now();
-            for (const entry of data.repos ?? []) {
-              if (entry.until > now && entry.until >= checked.expiresAt) {
-                cachedAllowed.add(entry.repo);
-              }
+      try {
+        const activeRes = await router.fetch(
+          new Request("https://github-router.internal/active", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ room }),
+          }),
+        );
+        if (activeRes.ok) {
+          const data = (await activeRes.json()) as { repos?: Array<{ repo: string; until: number }> };
+          const now = Date.now();
+          for (const entry of data.repos ?? []) {
+            if (entry.until > now && entry.until >= checked.expiresAt) {
+              cachedAllowed.add(entry.repo);
             }
           }
-        } catch {}
-      }
-      const legacyResult = await authorizeSubscribedRepos(checked.repos, checked.proofs, {
+        }
+      } catch {}
+      const legacyResult = await authorizeSubscribedRepos(denied, checked.proofs, {
         cachedAllowed,
         apiBase: this.env.GITHUB_API_BASE || undefined,
       });
-      allowed = legacyResult.allowed;
+      allowed = [...allowed, ...legacyResult.allowed].sort();
       denied = legacyResult.denied;
-    } else {
-      // Deny by default: only repos belonging to an active GitHub App installation bound to this room.
-      const boundRes = await router.fetch(
-        new Request("https://github-router.internal/filter-bound-repos", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ room, repos: checked.repos }),
-        }),
-      );
-      if (!boundRes.ok) {
-        sendText(ws, JSON.stringify({ type: "github-subscribed", ok: false, error: "router_error" }));
-        return;
-      }
-      const data = (await boundRes.json()) as { allowed?: string[]; denied?: string[] };
-      allowed = Array.isArray(data.allowed) ? data.allowed : [];
-      denied = Array.isArray(data.denied) ? data.denied : [];
     }
 
     const res = await router.fetch(

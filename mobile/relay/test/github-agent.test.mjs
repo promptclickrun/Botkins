@@ -12,6 +12,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { RelayHost, newRelayKey } from "../../link-host/relay.mjs";
 import { createRelay } from "../node/server.mjs";
 import { HOST_PROTOCOL_V3, hostChallengeV3, roomOf } from "../src/pure.ts";
 import {
@@ -855,6 +856,106 @@ function runRelayProductSuite(name, getTarget) {
         assert.equal((await connAdminSel.nextMessage()).ok, true);
       } finally {
         await Promise.all([connAdminSel.close(), connReaderSel.close(), connAdminAll.close(), connReaderAll.close()]);
+      }
+    });
+
+    it("bound RelayHost subscribes with no user token, gets its bound repos, and receives frames even when unbound fallback opt-in is on", async () => {
+      const { base, getLogs } = getTarget();
+      const waitFor = async (fn, timeoutMs = 5000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          if (fn()) return;
+          await sleep(25);
+        }
+        throw new Error("Timed out waiting for condition");
+      };
+
+      const sentSubFrames = [];
+      const acks = [];
+      const deliveries = [];
+      let proofCalls = 0;
+
+      class RecordingWebSocket extends WebSocket {
+        constructor(url, protocols) {
+          super(url, protocols);
+          this.on("message", (data, isBinary) => {
+            if (isBinary) return;
+            const text = data.toString();
+            if (text.startsWith("{")) {
+              try {
+                const parsed = JSON.parse(text);
+                if (parsed.type === "github-subscribed") acks.push(parsed);
+              } catch {}
+            }
+          });
+        }
+        send(data, ...rest) {
+          if (typeof data === "string" && data.startsWith("{")) {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.type === "github-subscribe") sentSubFrames.push(parsed);
+            } catch {}
+          }
+          return super.send(data, ...rest);
+        }
+      }
+
+      const host = new RelayHost({
+        url: base,
+        key: newRelayKey(),
+        serve: async () => ({ status: 200, body: Buffer.from("") }),
+        onGithubDelivery: (frame) => deliveries.push(frame),
+        getGithubAuthProof: async () => {
+          proofCalls++;
+          return { githubToken: "gho_must_never_be_sent_when_bound" };
+        },
+        githubAllowUserTokenProof: true,
+        WebSocket: RecordingWebSocket,
+      });
+
+      host.start();
+      try {
+        await waitFor(() => host.connected);
+
+        // Bind installation 1001 to this RelayHost's room
+        const { url: installUrl } = host.createGithubInstallUrl("botkins-agent");
+        const stateParam = new URL(installUrl).searchParams.get("state");
+        const bindRes = await fetch(
+          `${base}${GITHUB_SETUP_PATH}?installation_id=1001&code=code_alice_inst1&state=${encodeURIComponent(stateParam)}`,
+        );
+        assert.equal(bindRes.status, 200);
+        await waitFor(() => host.hasLiveGithubBinding());
+
+        // Subscribe via RelayHost: must send NO githubToken even though githubAllowUserTokenProof is true
+        host.setGithubRepos(["acme/app", "beta/secret"]);
+        await waitFor(() => acks.length >= 1);
+
+        assert.equal(proofCalls, 0, "bound host must never invoke user-token proof provider");
+        assert.equal(sentSubFrames.length, 1);
+        assert.equal(sentSubFrames[0].githubToken, undefined, "bound host must send no githubToken on github-subscribe");
+        assert.deepEqual(acks[0].allowed, ["acme/app"]);
+        assert.deepEqual(acks[0].denied, ["beta/secret"]);
+
+        // Webhook for acme/app arrives at the bound RelayHost
+        const deliveryId = `del-bound-host-${randomBytes(4).toString("hex")}`;
+        const body = issuePayload("acme/app", 1001, 77);
+        const res = await fetch(`${base}${GITHUB_EVENTS_PATH}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-github-event": "issue_comment",
+            "x-github-delivery": deliveryId,
+            "x-hub-signature-256": hmacHeader(WEBHOOK_SECRET, body),
+          },
+          body,
+        });
+        assert.equal(res.status, 202);
+        await waitFor(() => deliveries.some((d) => d.deliveryId === deliveryId));
+        const frame = deliveries.find((d) => d.deliveryId === deliveryId);
+        assert.equal(frame.repository, "acme/app");
+        assert.ok(!getLogs().includes("gho_must_never_be_sent_when_bound"));
+      } finally {
+        host.stop();
       }
     });
   });

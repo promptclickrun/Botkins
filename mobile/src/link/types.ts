@@ -1865,6 +1865,7 @@ export type GithubAgentStatus = {
   relayConnected: boolean;
   eventsOn: boolean;
   hasExpiredBindings?: boolean;
+  relayUserTokenFallback?: boolean;
   installations: GithubAgentInstallation[];
   repos: GithubAgentRepoConfig[];
   lastDelivery: {
@@ -2584,6 +2585,7 @@ export type Calls = {
     repo: string,
     patch: { answerMentions?: boolean; defaultBotId?: string | null; allowlist?: string[] | string },
   ): GithubAgentStatus;
+  githubAgentSetSettings(patch: { relayUserTokenFallback?: boolean }): GithubAgentStatus;
   githubAgentUnbind(installationId: number): GithubAgentStatus;
   channelsList(): ChannelConnection[];
   channelAdd(input: ChannelInput): ChannelConnection;
