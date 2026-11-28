@@ -3,13 +3,12 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { MessagesSquare, Plus } from "lucide-react-native";
 import { useMemo, useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
+import { Alert, View } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { openChat } from "@/features/chat/navigate";
-import { canUseProject } from "@/features/bots/projectAccess";
-import type { Bot, ChatMode, ChatSummary, Project } from "@/link/types";
-import { useBots, useCan, useCapability, useChats, usePart } from "@/state/hooks";
+import type { Bot, ChatSummary, Project } from "@/link/types";
+import { useBots, useChats, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
 import { usePrefs } from "@/state/prefs";
 import { useApp } from "@/state/store";
@@ -18,7 +17,6 @@ import {
   Badge,
   BotAvatar,
   Button,
-  Chip,
   EmptyState,
   Field,
   Group,
@@ -29,12 +27,10 @@ import {
   Page,
   radius,
   Row,
-  Segmented,
   space,
   T,
 } from "@/ui";
-import { FolderChoice } from "./ProjectFolders";
-import { chatActiveStatus, groupProjectChats, MODES, PAGE_SIZE, projectChats } from "./logic";
+import { chatActiveStatus, groupProjectChats, PAGE_SIZE, projectChats } from "./logic";
 
 function SwipeableProjectChatRow({
   chat,
@@ -127,17 +123,10 @@ export function ProjectChatsContent({ project }: { project: Project }) {
   const live = usePart("live");
   const allBots = useBots();
   const bots = useMemo(() => new Map(allBots.map((bot) => [bot.id, bot])), [allBots]);
-  const settings = usePart("settings");
-  const canChat = useCan("agents", "chat");
   const hasBackdrop = usePrefs((prefs) => prefs.backdrop !== "clean");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [revealedId, setRevealedId] = useState<string | null>(null);
-  const [starting, setStarting] = useState<string | null>(null);
-  const [localMode, setMode] = useState<ChatMode>("default");
-  const savedMode = useCapability("project-mode-v1");
-  const mode = savedMode ? (project.mode ?? "default") : localMode;
-  const [folder, setFolder] = useState<string>();
 
   const mine = useMemo(() => projectChats(chats, project.id), [chats, project.id]);
   const grouped = useMemo(
@@ -150,29 +139,7 @@ export function ProjectChatsContent({ project }: { project: Project }) {
     [mine, live, query, bots, limit],
   );
 
-  const visibleBots = useMemo(
-    () => allBots.filter((bot) => !bot.hidden || canUseProject(settings, bot, project)),
-    [allBots, settings, project],
-  );
-  const shownBots = visibleBots.filter((bot) => canUseProject(settings, bot, project));
-  const blockedBots = visibleBots.filter((bot) => !canUseProject(settings, bot, project));
-
   const openAdd = () => router.push({ pathname: "/projects/add-chats", params: { id: project.id } });
-
-  const startWith = async (botId: string) => {
-    if (starting) return;
-    setStarting(botId);
-    const id = await attempt(
-      api.startProjectChat(
-        [botId],
-        project.id,
-        project.folder ? mode : "default",
-        project.folders?.includes(folder ?? "") ? folder : undefined,
-      ),
-    );
-    setStarting(null);
-    if (id) openChat(id);
-  };
 
   const confirmRemoveChat = (chat: ChatSummary) => {
     const label = chat.title || bots.get(chat.botId)?.name || "this chat";
@@ -274,49 +241,6 @@ export function ProjectChatsContent({ project }: { project: Project }) {
         </View>
       )}
 
-      {canChat && shownBots.length > 0 && (
-        <View style={{ gap: space.md }}>
-          {!!project.folder && (
-            <View style={{ gap: space.sm }}>
-              <FolderChoice project={project} value={folder} change={setFolder} />
-              <Segmented
-                options={MODES}
-                value={mode}
-                onChange={(next) =>
-                  savedMode ? void attempt(api.updateProject(project.id, { mode: next })) : setMode(next)
-                }
-              />
-              <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
-                {MODES.find((item) => item.value === mode)!.hint}
-              </T>
-            </View>
-          )}
-          <View style={{ gap: space.sm }}>
-            <Label>New chat with</Label>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ marginHorizontal: -space.xl }}
-              contentContainerStyle={{ paddingHorizontal: space.xl, gap: space.sm }}
-            >
-              {shownBots.map((bot) => (
-                <Chip
-                  key={bot.id}
-                  label={bot.name}
-                  selected={starting === bot.id}
-                  onPress={() => void startWith(bot.id)}
-                  leading={<BotAvatar bot={bot} size={24} badge={false} style={{ marginLeft: -8 }} />}
-                />
-              ))}
-            </ScrollView>
-          </View>
-          {blockedBots.length > 0 && (
-            <T variant="footnote" color="muted" style={{ paddingHorizontal: space.xs }}>
-              {"No access to this project: " + blockedBots.map((bot) => bot.name).join(", ")}
-            </T>
-          )}
-        </View>
-      )}
     </Page>
   );
 }

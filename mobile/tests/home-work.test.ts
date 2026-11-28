@@ -106,8 +106,9 @@ test("one hundred unrelated store changes leave the tab badges' chat and task co
   const tabs = Object.assign((props) => el("Tabs", props), { Trigger: Object.assign((props) => el("Trigger", props),
     { Badge: "Badge", Label: "Label", Icon: "Icon" }) });
   const { default: Layout } = phoneModule("../src/app/(tabs)/_layout", {
+    "expo-router": { router: { navigate() {} }, useSegments: () => ["(tabs)"] },
     "expo-router/native-tabs": { NativeTabs: tabs }, "@/state/hooks": hooks, "@/ui": ui,
-    "@/state/prefs": { usePrefs: (select) => select({ tabOrder: ["chats", "work"], backdrop: "clean" }) },
+    "@/state/prefs": { usePrefs: (select) => select({ bar: ["chats", "work"], homeBot: null, backdrop: "clean" }) },
     "@/features/spaces/data": { useSpacesOn: () => true },
     "@/state/sessionActivity": { ...activity, needsYou: (parts) => { taskCounts++; return activity.needsYou(parts); } },
     "@/features/chat/unread": { isChatsPageUnread: (chat) => { chatChecks++; return !chat.archived && chat.unread; } },

@@ -26,16 +26,16 @@ import {
 import { BotAvatar } from "./Avatar";
 import { Block } from "./Today";
 import { ChatRow, dateLabel, shortTime, useAsk, type PageActions } from "./Pages";
-import ProjectChanges, { modeLabels } from "./ProjectChanges";
+import ProjectChanges from "./ProjectChanges";
 import { accessVia, canUseProject, globalAccess, grantOf } from "./access";
-import type { Artifact, Bot, ChatMode, Project, ProjectColor, ProjectTodo, State } from "./types";
+import type { Artifact, Bot, Project, ProjectColor, ProjectTodo, State } from "./types";
 import "./records.css";
 import "./workspaces.css";
 import "./projects.css";
 
 import { WorkBar, WorkNeeds, type WorkNav } from "./WorkBar";
 import { AddChatDialog, ProjectArtifacts, chatsToAdd, hasProjectArtifacts } from "./ProjectExtras";
-import { CloneFields, FolderChoice, projectCapability } from "./ProjectFolders";
+import { CloneFields, projectCapability } from "./ProjectFolders";
 import { FolderBrowserSheet } from "./PluginsSettings";
 import ProjectSpaces from "./ProjectSpaces";
 import ProjectJobs from "./ProjectJobs";
@@ -729,16 +729,9 @@ function ProjectChats({
   openChat: (id: string, messageIndex?: number) => void;
   botPage: (id: string) => void;
 }) {
-  const [localMode, setMode] = useState<ChatMode>("default");
-  const savesMode = projectCapability(state, "project-mode-v1");
-  const mode = savesMode ? project.mode ?? "default" : localMode;
-  const [folder, setFolder] = useState<string>();
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PROJECT_PAGE_SIZE);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState("");
   const [adding, setAdding] = useState(false);
-  const visible = state.bots.filter((b) => !b.hidden || canUseProject(state, b, project));
   const botNames = useMemo(() => new Map(state.bots.map((b) => [b.id, b.name])), [state.bots]);
   const grouped = useMemo(
     () =>
@@ -749,17 +742,6 @@ function ProjectChats({
       }),
     [chats, state, query, botNames, limit],
   );
-  async function start(bot: Bot) {
-    setBusy(bot.id);
-    setError("");
-    try {
-      openChat(await api.startProjectChat([bot.id], project.id, project.folder ? mode : "default", project.folders?.includes(folder ?? "") ? folder : undefined));
-    } catch (e) {
-      setError(clean(e));
-    } finally {
-      setBusy("");
-    }
-  }
   return (
     <div className="record-detail">
       <Card
@@ -767,9 +749,17 @@ function ProjectChats({
         rows
         note={chats.length ? plural(chats.length, "chat") : "No chats in this project yet"}
         action={
-          <button type="button" className="secondary" disabled={!chatsToAdd(state, project).length} onClick={() => setAdding(true)}>
-            <Plus size={14} /> Add a chat…
-          </button>
+          <>
+            <button type="button" className="secondary" disabled={!chatsToAdd(state, project).length} onClick={() => setAdding(true)}>
+              <Plus size={14} /> Add a chat…
+            </button>
+            {/* The usual New chat dialog, with this project picked: the bot's own settings decide what it may do. */}
+            {actions.newChatIn && (
+              <button type="button" className="primary" onClick={() => actions.newChatIn!(project.id)}>
+                <SquarePen size={14} /> New chat
+              </button>
+            )}
+          </>
         }
       >
         {chats.length > 0 && (
@@ -805,60 +795,6 @@ function ProjectChats({
               Show {grouped.older} older
             </button>
           </div>
-        )}
-      </Card>
-      <Card
-        title="New chat"
-        rows
-        note="The bot gets the project as context, and can keep the to-do list."
-        action={
-          project.folder && (
-            <label className="field-inline compact">
-              <span>Mode</span>
-              <select aria-label="Mode" className="record-select" value={mode} onChange={(e) => { const next = e.target.value as ChatMode; if (savesMode) void api.updateProject(project.id, { mode: next }).catch((err) => setError(clean(err))); else setMode(next); }}>
-                {(Object.keys(modeLabels) as ChatMode[]).map((m) => (
-                  <option key={m} value={m}>
-                    {modeLabels[m].label} – {modeLabels[m].hint}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )
-        }
-      >
-        <FolderChoice project={project} value={folder} change={setFolder} />
-        <ul className="edit-list bot-pick-list" aria-label="Bots">
-          {visible.map((b) => {
-            const ok = canUseProject(state, b, project);
-            return (
-              <li key={b.id} className={ok ? "" : "blocked"}>
-                <BotAvatar bot={b} size={30} />
-                <span className="grow">
-                  <strong>{b.name}</strong>
-                  <small>{ok ? b.role : "No access to this project"}</small>
-                </span>
-                {ok ? (
-                  <button className="secondary" disabled={!!busy} aria-label={"Start chat with " + b.name} onClick={() => void start(b)}>
-                    <SquarePen size={14} /> Start chat
-                  </button>
-                ) : (
-                  <>
-                    <button className="secondary" disabled aria-label={"Start chat with " + b.name} title={b.name + " doesn't have access to this project"}>
-                      <SquarePen size={14} /> Start chat
-                    </button>
-                    <button className="icon-button" aria-label={"Open " + b.name + "'s access"} title="Manage access on the bot page" onClick={() => botPage(b.id)}>
-                      <ShieldCheck size={16} />
-                    </button>
-                  </>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        {error && (
-          <p className="field-error list-note" role="alert">
-            {error}
-          </p>
         )}
       </Card>
       {adding && <AddChatDialog state={state} project={project} close={() => setAdding(false)} />}

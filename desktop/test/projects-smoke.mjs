@@ -110,9 +110,16 @@ try {
   assert.deepEqual(todos.map((t) => [t.text, t.done]), [["Inventory mailboxes", true], ["Schedule cutover", false], ["Pilot with IT", false]]);
   console.log("Project made; to-dos added, checked off and reordered.");
 
+  // A chat in the open project: its Chats tab's New chat opens the usual dialog with the project picked.
+  const startIn = async (name) => {
+    await page.locator(".record-detail").getByRole("button", { name: "New chat", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator(".group-row", { hasText: name }).locator("button.row").click();
+  };
+
   // 2. A chat in the project.
   await menu.getByRole("button", { name: /Chats/ }).click();
-  await button("Start chat with Pip").click();
+  await startIn("Pip");
   await expect(page.locator(".chathead h2")).toHaveText("Pip");
   await expect(page.locator(".project-label")).toContainText("Mail migration");
   await expect(button("Changes")).toHaveCount(0);
@@ -222,8 +229,11 @@ try {
   await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
   await menu.getByRole("button", { name: /Chats/ }).click();
-  await expect(button("Start chat with Scout")).toBeDisabled();
-  await expect(page.locator(".bot-pick-list li", { hasText: "Scout" })).toContainText("No access to this project");
+  // New chat in the project offers only the bots that may use it: neither Pip nor Scout now.
+  await page.locator(".record-detail").getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.getByRole("dialog").locator(".group-row")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toContainText("No bot can use Mail migration yet");
+  await page.keyboard.press("Escape");
   const refused = await page.evaluate((pid) => window.botkins.startProjectChat(["scout"], pid).then(() => "created", (e) => e.message), project.id);
   assert.match(refused, /Scout doesn't have access to the project “Mail migration”/);
   const sendRefused = await page.evaluate((id) => window.botkins.send(id, "hello").then(() => "sent", (e) => e.message), pipChat.id);
@@ -237,8 +247,8 @@ try {
   // 4. Grant Scout the project on its bot page; then it can start a chat in the project.
   await openProjects();
   await page.locator(".record-row", { hasText: "Mail migration" }).click();
-  await menu.getByRole("button", { name: /Chats/ }).click();
-  await button("Open Scout's access").click();
+  await menu.getByRole("button", { name: /Access/ }).click();
+  await button("Open Scout").click();
   const card = page.getByRole("region", { name: "Access" });
   await expect(card).toBeVisible();
   await card.getByRole("checkbox", { name: "Mail migration", exact: true }).click();
@@ -253,8 +263,7 @@ try {
   await expect(page.locator(".access-list li", { hasText: "Pip" })).toContainText("No access");
   await shot("project-access");
   await menu.getByRole("button", { name: /Chats/ }).click();
-  await expect(button("Start chat with Scout")).toBeEnabled();
-  await button("Start chat with Scout").click();
+  await startIn("Scout");
   await expect(page.locator(".chathead h2")).toHaveText("Scout");
   await expect(page.locator(".access-blocked")).toHaveCount(0);
   const scoutChat = (await snap()).chats[0];
@@ -317,11 +326,10 @@ try {
   await expect.poll(async () => (await snap()).projects.find((p) => p.id === project.id).folder).toBe(dir);
   await button("Add folder…").click();
   await expect.poll(async () => (await snap()).projects.find((p) => p.id === project.id).folders).toEqual([dir, second]);
+  // New chat in the project opens in its default folder; a chat's folder is changed in the chat itself.
   await sections.getByRole("button", { name: /Chats/ }).click();
-  await page.getByRole("combobox", { name: "Folder", exact: true }).selectOption(second);
-  await button("Start chat with Scout").click();
-  await expect(page.locator(".project-label")).toContainText(second);
-  assert.equal((await snap()).chats[0].folder, second);
+  await startIn("Scout");
+  await expect(page.locator(".project-label")).toContainText("Mail migration");
   assert.equal(errors.length, 0, errors.join("\n"));
   console.log("Projects smoke passed. No renderer exceptions." + (shots ? " Screenshots in " + shots : ""));
 } finally {

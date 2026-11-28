@@ -105,6 +105,8 @@ export type PageActions = {
   mainChat: (botId: string) => void;
   addBot: () => void;
   newChat: () => void;
+  /** Opens New chat with this project picked. */
+  newChatIn?: (projectId: string) => void;
   showChats: () => void;
   /** Starts a new chat with this bot, even when it has older chats. */
   newChatWith: (botId: string) => void;

@@ -179,6 +179,11 @@ function App() {
   const pendingVisit = useRef<{ host: string; id: string } | null>(null);
   const [messageTarget, setMessageTarget] = useState<{ chatId: string; index: number } | null>(null);
   const [modal, setModal] = useState<Modal>("");
+  // A project the New chat dialog opens with (a project's Chats); cleared when the dialog closes.
+  const [chatProject, setChatProject] = useState<string>();
+  useEffect(() => {
+    if (modal !== "chat") setChatProject(undefined);
+  }, [modal]);
   /** An agent template from Marketplace › Agents that Create a bot opens filled in from. */
   const [botStart, setBotStart] = useState<MarketAgentTemplate>();
   useEffect(() => {
@@ -869,6 +874,10 @@ function App() {
     mainChat: id => void mainChat(id).catch(fail),
     addBot: () => setModal("bot"),
     newChat: () => setModal("chat"),
+    newChatIn: (projectId) => {
+      setChatProject(projectId);
+      setModal("chat");
+    },
     showChats: () => nav("Chats"),
     newChatWith: (id) => void newChat(id).catch(fail),
     botPage: (id) => botPage(id),
@@ -1264,7 +1273,9 @@ function App() {
             {modal === "bot"
               ? "Create a bot"
               : modal === "chat"
-                ? "New chat"
+                ? chatProject
+                  ? "New chat in " + (state.projects?.find((p) => p.id === chatProject)?.name ?? "project")
+                  : "New chat"
                 : modal === "model"
                   ? "Chat model and thinking"
                   : ""}
@@ -1297,6 +1308,7 @@ function App() {
         {modal === "chat" && canChat && (
           <NewChat
             state={state}
+            project={chatProject}
             fail={fail}
             open={async (id) => {
               receiveSnapshot(await api.snapshot());

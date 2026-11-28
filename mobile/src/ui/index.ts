@@ -8,6 +8,7 @@ export { BotAvatar } from "./BotAvatar";
 export { foldGap, listWidth, type Shape, shapeOf, WIDE_MIN } from "./shape";
 export { TwoUp } from "./TwoUp";
 export { useShape } from "./useShape";
+export { PageRoot, usePageRoot } from "./pageRoot";
 export { Button, IconButton } from "./Button";
 export { ColorPicker } from "./ColorPicker";
 export { Field } from "./Field";
