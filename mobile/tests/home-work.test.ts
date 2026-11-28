@@ -15,19 +15,26 @@ const hooks = phoneModule("../src/state/hooks", {
 const size = { height: 800, width: 390 };
 const insets = { top: 0, bottom: 0, right: 0, left: 0, tabRoom: 0 };
 const theme = { colors: {} };
-const ui = { useTheme: () => theme, useShape: () => insets, space: {}, badgeColors: () => ({}),
+// Any other part of the kit a screen draws stands in as its own name, so every state of Home can be mounted.
+const ui = new Proxy({ useTheme: () => theme, useShape: () => insets, space: {}, badgeColors: () => ({}), slopFor: () => 0,
   useFrozenWhenHidden: <T,>(v: T) => v, Loading: "Loading",
   BackdropLayer: "Backdrop", BotAvatar, Button: "Button", Chip: "Chip", Dot: "Dot", Group: "Group", HoldMenu: "Menu", Label: "Label",
-  IconButton: "IconButton", IconTile: "IconTile", LinkBanner: "Banner", Row: "Row", T: "T", Tap: "Tap" };
+  IconButton: "IconButton", IconTile: "IconTile", LinkBanner: "Banner", Row: "Row", T: "T", Tap: "Tap" },
+  { get: (kit, name) => (name in kit ? kit[name] : typeof name === "string" && /^[A-Z]/.test(name) ? name : undefined) });
 const animated = { __esModule: true, default: { ScrollView: "ScrollView", View: "View" }, FadeIn: { duration: () => 0 }, FadeOut: { duration: () => 0 },
   useAnimatedRef: () => useRef(null), useSharedValue: (value) => useRef({ value }).current, useAnimatedScrollHandler: () => undefined };
-const native = { ScrollView: "ScrollView", View: "View", useWindowDimensions: () => size };
+const native = { ActivityIndicator: "ActivityIndicator", ScrollView: "ScrollView", View: "View", useWindowDimensions: () => size };
+// The link's own line draws icons when the link is not up: each stands in as its own name.
+const icons = new Proxy({}, { get: (_, name) => (typeof name === "string" && /^[A-Z]/.test(name) ? name : undefined) });
 const { ServerLinkStatus } = phoneModule("../src/features/home/ServerLinkStatus", {
-  "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated, "@/state/link": {}, "@/ui": ui,
+  "lucide-react-native": icons, "react-native": native, "react-native-reanimated": animated, "@/state/link": {}, "@/ui": ui,
 });
 const pushed: unknown[] = [];
 const openedChats: string[] = [];
+// A drop's held order (useHeldOrder), with the same link the test gives Home.
+const heldOrder = phoneModule("../src/features/home/useHeldOrder", { "@/state/link": {} });
 const Home = phoneModule("../src/features/home/Home", {
+  "./useHeldOrder": heldOrder,
   "expo-router": { useScrollToTop() {}, router: { push: (target: unknown) => pushed.push(target) } },
   "lucide-react-native": {}, "react-native": native, "react-native-reanimated": animated,
   "react-native-safe-area-context": { useSafeAreaInsets: () => insets }, "react-native-worklets": {},
@@ -64,6 +71,33 @@ test("Home opens a pending chat through openChat and a node job through the appr
   node.props.onPress();
   assert.deepEqual(openedChats, ["chat-1"]);
   assert.deepEqual(pushed, [{ pathname: "/node-approval", params: { request: "node-request", chat: "node-job-1" } }]);
+});
+
+// The app closed when "Operate all bots in one view" was switched while Home was mounted: Home read
+// the computer's name with a hook only when unified mode was off, so the number of hooks changed with
+// the mode and React threw while drawing. Every hook now runs on every render.
+test("Home stays up when unified mode goes off and on under it", async (t) => {
+  const previous = useApp.getState();
+  const pairing = { serverId: "h1", name: "Studio" };
+  const hosts = [{ id: "h1", included: true, state: "online" }, { id: "h2", included: true, state: "online" }];
+  const bots = [{ id: "bot", name: "Pip" }];
+  useApp.setState({ link: "online", synced: true, pairing, pairings: [pairing, { serverId: "h2", name: "Mini" }], unified: true, unifiedHosts: hosts, parts: { bots, chats: [] } } as never);
+  const screen = await mount(el(Home));
+  t.after(async () => {
+    await screen.unmount();
+    useApp.setState(previous);
+  });
+  const pill = () => screen.root.root.findAllByType("Tap").map((tap) => tap.props.accessibilityLabel).find((label) => / connected/.test(label ?? ""));
+  assert.match(pill()!, /^All computers, connected/);
+  // Switched off: the link starts over on one computer, as startOver does (src/state/link.ts).
+  await act(async () => useApp.setState({ unified: false, unifiedHosts: [], link: "connecting", route: null, synced: false, parts: {}, texts: {}, chats: {}, running: {} } as never));
+  assert.match(pill()!, /^Studio, not connected/);
+  // That computer answers.
+  await act(async () => useApp.setState({ link: "online", synced: true, parts: { bots, chats: [] } } as never));
+  assert.match(pill()!, /^Studio, connected/);
+  // And on again.
+  await act(async () => useApp.setState({ unified: true, unifiedHosts: hosts } as never));
+  assert.match(pill()!, /^All computers, connected/);
 });
 
 for (const busy of [false, true]) {

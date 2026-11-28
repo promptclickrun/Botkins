@@ -4,14 +4,15 @@ import { type Href, router, Stack, useIsFocused, useLocalSearchParams } from "ex
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronRight, Ellipsis, PanelLeft, Repeat, X } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, type RefObject, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, StyleSheet, type TextInput, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Platform, ScrollView, type StyleProp, StyleSheet, type TextInput, useWindowDimensions, View, type ViewStyle } from "react-native";
+import Svg, { Circle } from "react-native-svg";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import Animated, { FadeIn, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { useStore } from "zustand";
 import { ScrollViewMarker } from "react-native-screens/experimental";
 import { useShallow } from "zustand/react/shallow";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Bot, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
+import type { Bot, ChatContext, ChatSummary, Message, Preferences, Project, QueuedMessage, Run } from "@/link/types";
 import { useChatPrefs } from "@/state/chatPrefs";
 import { type AvatarState, useBot, useBots, useCan, useCapability, useChat, useChatActivity, useModels, usePart, useSettings, useWatchedChat } from "@/state/hooks";
 import { api, attempt, loadEarlier, reactToMessage } from "@/state/link";
@@ -20,6 +21,9 @@ import { effectiveModel, effortLabel, findModel, modelName } from "@/state/model
 import { type ChatView, pendingSends, showToast, useApp } from "@/state/store";
 import { usePrefs } from "@/state/prefs";
 import { useTurnMarks } from "@/state/turnMarks";
+import { STRIP } from "@/features/home/strip";
+import { contextPercent, contextTone } from "./contextMath";
+import { chatDockRoom } from "@/ui/shape";
 import { AvatarMotion, BackdropLayer, backdropBaseColor, BotAvatar, Button, Chip, EmptyState, Glass, IconButton, LinkBanner, Loading, radius, space, T, Tap, tint, useOnShow, useShape, useTextPrompt, useTheme } from "@/ui";
 import { speakText, stopSpeech } from "@/features/voice/tts";
 import { endTalk, TalkBar, useTalk } from "../voice/api";
@@ -145,7 +149,7 @@ function ChatTitle({ chat, bot, bots, state, model, room, docked }: { chat: Chat
   );
 }
 
-function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, panes = 0, onPane, onOpen }: { /** How many tabs the chat's side pane has, and opening it. */ panes?: number; onPane?: () => void; /** Opens another chat in the same place (beside the list); else it replaces this page. */ onOpen?: (id: string) => void; chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; /** The chat has messages: its project and mode are settled. */ started: boolean; projects?: Project[]; settings?: Preferences; onDelete: () => void }) {
+function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, panes = 0, onPane, onOpen, round, context }: { /** The button as a round one of this size, like the bar's other round buttons (the first tab's bar). */ round?: number; /** With `round`: the chat's context window, drawn as the button's edge and named in the menu's first line. */ context?: ChatContext; /** How many tabs the chat's side pane has, and opening it. */ panes?: number; onPane?: () => void; /** Opens another chat in the same place (beside the list); else it replaces this page. */ onOpen?: (id: string) => void; chat: ChatSummary; bot?: Bot; bots: Map<string, Bot>; /** The chat has messages: its project and mode are settled. */ started: boolean; projects?: Project[]; settings?: Preferences; onDelete: () => void }) {
   const { colors } = useTheme();
   const canManage = useCan("agents", "manage");
   const project = projects?.find((p) => p.id === chat.projectId);
@@ -162,7 +166,10 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
   const canRegenerate = useCanRegenerateTitle(chat, mine);
   const prompt = useTextPrompt();
   const rename = () => prompt.ask({ title: "Rename chat", value: chat.title, onSubmit: (title) => void attempt(api.renameChat(chat.id, title)) });
+  const used = context ? contextPercent(context) : undefined;
   const actions = [
+    // Where the bar has no meter of its own, the menu's button is the meter and this line is its number.
+    ...(used !== undefined ? [{ id: "context", title: "Context · " + used + "% used", image: "circle.dashed" }] : []),
     ...(bot && !chat.botIds ? [{ id: "new", title: "New chat with " + bot.name, image: "square.and.pencil" }] : []),
     ...(!chat.main && canShare && (mine ? teamSize > 1 : place === "invited") ? [{ id: "people", title: mine ? "Invite" : "People in this chat", image: mine ? "person.badge.plus" : "person.2" }] : []),
     ...(canManage && mine ? [{ id: "model", title: "Model…", image: "cpu" }] : []),
@@ -188,6 +195,7 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
       onPressAction={({ nativeEvent }) => {
         const action = nativeEvent.event;
         if (runProjectChoice(chat, action, savesMode)) return;
+        if (action === "context") return void router.push({ pathname: "/chat/context", params: { id: chat.id } });
         if (action === "pane") return void onPane?.();
         if (action === "people") return void router.push({ pathname: "/chat/people", params: { id: chat.id } });
         if (action === "changes" && project) router.push(("/chat/changes?id=" + encodeURIComponent(project.id) + "&chatId=" + encodeURIComponent(chat.id)) as Href);
@@ -207,11 +215,41 @@ function ChatMenu({ chat, bot, bots, started, projects, settings, onDelete, pane
           ]);
       }}
     >
-      <View accessible accessibilityRole="button" accessibilityLabel="Chat options" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-        <Ellipsis size={22} color={colors.ink} strokeWidth={2.2} />
-      </View>
+      {round ? (
+        <View accessible accessibilityRole="button" accessibilityLabel={"Chat options" + (used !== undefined ? ", context " + used + "% used" : "")} style={{ width: round, height: round }}>
+          <Glass interactive style={{ width: round, height: round, borderRadius: round / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            <Ellipsis size={Math.round(round * 0.5)} color={colors.ink} strokeWidth={2.2} />
+          </Glass>
+          {used !== undefined && <ContextRing size={round + 2 * RING_OUT} percent={used} style={{ position: "absolute", left: -RING_OUT, top: -RING_OUT }} />}
+        </View>
+      ) : (
+        <View accessible accessibilityRole="button" accessibilityLabel="Chat options" style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+          <Ellipsis size={22} color={colors.ink} strokeWidth={2.2} />
+        </View>
+      )}
     </MenuView>
     </>
+  );
+}
+
+/** How far the context ring stands out from the round button it is the edge of. */
+const RING_OUT = 4;
+
+/** The chat's context window as a ring: a quiet track, and an arc for the share in use, tinted by how full it is. */
+function ContextRing({ size, percent, style }: { size: number; percent: number; style?: StyleProp<ViewStyle> }) {
+  const { colors } = useTheme();
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const length = 2 * Math.PI * r;
+  return (
+    <View pointerEvents="none" style={style}>
+      <Svg width={size} height={size}>
+        <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.line} strokeWidth={stroke} fill="none" />
+        {percent > 0 && (
+          <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors[contextTone(percent)]} strokeWidth={stroke} fill="none" strokeLinecap="round" strokeDasharray={length} strokeDashoffset={length * (1 - Math.max(0.04, percent / 100))} transform={"rotate(-90 " + size / 2 + " " + size / 2 + ")"} />
+        )}
+      </Svg>
+    </View>
   );
 }
 
@@ -604,7 +642,8 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
           )}
           style={{ flex: 1 }}
           // Inverted: the content's top is the screen's bottom, under the message box.
-          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: space.lg + listBottom, paddingBottom: space.lg + room.top }}
+          // The newest row rests clear of the fade over the message box, so nothing of it is dimmed or hidden.
+          contentContainerStyle={{ paddingHorizontal: space.xl, paddingTop: FADE_EDGE + listBottom, paddingBottom: space.lg + room.top }}
           ItemSeparatorComponent={Gap}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
@@ -649,7 +688,7 @@ function ChatTimelineList({ chatId, view, pending, runPart, streaming, group, bo
  * `pane` shows the chat beside the Chats list (two panes, see split.ts) instead of on its own page:
  * it draws its own bar, and `onLeave` takes the place of going back.
  */
-function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onOpen }: ChatScreenProps) {
+function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, bar, onOpen }: ChatScreenProps) {
   const { colors } = useTheme();
   // `board` pins a Today card to the composer, for the first message (discussBoardItem in open.ts).
   // `at` lands on one message (its place in the whole chat, from 0): Open chat on an artifact.
@@ -985,8 +1024,8 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onO
 
   // The composer rides the keyboard; with the keyboard down it clears the home indicator.
   const keyboard = useReanimatedKeyboardAnimation();
-  // A pane in the Chats tab keeps its composer above a tab bar at the bottom (none when the bar is the side rail).
-  const bottomInset = insets.bottom + (paneId ? shape.tabRoom : 0);
+  // The room under the message box: the tab bar's for a chat in a tab, the home indicator's on a page (chatDockRoom has why).
+  const bottomInset = chatDockRoom({ bottom: insets.bottom, tabRoom: shape.tabRoom, pane: !!paneId, ios: Platform.OS === "ios", pad: space.sm });
   const spacer = useAnimatedStyle(() => ({ height: Math.max(Math.abs(keyboard.height.value), bottomInset) }));
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const hasBackdrop = backdrop !== "clean";
@@ -1011,23 +1050,32 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onO
 
   const empty = !!view && view.messages.length === 0 && !pending.length && !working;
   const measured = chat.context && chat.context.limit > 0 ? chat.context : undefined;
+  // The first tab's bar has no meter of its own: its menu button wears the context ring.
+  const meter = measured ? <ContextMeter chatId={chat.id} context={measured} /> : null;
+  const menu = <ChatMenu round={bar ? STRIP.button : undefined} context={bar ? measured : undefined} chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={() => pane.show()} onOpen={paneId ? openChat : undefined} />;
   const barEnd = (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
-      {measured && <ContextMeter chatId={chat.id} context={measured} />}
-      <ChatMenu chat={chat} bot={bot} bots={bots} started={!!view && view.messages.length > 0} projects={projects} settings={settings} onDelete={() => void remove()} panes={pane.tabs} onPane={() => pane.show()} onOpen={paneId ? openChat : undefined} />
+      {meter}
+      {menu}
     </View>
   );
   const header = paneId ? (
     // Beside the list there is no navigation bar: the pane draws its own opaque bar with a hairline edge.
-    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, backgroundColor: colors.canvas, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, paddingTop: insets.top + space.xs, paddingBottom: space.xs }}>
-      {above}
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm }}>
-        {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
-        <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
-          <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
+    // The first tab's bar has no fill and no edge of its own: the page shows through to the top of the
+    // screen, as on every other tab, and the chat fades out under it (the Fade below).
+    <View onLayout={(event) => setPaneBar(Math.round(event.nativeEvent.layout.height))} style={[{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2, paddingTop: insets.top + space.xs, paddingBottom: space.xs }, !bar && { backgroundColor: colors.canvas, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line }]}>
+      {bar ? (
+        // The first tab draws the whole bar: its row of bots is the chat's title there.
+        bar({ menu })
+      ) : (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: onList ? space.sm : space.lg, paddingRight: space.sm }}>
+          {onList && <IconButton icon={PanelLeft} label="Chats" onPress={onList} />}
+          <View style={{ flex: 1, minWidth: 0, alignItems: "flex-start" }}>
+            <ChatTitle chat={chat} bot={bot} bots={bots} state={state} model={model.name} room={260} docked={docked} />
+          </View>
+          {barEnd}
         </View>
-        {barEnd}
-      </View>
+      )}
     </View>
   ) : (
     <Stack.Screen
@@ -1077,6 +1125,7 @@ function ChatScreenScreen({ pane: paneId, onLeave: leavePane, onList, above, onO
             />
           </ChatPeopleLook>
         )}
+        {paneId && !!bar && <Fade edge="top" cover={topBar} firm />}
         {paneId && header}
         <View onLayout={(event) => setBanners(Math.round(event.nativeEvent.layout.height))} style={{ position: "absolute", top: topBar, left: 0, right: 0 }}>
           <RoutineBanner chat={chat} />
@@ -1188,12 +1237,23 @@ function EdgeFree({ children }: { children: ReactNode & {} }) {
  * buttons, and fades out over a short soft edge beyond, so there is no hard line where the chat ends.
  */
 const FADE_EDGE = 28;
-function Fade({ edge, cover }: { edge: "top" | "bottom"; cover: number }) {
+function Fade({ edge, cover, firm }: { edge: "top" | "bottom"; cover: number; /** Over a backdrop, nearly the page's own color under what floats (not a light scrim): for a bar with no fill of its own, whose faces and name the rows must not run behind. */ firm?: boolean }) {
   const { colors, dark } = useTheme();
   const backdrop = usePrefs((prefs) => prefs.backdrop);
   const hasBackdrop = backdrop !== "clean";
   if (cover <= 0) return null;
   const top = edge === "top";
+  if (hasBackdrop && firm) {
+    // The backdrop's own color, almost whole under the bar and gone a short way below it: no band and no line, and no row behind the bar's faces.
+    const base = backdropBaseColor(backdrop, dark, colors.canvas);
+    const height = cover + FADE_EDGE * 1.5;
+    const solid = tint(base, 0.97);
+    return (
+      <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, height, ...(top ? { top: 0 } : { bottom: 0 }) }}>
+        <LinearGradient colors={top ? [solid, solid, tint(base, 0)] : [tint(base, 0), solid, solid]} locations={top ? [0, cover / height, 1] : [0, 1 - cover / height, 1]} style={{ flex: 1 }} />
+      </View>
+    );
+  }
   if (hasBackdrop) {
     // Soft translucent scrim so floating Liquid Glass chrome visibly refracts the backdrop while keeping text legible.
     const base = backdropBaseColor(backdrop, dark, colors.canvas);
@@ -1223,8 +1283,8 @@ type ChatScreenProps = {
   pane?: string;
   onLeave?: () => void;
   onList?: () => void;
-  /** Drawn in the pane's own bar, over the chat's title: the first tab's row of bots. */
-  above?: ReactNode;
+  /** Draws the pane's own bar in place of the chat's title: the first tab's row of bots. It places the chat's menu, whose round button wears the context ring. */
+  bar?: (parts: { menu: ReactNode }) => ReactNode;
   /** Where another chat opens from a pane; without it, in the pane's place beside the Chats list. */
   onOpen?: (id: string) => void;
 };
@@ -1239,6 +1299,6 @@ export default function ChatScreen(props: ChatScreenProps) {
 }
 
 /** A chat beside the Chats list, when there is room for two panes (see split.ts). */
-export function ChatPane({ id, onLeave, onList, above, onOpen }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void } & Pick<ChatScreenProps, "above" | "onOpen">) {
-  return <ChatScreen key={id} pane={id} onLeave={onLeave} onList={onList} above={above} onOpen={onOpen} />;
+export function ChatPane({ id, onLeave, onList, bar, onOpen }: { id: string; onLeave: () => void; /** Shows the list again (book pose hides it). */ onList?: () => void } & Pick<ChatScreenProps, "bar" | "onOpen">) {
+  return <ChatScreen key={id} pane={id} onLeave={onLeave} onList={onList} bar={bar} onOpen={onOpen} />;
 }

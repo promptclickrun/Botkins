@@ -8,12 +8,13 @@ import { create } from "zustand";
 import { type GridMetrics, layoutOf, moved } from "../src/features/all/grid";
 import { allItems, CAPS, placesFor } from "../src/features/all/places";
 import { homeBots, homeChat, pickHomeBot } from "../src/features/home/homeBot";
+import { STRIP } from "../src/features/home/strip";
 import * as activity from "../src/state/sessionActivity";
 import { useApp } from "../src/state/store";
 import { USUAL_BAR } from "../src/state/tabs";
 import { mount, phoneModule } from "./render-phone";
 
-const START = { bar: USUAL_BAR, allOrder: [] as string[], allHidden: [] as string[], homeBot: null as string | null, backdrop: "clean" };
+const START = { bar: USUAL_BAR, allOrder: [] as string[], allHidden: [] as string[], homeBot: null as string | null, nameTag: true, backdrop: "clean" };
 const usePrefs = create(() => ({ ...START }));
 const prefs = { usePrefs, setPrefs: (patch: object) => usePrefs.setState(patch) };
 const hooks = phoneModule("../src/state/hooks", { "@/ui/useOnShow": {}, "./useAppActive": {}, "./link": {}, "./sessionActivity": activity });
@@ -28,8 +29,10 @@ const ui = {
 const animated = {
   __esModule: true, default: { ScrollView: "ScrollView", View: "View" },
   useAnimatedRef: () => useRef(null), useSharedValue: (value: unknown) => useRef({ value }).current, useAnimatedScrollHandler: () => undefined,
-  useAnimatedStyle: () => ({}), useAnimatedReaction: () => {}, useFrameCallback: () => ({ setActive() {} }), scrollTo() {},
+  useAnimatedStyle: () => ({}), useAnimatedReaction: () => {}, useFrameCallback: () => ({ setActive() {} }), scrollTo() {}, useDerivedValue: () => ({ value: 0 }),
   withTiming: (value: unknown, _config?: unknown, done?: () => void) => { done?.(); return value; },
+  // A wait that is not over yet, told apart from a value: { after, then }.
+  withDelay: (after: number, then: unknown) => ({ after, then }),
 };
 const native = { ScrollView: "ScrollView", View: "View", useWindowDimensions: () => ({ height: 800, width: 390 }) };
 const gestures = { GestureDetector: "Detector", GestureStateManager: {}, usePanGesture: (config: unknown) => config };
@@ -207,10 +210,17 @@ test("the first tab offers the primary bot first and keeps the bot a person chos
   assert.deepEqual(homeChat(chats as never, "b", true, "member-1"), { make: "main" }, "Main chat is each person's own");
 });
 
-test("the first tab shows the bot's chat, the other bots one tap away, and Home while there is no bot", async (t) => {
+test("the first tab shows the bot's chat under the row of bots, and Home while there is no bot", async (t) => {
   const asked: string[] = [];
+  const pages: unknown[] = [];
+  const carried: unknown[] = [];
   const BotHome = phoneModule("../src/features/home/BotHome", {
-    "lucide-react-native": {}, "react-native": native, "react-native-safe-area-context": safeArea,
+    "lucide-react-native": {}, "react-native": native, "react-native-safe-area-context": safeArea, "react-native-reanimated": animated,
+    "react-native-gesture-handler": gestures,
+    "react-native-worklets": { scheduleOnRN: (run: (...args: unknown[]) => void, ...args: unknown[]) => run(...args), scheduleOnUI() {} },
+    // The computer's order as it is: what a move asks of the computer is kept for the test to read.
+    "./useHeldOrder": { useHeldOrder: (list: unknown[]) => ({ shown: list, carry: (id: string, plan: unknown) => void carried.push([id, plan]) }) },
+    "expo-router": { router: { push: (to: unknown) => pages.push(to) } },
     "@/features/all/open": { openPlace: (id: string) => opened.push(id) }, "@/features/chat/ChatScreen": { ChatPane: "ChatPane" },
     "@/features/chat/navigate": { openChat() {} }, "@/state/hooks": hooks, "@/state/prefs": prefs, "@/ui": ui,
     "@/state/link": { api: { mainChat: async (id: string) => void asked.push(id), createChat: async () => "x" }, attempt: (call: Promise<unknown>) => call },
@@ -223,18 +233,55 @@ test("the first tab shows the bot's chat, the other bots one tap away, and Home 
   t.after(screen.unmount);
   const has = (type: string) => screen.root.root.findAllByType(type).length;
   assert.equal(has("HomeBoard"), 1, "no bots yet: Home, with its first steps");
-  const bots = [{ id: "a", name: "Pip" }, { id: "b", name: "Patch" }];
+  const bots = [{ id: "a", name: "Pip", role: "Chief of staff" }, { id: "b", name: "Patch", role: "" }];
   await act(async () => useApp.setState({ parts: { meta, bots, chats: [{ id: "main-a", botId: "a", main: true, time: 1, count: 0 }] } } as never));
   assert.equal(screen.root.root.findByType("ChatPane").props.id, "main-a");
   assert.deepEqual(asked, [], "a Main chat that is there is not asked for");
-  const strip = () => el("View", null, screen.root.root.findByType("ChatPane").props.above);
-  const row = await mount(strip());
-  t.after(row.unmount);
-  const faces = row.root.root.findAllByType("Tap");
-  assert.deepEqual(faces.map((face) => [face.props.accessibilityLabel, face.props.accessibilityState.selected]), [["Pip", true], ["Patch", false]]);
-  row.root.root.findByType("IconButton").props.onPress();
-  assert.deepEqual(opened.splice(0), ["home"], "the row's last button opens every bot");
-  await act(async () => faces[1].props.onPress());
+
+  // The chat's bar is the tab's to draw: the row of bots, with the chat's menu at its end.
+  const bar = async () => {
+    const drawn = await mount(el("View", null, screen.root.root.findByType("ChatPane").props.bar({ menu: el("ChatMenu") })));
+    t.after(drawn.unmount);
+    return drawn.root.root;
+  };
+  let row = await bar();
+  assert.equal(row.findAllByType("ScrollView").length, 0, "the row waits for its width, so no bot is drawn out of place");
+  // The row's width is the tab's to keep: the next chat's bar has it at once.
+  const box = row.findAll((node) => typeof node.props.onLayout === "function")[0];
+  await act(async () => box.props.onLayout({ nativeEvent: { layout: { width: 312 } } }));
+  row = await bar();
+  const scroller = row.findByType("ScrollView");
+  assert.equal(scroller.props.snapToInterval, STRIP.slot, "the row rests on a bot");
+  assert.deepEqual(scroller.props.contentOffset, { x: 0, y: 0 }, "the bot on show starts in the middle");
+  assert.equal(scroller.props.contentContainerStyle.width, 312 - STRIP.slot + 2 * STRIP.slot, "room at both ends, so the first and last bot can reach the middle too");
+  assert.equal(scroller.props.scrollEnabled, true);
+  assert.equal(row.findAllByType("ChatMenu").length, 1);
+  const faces = () => row.findAllByType("Tap").filter((tap) => tap.props.accessibilityState);
+  assert.deepEqual(faces().map((face) => [face.props.accessibilityLabel, face.props.accessibilityState.selected]), [["Pip", true], ["Patch", false]]);
+  // Only the bot on show is drawn as the moving face; every face is the large size, scaled where it stands.
+  assert.deepEqual(row.findAllByType("Avatar").map((face) => [face.props.size, face.props.animated]), [[STRIP.face, true], [STRIP.face, false]]);
+  row.findByType("IconButton").props.onPress();
+  assert.deepEqual(opened.splice(0), ["home"], "the row's first button opens every bot");
+
+  // The name tag: the bot's name and what it is for, a way to its page.
+  const tag = () => row.findAllByType("Tap").find((tap) => /bot page$/.test(tap.props.accessibilityLabel ?? ""))!;
+  assert.equal(tag().props.accessibilityLabel, "Pip, Chief of staff, bot page");
+  tag().props.onPress();
+  assert.deepEqual(pages.splice(0), [{ pathname: "/bot/[id]", params: { id: "a" } }]);
+  // So is a hold on any face in the row, the bot on show or another: the name tag can be switched off.
+  faces()[0].props.onLongPress();
+  faces()[1].props.onLongPress();
+  assert.deepEqual(pages.splice(0), [{ pathname: "/bot/[id]", params: { id: "a" } }, { pathname: "/bot/[id]", params: { id: "b" } }]);
+  // A tap on the bot already on show changes nothing.
+  await act(async () => faces()[0].props.onPress());
+  assert.deepEqual(pages, []);
+  assert.equal(usePrefs.getState().homeBot, null, "and a hold opens a page without changing the bot on show");
+  // Two bots: the primary stays first, so there is nowhere to move the other, and no face can be carried.
+  assert.equal(row.findAllByType("Detector").length, 0);
+
+  // A swipe that comes to rest on Patch: its name shows at once, and its chat opens.
+  scroller.props.onScrollBeginDrag();
+  await act(async () => scroller.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: STRIP.slot } } }));
   assert.equal(usePrefs.getState().homeBot, "b");
   assert.equal(has("ChatPane"), 0, "Patch has no Main chat yet");
   assert.equal(has("Loading"), 1);
@@ -242,6 +289,44 @@ test("the first tab shows the bot's chat, the other bots one tap away, and Home 
   await act(async () => useApp.setState({ parts: { meta, bots, chats: [{ id: "main-a", botId: "a", main: true, time: 1, count: 0 }, { id: "main-b", botId: "b", main: true, time: 2, count: 0 }] } } as never));
   assert.equal(screen.root.root.findByType("ChatPane").props.id, "main-b");
   assert.deepEqual(asked, ["b"]);
+  row = await bar();
+  assert.deepEqual(row.findByType("ScrollView").props.contentOffset, { x: STRIP.slot, y: 0 }, "Patch's bar starts with Patch in the middle");
+  assert.equal(tag().props.accessibilityLabel, "Patch, bot page", "a bot with nothing said about it has its name alone");
+
+  // A tap on the other bot: it takes the middle, and its chat opens when the row has stopped there.
+  await act(async () => faces()[0].props.onPress());
+  assert.equal(usePrefs.getState().homeBot, "b", "not before the row stops");
+  await act(async () => row.findByType("ScrollView").props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+  assert.equal(usePrefs.getState().homeBot, "a");
+  assert.equal(screen.root.root.findByType("ChatPane").props.id, "main-a");
+
+  // The name tag switched off (Settings › Appearance): it is no button, and it fades a moment after a bot is on show.
+  const tagBox = () => row.findAll((node) => node.props.pointerEvents === "auto" || node.props.pointerEvents === "none").find((node) => node.findAllByType("Glass").length > 0)!;
+  row = await bar();
+  assert.equal(tagBox().props.pointerEvents, "auto");
+  await act(async () => usePrefs.setState({ nameTag: false }));
+  row = await bar();
+  assert.equal(tagBox().props.pointerEvents, "none");
+  assert.equal(STRIP.tagStaysMs, 2500);
+
+  // Three bots or more: every face but the primary bot's can be carried to a new place (hold, then slide),
+  // and VoiceOver has the same moves as actions. The computer is asked for the new order.
+  const trio = [...bots, { id: "c", name: "Dot", role: "" }];
+  await act(async () => useApp.setState({ parts: { meta, bots: trio, chats: [{ id: "main-a", botId: "a", main: true, time: 1, count: 0 }] } } as never));
+  row = await bar();
+  assert.deepEqual(faces().map((face) => face.props.accessibilityActions.map((action: { name: string }) => action.name)), [["longpress"], ["longpress", "left", "right"], ["longpress", "left", "right"]]);
+  assert.equal(row.findAllByType("Detector").length, 2, "the primary bot's face is not one to carry");
+  await act(async () => faces()[1].props.onAccessibilityAction({ nativeEvent: { actionName: "right" } }));
+  assert.deepEqual(carried.splice(0), [["b", { order: ["a", "c", "b"] }]]);
+  await act(async () => faces()[2].props.onAccessibilityAction({ nativeEvent: { actionName: "right" } }));
+  await act(async () => faces()[1].props.onAccessibilityAction({ nativeEvent: { actionName: "left" } }));
+  assert.deepEqual(carried, [], "nothing past the end, and nothing before the primary bot");
+  // A role that may not arrange the bots, or no link to the computer: nothing to carry.
+  await act(async () => useApp.setState({ link: "offline" } as never));
+  row = await bar();
+  assert.equal(row.findAllByType("Detector").length, 0);
+  await act(async () => useApp.setState({ link: "online" } as never));
+
   await act(async () => useApp.setState({ parts: { meta: { capabilities: [] }, bots, chats: [] } } as never));
   assert.equal(screen.root.root.findByType("Empty").props.action, "Start a chat", "without Main chats, a first chat waits for a tap");
 });

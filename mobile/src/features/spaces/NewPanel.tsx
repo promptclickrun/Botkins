@@ -44,7 +44,6 @@ export default function NewPanel() {
   const [pickedProject, setPickedProject] = useState<string | null | undefined>(undefined);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
-  if (!canCreate || !canChat) return <Sheet title="New panel"><EmptyState title="Your team role can't create panels" /></Sheet>;
   const space = places.find((one) => one.id === place) ?? places[0];
   const mergedSources = space?.merged?.sources ?? [];
   const defaultMergedHost =
@@ -58,6 +57,8 @@ export default function NewPanel() {
     const filtered = shown.filter((b) => hostOfId(b.id, primaryId) === targetHostId);
     return filtered.length ? filtered : shown;
   }, [shown, space?.merged, targetHostId, primaryId]);
+  // After every hook: a return above one changes the hook order when the role does (a computer change, a role edited).
+  if (!canCreate || !canChat) return <Sheet title="New panel"><EmptyState title="Your team role can't create panels" /></Sheet>;
   const bot = (chosen && hostBots.some((b) => b.id === chosen) ? chosen : null) ?? hostBots[0]?.id ?? null;
   const needsHostPick = !!space?.merged && mergedSources.length > 1 && !targetHostId;
   const ready = !!bot && !!space && !needsHostPick && !!text.trim() && !asking;

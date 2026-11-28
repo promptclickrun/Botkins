@@ -26,7 +26,10 @@ export default function Skills() {
   const canCreate = useCan("skills", "create");
   const supportsUpload = useCapability("skill-upload-v1");
   // A script command runs on the computer, so it is the owner's alone ("script-commands-v1").
-  const supportsScripts = useCapability("script-commands-v1") && !useMember();
+  // Both asked on every render: a hook behind `&&` runs on some renders only, and the hook order changes when the computer does.
+  const scriptsOn = useCapability("script-commands-v1");
+  const notMember = !useMember();
+  const supportsScripts = scriptsOn && notMember;
   const {colors} = useTheme();
   async function upload() {
     const host = useApp.getState().pairing?.serverId;
@@ -43,7 +46,8 @@ export default function Skills() {
   }
   const canManage = useCan("skills", "manage");
   const member = useMember();
-  const canFolders = !member && useCapability("folders-v1");
+  const foldersOn = useCapability("folders-v1");
+  const canFolders = !member && foldersOn;
   const skills = useSkills();
   const part = usePart("skills");
   const off = part?.disabled;

@@ -45,6 +45,8 @@ export type Prefs = {
   allHidden: string[];
   /** The bot the first tab shows: the one the person was last with there. None, or one that is gone: the primary bot. */
   homeBot: string | null;
+  /** The name under the bot on the first tab stays on show. Off, it shows while the person changes bots there and fades soon after (Settings › Appearance). */
+  nameTag: boolean;
   /** The spaces whose panels show open on the space's page. Every other space shows them as cards. */
   openSpaces: string[];
   /** The panels pinned to Home, in the order they were pinned. A panel of another computer is kept and not shown. */
@@ -61,7 +63,7 @@ export type Prefs = {
   settingsHost: string | null;
 };
 export type PanelPin = { spaceId: string; panelId: string };
-const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], bar: USUAL_BAR, allOrder: [], allHidden: [], homeBot: null, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null, chatChipOrder: [], unifiedHosts: false, excludedUnifiedHosts: [], settingsHost: null };
+const defaults: Prefs = { mode: "system", lightTheme: DEFAULT_THEME, darkTheme: DEFAULT_THEME, themePicked: false, backdrop: DEFAULT_BACKDROP, textSize: 16, font: DEFAULT_FONT, fontPicked: false, controlSize: "regular", haptics: true, avatarAnimations: DEFAULT_AVATAR_ANIMATIONS, todayOpen: true, foldedProviders: [], toldNotices: [], bar: USUAL_BAR, allOrder: [], allHidden: [], homeBot: null, nameTag: true, openSpaces: [], homePanels: [], computerOrder: [], primaryHost: null, chatChipOrder: [], unifiedHosts: false, excludedUnifiedHosts: [], settingsHost: null };
 
 export const usePrefs = create<Prefs>(() => defaults);
 
@@ -102,6 +104,7 @@ function read(saved: Record<string, unknown>): Prefs {
     allOrder: ids(saved.allOrder).slice(0, 60),
     allHidden: ids(saved.allHidden).slice(0, 60),
     homeBot: isId(saved.homeBot) ? saved.homeBot : null,
+    nameTag: typeof saved.nameTag === "boolean" ? saved.nameTag : defaults.nameTag,
     openSpaces: ids(saved.openSpaces),
     computerOrder: ids(saved.computerOrder),
     chatChipOrder: ids(saved.chatChipOrder),

@@ -156,6 +156,14 @@ test("routeMobileCall routes scoped IDs, explicit addBot hostId, settings calls,
   const settingsRoute = routeMobileCall("setPreferences", [{ theme: "dark" }], ctx);
   assert.deepEqual(settingsRoute, { kind: "single", hostId: "host-b", args: [{ theme: "dark" }] });
 
+  // The computer's own app (what it runs, its updates) and GitHub are the chosen computer's too: Settings
+  // shows that computer's name and version, so "Update" there must not update another one.
+  for (const method of ["appInfo", "appUpdateStatus", "checkAppUpdate", "installAppUpdate", "setAppUpdateAuto", "githubAgentStatus", "githubAgentRefresh", "githubAgentInstallUrl"]) {
+    assert.equal((routeMobileCall(method, [], ctx) as { hostId: string }).hostId, "host-b", method);
+  }
+  // A chosen computer that is not joined: the primary one answers.
+  assert.equal((routeMobileCall("installAppUpdate", [], { ...ctx, poolIds: ["host-a"] }) as { hostId: string }).hostId, "host-a");
+
   // unscopeValueForHost only strips the targeted host prefix (used for widget snapshots too).
   const mixed = { a: secondaryChat, b: scopeId("host-c", "chat-c"), plain: "chat-a" };
   assert.deepEqual(unscopeValueForHost(mixed, "host-b"), {

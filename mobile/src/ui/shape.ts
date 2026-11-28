@@ -66,3 +66,19 @@ export function listWidth(shape: Shape, width: number): number {
 export function foldGap(shape: Shape): number {
   return shape.pose === "book" && shape.fold ? shape.fold.width : 0;
 }
+
+/**
+ * The room under a chat's message box while the keyboard is down, from the bottom of the screen.
+ *
+ * A chat in a tab (`pane`): on an iPhone or iPad every native tab screen measures its own safe
+ * area, and that already holds the tab bar, so `bottom` is all the room there is to leave. Adding
+ * the bar's room again put the message box a bar's height too high (2026-11-28). Elsewhere the safe
+ * area is the screen's, and the bar's room is added.
+ *
+ * A chat on a page of its own: the message box brings `pad` of space under itself, and that space
+ * sits inside the home indicator's room, so the box rests just clear of the indicator.
+ */
+export function chatDockRoom(input: { bottom: number; tabRoom: number; pane: boolean; ios: boolean; pad: number }): number {
+  if (!input.pane) return Math.max(0, input.bottom - input.pad);
+  return input.bottom + (input.ios ? 0 : input.tabRoom);
+}

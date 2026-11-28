@@ -8,7 +8,10 @@ import { Alert, View } from "react-native";
 import type { GithubAgentRepoConfig, GithubAgentStatus } from "@/link/types";
 import { useBots, useOnline, usePart } from "@/state/hooks";
 import { api, attempt } from "@/state/link";
-import { Button, Field, Group, Label, Page, Row, space, T } from "@/ui";
+import { showToast } from "@/state/store";
+import { AppUpdates } from "./AppUpdates";
+import { computerLacksGithub, githubNotice } from "./githubNotice";
+import { Button, EmptyState, Field, Group, Label, Page, Row, space, T } from "@/ui";
 
 function formatShortTime(iso?: string | null): string {
   if (!iso) return "None yet";
@@ -28,15 +31,23 @@ export default function GithubSettings() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [allowDrafts, setAllowDrafts] = useState<Record<string, string>>({});
+  // The computer answered that it can't do GitHub's calls: nothing here can work until that is put right there.
+  const [old, setOld] = useState(false);
 
   const load = useCallback(async (refreshFromRelay = false) => {
     if (!owner) {
       setLoading(false);
       return;
     }
-    const next = await attempt(
-      refreshFromRelay ? api.githubAgentRefresh() : api.githubAgentStatus(),
-    );
+    let next: GithubAgentStatus | undefined;
+    try {
+      next = await (refreshFromRelay ? api.githubAgentRefresh() : api.githubAgentStatus());
+      setOld(false);
+    } catch (error) {
+      // An older computer is said once, on the page, in words a person can act on; anything else as before.
+      if (computerLacksGithub(error)) setOld(true);
+      else showToast(error instanceof Error ? error.message : "That didn't work.", "error");
+    }
     if (next) {
       setStatus(next);
       setAllowDrafts((prev) => {
@@ -50,10 +61,12 @@ export default function GithubSettings() {
     setLoading(false);
   }, [owner]);
 
+  // Asked again when the link comes back and when the computer's version changes: after an update it restarts, and this page then works by itself.
+  const version = meta?.version;
   useEffect(() => {
     if (online && owner) void load(true);
     else setLoading(false);
-  }, [online, owner, load]);
+  }, [online, owner, load, version]);
 
   if (!owner) {
     return (
@@ -69,6 +82,17 @@ export default function GithubSettings() {
       </Page>
     );
   }
+
+  if (old)
+    return (
+      <Page>
+        <Stack.Screen options={{ title: "GitHub" }} />
+        {/* Which computer answered, and what it runs: with several computers joined, it is the one Settings is for. */}
+        <EmptyState {...githubNotice(meta)} action="Check again" onAction={() => void load(true)} />
+        {/* The way out, here: the computer's own update, started from this phone. The page looks again when the computer is back on its new version. */}
+        <AppUpdates key={meta?.serverId} name={meta?.name?.trim() || "Your computer"} />
+      </Page>
+    );
 
   const hasInstallations = (status?.installations?.length ?? 0) > 0;
   const appSlug = status?.appSlug || "botkins-agent";

@@ -32,7 +32,8 @@ import { computerActions } from "@/state/computers";
 import { answerInline, arrangeBots, type BotFilter, filterBots, filterLabels, todayRow } from "./arrange";
 import { AVATAR, BotBoard, type BoardScroll, BotMenu, BotRow } from "./BotBoard";
 import { runComputerChoice } from "./computers";
-import { applyPlan, DRAG, dropPlan, type Zone } from "./drag";
+import { dropPlan, type Zone } from "./drag";
+import { useHeldOrder } from "./useHeldOrder";
 import { ServerLinkStatus } from "./ServerLinkStatus";
 
 /** The big avatars at the top: every pinned bot, four to a row, and bigger when there are three or fewer. */
@@ -261,37 +262,15 @@ function HomeFrame({ children, scroll, scrollEnabled, onScrolled, quietLink }: {
   );
 }
 
-/**
- * A drop's new order, shown at once until the computer's own state arrives: while its calls are out,
- * then until the bots change once more after they finish (or DRAG.HOLD_ORDER_MS). A failed call shows
- * its toast and the computer's order comes back.
- */
+/** A drop on the board, carried out: the new order shows at once (useHeldOrder). */
 function useDropOrder(bots: Bot[]) {
   const sections = usePart("sections");
-  const [pending, setPending] = useState<{ bots: Bot[]; done?: Bot[] } | null>(null);
-  const stale = !!pending?.done && pending.done !== bots;
-  useEffect(() => {
-    if (stale) setPending(null);
-  }, [stale]);
-  useEffect(() => {
-    if (!pending?.done) return;
-    const timer = setTimeout(() => setPending(null), DRAG.HOLD_ORDER_MS);
-    return () => clearTimeout(timer);
-  }, [pending]);
+  const held = useHeldOrder(bots);
   const drop = (id: string, zone: Zone, index: number) => {
     const plan = dropPlan(bots, sections, id, zone, index);
-    if (!plan) return;
-    const shown = applyPlan(bots, id, plan);
-    setPending({ bots: shown });
-    void (async () => {
-      let ok = true;
-      if (plan.flags) ok = !!(await attempt(api.setBotFlags(id, plan.flags).then(() => true)));
-      if (ok && plan.order) ok = !!(await attempt(api.reorderBots(plan.order).then(() => true)));
-      // Kept until the bots change after this, so the list doesn't flick back to the old order first.
-      setPending((now) => (now?.bots === shown ? (ok ? { bots: shown, done: useApp.getState().parts.bots ?? [] } : null) : now));
-    })();
+    if (plan) held.carry(id, plan);
   };
-  return { shown: pending && !stale ? pending.bots : bots, drop };
+  return { shown: held.shown, drop };
 }
 
 const HomeBody = memo(function HomeBody({
@@ -463,11 +442,15 @@ export default function Home() {
   const unifiedHosts = useApp((state) => state.unifiedHosts);
   const includedHosts = unifiedHosts.filter((h) => h.included);
   const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
+  // Read on every render, whichever way the name below goes. Read only with unified mode off, as it
+  // was, the number of hooks changed when the mode did, and React threw: the app closed the moment
+  // "Operate all bots in one view" was switched while this page was mounted.
+  const pairingName = useApp((state) => state.pairing?.name);
   const computer = unified
     ? onlineHosts === includedHosts.length
       ? "All computers"
       : onlineHosts + "/" + includedHosts.length + " computers"
-    : (useApp((state) => state.pairing?.name) ?? "Computer");
+    : (pairingName ?? "Computer");
   const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computerOrder = usePrefs(prefs => prefs.computerOrder);

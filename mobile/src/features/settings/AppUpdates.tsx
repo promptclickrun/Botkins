@@ -8,7 +8,7 @@ import { Download, ExternalLink, History, RefreshCw, Zap } from "lucide-react-na
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 import type { AppUpdate } from "@/link/types";
-import { markRestarting, useRestarting } from "@/state/appUpdate";
+import { markRestarting, updatedComputer, useRestarting } from "@/state/appUpdate";
 import { useCapability, useOnline } from "@/state/hooks";
 import { trackResource } from "@/state/ledger";
 import { api, attempt } from "@/state/link";
@@ -26,7 +26,8 @@ export function AppUpdates({ name }: { name: string }) {
   const capable = useCapability(UPDATE_CAPABILITY);
   const online = useOnline();
   const visible = useAppActive(useOnShow());
-  const serverId = useApp((state) => state.pairing?.serverId);
+  // The computer these calls reach: with several computers joined, the one Settings is for.
+  const serverId = useApp(updatedComputer);
   const restarting = useRestarting();
   const [update, setUpdate] = useState<AppUpdate>();
   const [problem, setProblem] = useState<string>();
