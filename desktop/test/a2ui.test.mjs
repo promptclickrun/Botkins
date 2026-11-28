@@ -316,6 +316,22 @@ function makeFakeWorkspace() {
     memberAuthor(id) {
       return { memberId: id, name: "Member " + id };
     },
+    teamOf() {
+      return {
+        roles: [
+          { id: "r_guest", name: "Guest", perms: { agents: ["view", "chat"], today: ["view"] }, bots: "all" },
+          { id: "r_collab", name: "Collaborator", perms: { agents: ["view", "chat"], today: ["view", "use"] }, bots: "all" },
+        ],
+        groups: [
+          { id: "g_guest", name: "Guests", roleId: "r_guest" },
+          { id: "g_collab", name: "Collabs", roleId: "r_collab" },
+        ],
+        members: [
+          { id: "m_guest", name: "Guest Member", groupId: "g_guest" },
+          { id: "m_collab", name: "Collab Member", groupId: "g_collab" },
+        ],
+      };
+    },
   };
   ws.workflows = new Workflows(ws, { githubAuth: { status: async () => ({ installed: false }) } });
   return { ws, saved, submitted };
@@ -551,6 +567,317 @@ test("workflow Output step renders templated A2UI v1.0 surface and routes workfl
   const secondRun = ws.workflows.getRun(triggered.workflowRunId);
   assert.equal(secondRun.context.action_name, "approve_release");
   assert.equal(secondRun.context.tag, "v0.18.0");
+});
+
+test("workflow ACL, explicit approval decisions, and fixed input precedence (a2uiAction & a2uiFunction)", async () => {
+  const { ws } = makeFakeWorkspace();
+  const chat = ws.chat("chat-main");
+
+  // 1) Approval workflow (Output resume surface -> Approval gate -> Output)
+  const approvalWf = ws.workflows.create({
+    name: "Deploy Approval",
+    enabled: true,
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "manual", config: { inputs: [{ name: "env" }] } },
+      { id: "ap1", kind: "approval", config: { message: "Approve deploy to {{env}}?" } },
+      { id: "o_ok", kind: "output", config: { destination: "chat", botName: "Alfie", template: "Approved {{env}}" } },
+      { id: "o_no", kind: "output", config: { destination: "chat", botName: "Alfie", template: "Rejected {{env}}" } },
+    ],
+    edges: [
+      { from: "t1", to: "ap1", branch: "default" },
+      { from: "ap1", to: "o_ok", branch: "approved" },
+      { from: "ap1", to: "o_no", branch: "rejected" },
+    ],
+  });
+  const waitingRun = ws.workflows.runManual(approvalWf.id, { inputs: { env: "prod" }, triggeredBy: "owner" });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+
+  const wfFnCatalog = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://example.com/a2ui/wf-gate.json",
+    protocolVersion: "1.0",
+    catalogId: "https://example.com/a2ui/wf-gate.json",
+    functions: {
+      approve: { type: "object", properties: { "@call": { const: "approve" } }, required: ["@call"], returnType: "object", allowedCallers: "rendererOrAgent" },
+      reject: { type: "object", properties: { "@call": { const: "reject" } }, required: ["@call"], returnType: "object", allowedCallers: "rendererOrAgent" },
+      cancel: { type: "object", properties: { "@call": { const: "cancel" } }, required: ["@call"], returnType: "object", allowedCallers: "rendererOrAgent" },
+      ship: {
+        type: "object",
+        properties: {
+          "@call": { const: "ship" },
+          args: { type: "object", properties: { function_name: { type: "string" }, surface_id: { type: "string" }, env: { type: "string" } } },
+        },
+        required: ["@call"],
+        returnType: "object",
+        allowedCallers: "rendererOrAgent",
+      },
+    },
+  };
+
+  // Attach default (owner-only) resume surface to chat
+  chat.messages.push({
+    role: "assistant",
+    text: "Approval gate",
+    time: Date.now(),
+    a2uiSurfaces: [
+      {
+        surfaceId: "gate-owner-only",
+        version: "1.0",
+        catalogId: A2UI_BASIC_CATALOG_ID,
+        inlineCatalogs: [wfFnCatalog],
+        sendDataModel: true,
+        components: [{ id: "root", component: "Text", text: "Deploy gate" }],
+        dataModel: {},
+        workflow: { workflowId: approvalWf.id, workflowName: approvalWf.name, runId: waitingRun.id, onAction: "resume" },
+      },
+    ],
+  });
+
+  // 1a) Member pressing approve on a workflow resume surface is rejected and run stays waiting_approval
+  assert.throws(
+    () =>
+      handleChatA2uiAction(
+        ws,
+        chat.id,
+        { surfaceId: "gate-owner-only", sourceComponentId: "root", name: "approve", actionId: "m-ap-1" },
+        "member:m_collab",
+      ),
+    /Only the host owner/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+
+  // Same for a2uiFunction path
+  assert.throws(
+    () =>
+      handleChatA2uiFunction(
+        ws,
+        chat.id,
+        {
+          kind: "callAgentFunction",
+          surfaceId: "gate-owner-only",
+          functionCallId: "m-fn-ap-1",
+          callFunction: { "@call": "approve", catalogId: wfFnCatalog.catalogId },
+        },
+        "member:m_collab",
+      ),
+    /Only the host owner/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+
+  // 1b) Even with allowMembers: true, a Guest without today/use is rejected on both action & function paths
+  const gateSurface = chat.messages.at(-1).a2uiSurfaces[0];
+  gateSurface.allowMembers = true;
+  assert.throws(
+    () =>
+      handleChatA2uiAction(
+        ws,
+        chat.id,
+        { surfaceId: "gate-owner-only", sourceComponentId: "root", name: "approve", actionId: "g-ap-1" },
+        "member:m_guest",
+      ),
+    /team role doesn't allow/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+  assert.throws(
+    () =>
+      handleChatA2uiFunction(
+        ws,
+        chat.id,
+        {
+          kind: "callAgentFunction",
+          surfaceId: "gate-owner-only",
+          functionCallId: "g-fn-ap-1",
+          callFunction: { "@call": "approve", catalogId: wfFnCatalog.catalogId },
+        },
+        "member:m_guest",
+      ),
+    /team role doesn't allow/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+
+  // 1c) A "cancel" action / function on a resume surface throws and does NOT approve the gate
+  assert.throws(
+    () =>
+      handleChatA2uiAction(
+        ws,
+        chat.id,
+        { surfaceId: "gate-owner-only", sourceComponentId: "root", name: "cancel", actionId: "o-cancel-1" },
+        "owner",
+      ),
+    /not a valid workflow approval decision/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+  assert.throws(
+    () =>
+      handleChatA2uiFunction(
+        ws,
+        chat.id,
+        {
+          kind: "callAgentFunction",
+          surfaceId: "gate-owner-only",
+          functionCallId: "o-fn-cancel-1",
+          callFunction: { "@call": "cancel", catalogId: wfFnCatalog.catalogId },
+        },
+        "owner",
+      ),
+    /not a valid workflow approval decision/,
+  );
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "waiting_approval");
+
+  // 1d) Member WITH allowMembers: true AND today/use CAN explicitly approve via a2uiFunction
+  const fnApproved = handleChatA2uiFunction(
+    ws,
+    chat.id,
+    {
+      kind: "callAgentFunction",
+      surfaceId: "gate-owner-only",
+      functionCallId: "c-fn-ap-1",
+      callFunction: { "@call": "approve", catalogId: wfFnCatalog.catalogId },
+    },
+    "member:m_collab",
+  );
+  assert.equal(fnApproved.route, "workflow");
+  assert.equal(fnApproved.mode, "resume");
+  assert.equal(fnApproved.decision, "approved");
+  await ws.workflows.waitForRun(waitingRun.id);
+  assert.equal(ws.workflows.getRun(waitingRun.id).status, "completed");
+
+  // 1e) Second waiting run: declared decision map in workflow meta works, and explicit reject works on a2uiAction
+  const waitingRun2 = ws.workflows.runManual(approvalWf.id, { inputs: { env: "staging" }, triggeredBy: "owner" });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(ws.workflows.getRun(waitingRun2.id).status, "waiting_approval");
+  const latestGateMsg = chat.messages.find((m) => m.a2uiSurfaces?.some((s) => s.surfaceId === "gate-owner-only"));
+  latestGateMsg.a2uiSurfaces[0].workflow = {
+    workflowId: approvalWf.id,
+    workflowName: approvalWf.name,
+    runId: waitingRun2.id,
+    onAction: "resume",
+    decisions: { ship_now: "approved" },
+  };
+  const declaredOk = handleChatA2uiAction(
+    ws,
+    chat.id,
+    { surfaceId: "gate-owner-only", sourceComponentId: "root", name: "ship_now", actionId: "o-ship-now" },
+    "owner",
+  );
+  assert.equal(declaredOk.decision, "approved");
+  await ws.workflows.waitForRun(waitingRun2.id);
+  assert.equal(ws.workflows.getRun(waitingRun2.id).status, "completed");
+
+  // 2) Trigger workflow ACL + fixed input key precedence (a2uiAction & a2uiFunction)
+  const triggerWf = ws.workflows.create({
+    name: "Trigger Target",
+    enabled: true,
+    nodes: [
+      { id: "t1", kind: "trigger", triggerKind: "manual", config: { inputs: [{ name: "env" }] } },
+      { id: "o1", kind: "output", config: { destination: "chat", botName: "Alfie", template: "Triggered {{env}}" } },
+    ],
+    edges: [{ from: "t1", to: "o1", branch: "default" }],
+  });
+  chat.messages.push({
+    role: "assistant",
+    text: "Trigger card",
+    time: Date.now(),
+    a2uiSurfaces: [
+      {
+        surfaceId: "trig-owner-only",
+        version: "1.0",
+        catalogId: A2UI_BASIC_CATALOG_ID,
+        inlineCatalogs: [wfFnCatalog],
+        sendDataModel: true,
+        components: [{ id: "root", component: "Text", text: "Trigger" }],
+        dataModel: {},
+        workflow: { workflowId: triggerWf.id, workflowName: triggerWf.name, onAction: "trigger" },
+      },
+    ],
+  });
+
+  const runsBefore = ws.workflows.runs.filter((r) => r.workflowId === triggerWf.id).length;
+
+  // 2a) Member on default trigger surface is rejected and NO run gets created (action + function)
+  assert.throws(
+    () =>
+      handleChatA2uiAction(
+        ws,
+        chat.id,
+        { surfaceId: "trig-owner-only", sourceComponentId: "root", name: "ship", actionId: "m-tr-1" },
+        "member:m_collab",
+      ),
+    /Only the host owner/,
+  );
+  assert.throws(
+    () =>
+      handleChatA2uiFunction(
+        ws,
+        chat.id,
+        {
+          kind: "callAgentFunction",
+          surfaceId: "trig-owner-only",
+          functionCallId: "m-fn-tr-1",
+          callFunction: { "@call": "ship", catalogId: wfFnCatalog.catalogId, args: { env: "prod" } },
+        },
+        "member:m_collab",
+      ),
+    /Only the host owner/,
+  );
+  assert.equal(ws.workflows.runs.filter((r) => r.workflowId === triggerWf.id).length, runsBefore);
+
+  // 2b) Context / args trying to override fixed keys (`action_name`, `surface_id`, `function_name`, `function_call_id`) cannot override them
+  const trigAct = handleChatA2uiAction(
+    ws,
+    chat.id,
+    {
+      surfaceId: "trig-owner-only",
+      sourceComponentId: "root",
+      name: "real_action",
+      actionId: "o-tr-override",
+      context: {
+        action_name: "spoofed_action",
+        surface_id: "spoofed-surface",
+        component_id: "spoofed-comp",
+        action_context: "spoofed-ctx",
+        env: "staging",
+      },
+    },
+    "owner",
+  );
+  await ws.workflows.waitForRun(trigAct.workflowRunId);
+  const actRun = ws.workflows.getRun(trigAct.workflowRunId);
+  assert.equal(actRun.context.action_name, "real_action");
+  assert.equal(actRun.context.surface_id, "trig-owner-only");
+  assert.equal(actRun.context.component_id, "root");
+  assert.notEqual(actRun.context.action_context, "spoofed-ctx");
+  assert.equal(actRun.context.env, "staging");
+
+  const trigFn = handleChatA2uiFunction(
+    ws,
+    chat.id,
+    {
+      kind: "callAgentFunction",
+      surfaceId: "trig-owner-only",
+      functionCallId: "o-fn-override",
+      callFunction: {
+        "@call": "ship",
+        catalogId: wfFnCatalog.catalogId,
+        args: {
+          function_name: "spoofed_fn",
+          function_call_id: "spoofed-call",
+          surface_id: "spoofed-surface",
+          function_args: "spoofed-args",
+          env: "canary",
+        },
+      },
+    },
+    "owner",
+  );
+  await ws.workflows.waitForRun(trigFn.workflowRunId);
+  const fnRun = ws.workflows.getRun(trigFn.workflowRunId);
+  assert.equal(fnRun.context.function_name, "ship");
+  assert.equal(fnRun.context.function_call_id, "o-fn-override");
+  assert.equal(fnRun.context.surface_id, "trig-owner-only");
+  assert.notEqual(fnRun.context.function_args, "spoofed-args");
+  assert.equal(fnRun.context.env, "canary");
 });
 
 test("Link remoteArgs & team ACL permit owner and chat-member chat.a2uiAction", () => {

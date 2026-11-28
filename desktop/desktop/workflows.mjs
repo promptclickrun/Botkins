@@ -429,6 +429,9 @@ function resolveOutputA2ui(a2uiCfg, context, wf, run, bot, targetChat, ws) {
   let onAction;
   let targetWorkflowId;
   let dispatch;
+  let allowMembers = false;
+  let decisions;
+  let decision;
   if (typeof a2uiCfg === "string") {
     const resolvedStr = resolveTemplate(a2uiCfg, context).trim();
     const parsed = JSON.parse(resolvedStr);
@@ -438,6 +441,13 @@ function resolveOutputA2ui(a2uiCfg, context, wf, run, bot, targetChat, ws) {
   } else if (a2uiCfg && typeof a2uiCfg === "object") {
     onAction = a2uiCfg.onAction;
     targetWorkflowId = typeof a2uiCfg.targetWorkflowId === "string" && a2uiCfg.targetWorkflowId.trim() ? a2uiCfg.targetWorkflowId.trim() : undefined;
+    allowMembers = a2uiCfg.allowMembers === true;
+    if (a2uiCfg.decisions && typeof a2uiCfg.decisions === "object" && !Array.isArray(a2uiCfg.decisions)) {
+      decisions = resolveTemplateDeep(a2uiCfg.decisions, context);
+    }
+    if (typeof a2uiCfg.decision === "string" && a2uiCfg.decision.trim()) {
+      decision = resolveTemplate(a2uiCfg.decision, context).trim();
+    }
     if (a2uiCfg.dispatch && typeof a2uiCfg.dispatch === "object") {
       dispatch = resolveTemplateDeep(a2uiCfg.dispatch, context);
     }
@@ -483,11 +493,14 @@ function resolveOutputA2ui(a2uiCfg, context, wf, run, bot, targetChat, ws) {
     runId: run.id,
     ...(onAction && onAction !== "bot" ? { onAction } : {}),
     ...(targetWorkflowId ? { targetWorkflowId } : {}),
+    ...(decisions ? { decisions } : {}),
+    ...(decision ? { decision } : {}),
   };
 
   const applied = applyA2uiMessages(existingSurfaces, normalizedMessages, {
     botId: bot?.id,
     workflow: wfMeta,
+    ...(allowMembers ? { allowMembers: true } : {}),
     ...(dispatch ? { dispatch } : {}),
     now: Date.now(),
   });

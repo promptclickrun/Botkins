@@ -2,6 +2,7 @@
 // two-way function RPC (`callRendererFunction` <-> `rendererFunctionResponse`, `callAgentFunction` <-> `agentFunctionResponse`),
 // bot-turn trigger ACL (owner-default, opt-in `allowMembers` with rate limiting), and action routing.
 import { defineTool } from "./providers/provider.mjs";
+import { memberCanSpaces } from "./team-turn.mjs";
 import {
   A2UI_BASIC_CATALOG_ID,
   A2UI_BOTKINS_CATALOG_ID,
@@ -157,6 +158,53 @@ export function formatA2uiAgentFunctionPrompt(surface, call) {
 }
 
 /** Checks bot-turn trigger ACL: owner always allowed; members require `surface.allowMembers === true` + rate-limit. */
+const APPROVE_ACTIONS = new Set(["approve", "approved", "confirm"]);
+const REJECT_ACTIONS = new Set(["reject", "rejected", "deny"]);
+
+function memberIdFromActor(actor) {
+  if (typeof actor !== "string" || !actor.startsWith("member:")) return "";
+  return actor.slice("member:".length).trim();
+}
+
+function enforceWorkflowTriggerAcl(ws, surface, actor) {
+  if (actor === "owner") return;
+  if (surface.allowMembers !== true) {
+    throw new Error("Only the host owner can trigger or approve workflow actions on this surface.");
+  }
+  const memberId = memberIdFromActor(actor);
+  const team = typeof ws.teamOf === "function" ? ws.teamOf() : null;
+  if (!memberId || !memberCanSpaces(memberId, team, "use")) {
+    throw new Error("Your team role doesn't allow running or approving workflows from this surface.");
+  }
+  checkMemberTriggerRateLimit(ws, actor, surface.surfaceId);
+}
+
+/**
+ * Resolves a workflow approval decision for `onAction: "resume"` surfaces.
+ * Requires an explicit approve (`approve` / `approved` / `confirm`), reject (`reject` / `rejected` / `deny`),
+ * or a declared decision in `surface.workflow.decisions[name]` / `surface.workflow.decision`.
+ * Throws for anything else (e.g. "cancel", "later", "details") without touching the waiting run.
+ */
+function resolveWorkflowApprovalDecision(name, wfMeta) {
+  const rawName = typeof name === "string" ? name.trim() : "";
+  const norm = rawName.toLowerCase();
+  const declaredMap = isPlainObject(wfMeta?.decisions) ? wfMeta.decisions : null;
+  const declared =
+    (declaredMap && Object.hasOwn(declaredMap, rawName) ? declaredMap[rawName] : undefined) ??
+    (declaredMap && Object.hasOwn(declaredMap, norm) ? declaredMap[norm] : undefined) ??
+    wfMeta?.decision;
+  if (typeof declared === "string") {
+    const d = declared.trim().toLowerCase();
+    if (d === "approved" || APPROVE_ACTIONS.has(d)) return "approved";
+    if (d === "rejected" || REJECT_ACTIONS.has(d)) return "rejected";
+  }
+  if (APPROVE_ACTIONS.has(norm)) return "approved";
+  if (REJECT_ACTIONS.has(norm)) return "rejected";
+  throw new Error(
+    `Action "${rawName || "(empty)"}" is not a valid workflow approval decision (expected approve/confirm or reject/deny).`,
+  );
+}
+
 function enforceBotTurnTriggerAcl(ws, surface, actor) {
   if (actor === "owner") return;
   if (surface.allowMembers !== true) {
@@ -539,8 +587,31 @@ export function handleChatA2uiFunction(ws, chatId, rawPayload, actor = "owner") 
     };
   }
 
-  // Enforce bot-turn trigger ACL (owner by default, or member if surface.allowMembers === true with rate limiting).
-  enforceBotTurnTriggerAcl(ws, surface, actor);
+  const isWorkflowBacked = Boolean(surface.workflow?.workflowId && surface.workflow?.onAction);
+
+  // Enforce trigger ACL before mutating surface state or creating pending call entries.
+  // Workflow surfaces require owner by default; members need surface.allowMembers === true AND today/use.
+  if (isWorkflowBacked) {
+    enforceWorkflowTriggerAcl(ws, surface, actor);
+  } else {
+    enforceBotTurnTriggerAcl(ws, surface, actor);
+  }
+
+  // Validate workflow resume decision up front so invalid names (e.g. "cancel") throw without
+  // touching the waiting approval run or recording a pending function call.
+  let workflowResumeRun = null;
+  let workflowResumeDecision = null;
+  if (isWorkflowBacked) {
+    const wfMeta = surface.workflow;
+    if (!ws.workflows) throw new Error("Workflows are not available.");
+    if (wfMeta.onAction === "resume" && wfMeta.runId) {
+      const existingRun = ws.workflows.runs.find((r) => r.id === wfMeta.runId);
+      if (existingRun && existingRun.status === "waiting_approval") {
+        workflowResumeDecision = resolveWorkflowApprovalDecision(fnName, wfMeta);
+        workflowResumeRun = existingRun;
+      }
+    }
+  }
 
   // Persist local dataModel edits submitted with the function call.
   let workingSurface = surface;
@@ -601,43 +672,51 @@ export function handleChatA2uiFunction(ws, chatId, rawPayload, actor = "owner") 
   ws.save();
 
   // Route to workflow resume/trigger if workflow-backed
-  if (workingSurface.workflow?.workflowId && workingSurface.workflow?.onAction) {
+  if (isWorkflowBacked) {
     const wfMeta = workingSurface.workflow;
-    if (!ws.workflows) throw new Error("Workflows are not available.");
-    if (wfMeta.onAction === "resume" && wfMeta.runId) {
-      const existingRun = ws.workflows.runs.find((r) => r.id === wfMeta.runId);
-      if (existingRun && existingRun.status === "waiting_approval") {
-        const decision = fnName.toLowerCase().includes("reject") ? "rejected" : "approved";
-        ws.workflows.respondApproval(existingRun.id, existingRun.pendingApproval?.nodeId, decision, JSON.stringify(parsed.callFunction.args ?? {}));
-        const settled = settleAgentFunctionResponse(ws, chat.id, {
-          functionCallId: callId,
-          value: fnInfo.def.returnType === "object" || fnInfo.def.returnType === "any"
-            ? { workflowRunId: existingRun.id, decision }
-            : fnInfo.def.returnType === "boolean"
-              ? decision === "approved"
-              : decision,
-        });
-        return {
-          ok: true,
-          idempotent: false,
-          kind: "callAgentFunction",
-          route: "workflow",
-          mode: "resume",
-          workflowId: wfMeta.workflowId,
-          workflowRunId: existingRun.id,
-          functionCallId: callId,
-          status: "settled",
-          envelope: settled.envelope,
-        };
-      }
+    if (workflowResumeRun && workflowResumeDecision) {
+      ws.workflows.respondApproval(
+        workflowResumeRun.id,
+        workflowResumeRun.pendingApproval?.nodeId,
+        workflowResumeDecision,
+        JSON.stringify(parsed.callFunction.args ?? {}),
+      );
+      const settled = settleAgentFunctionResponse(ws, chat.id, {
+        functionCallId: callId,
+        value: fnInfo.def.returnType === "object" || fnInfo.def.returnType === "any"
+          ? { workflowRunId: workflowResumeRun.id, decision: workflowResumeDecision }
+          : fnInfo.def.returnType === "boolean"
+            ? workflowResumeDecision === "approved"
+            : workflowResumeDecision,
+      });
+      return {
+        ok: true,
+        idempotent: false,
+        kind: "callAgentFunction",
+        route: "workflow",
+        mode: "resume",
+        workflowId: wfMeta.workflowId,
+        workflowRunId: workflowResumeRun.id,
+        decision: workflowResumeDecision,
+        functionCallId: callId,
+        status: "settled",
+        envelope: settled.envelope,
+      };
     }
     const wfId = wfMeta.targetWorkflowId || wfMeta.workflowId;
+    const primitiveArgs = Object.fromEntries(
+      Object.entries(parsed.callFunction.args ?? {}).filter(
+        ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
+      ),
+    );
     const triggered = ws.workflows.runManual(wfId, {
       inputs: {
+        ...primitiveArgs,
         function_name: fnName,
         function_call_id: callId,
         surface_id: parsed.surfaceId,
         function_args: JSON.stringify(parsed.callFunction.args ?? {}),
+        ...(workingSurface.sendDataModel && parsed.dataModel ? { data_model: JSON.stringify(parsed.dataModel) } : {}),
       },
       triggeredBy: actor === "owner" ? "a2ui-function" : actor,
     });
@@ -840,8 +919,9 @@ export function handleChatA2uiAction(ws, chatId, rawPayload, actor = "owner") {
     }
   }
 
-  // (c) Workflow surface action routing: resume waiting approval or trigger workflow with action inputs.
+  // (c) Workflow surface action routing: owner-only by default (members need allowMembers + today/use).
   if (workingSurface.workflow?.workflowId && workingSurface.workflow?.onAction) {
+    enforceWorkflowTriggerAcl(ws, workingSurface, actor);
     const wfMeta = workingSurface.workflow;
     const mode = wfMeta.onAction; // "resume" | "trigger"
     if (!ws.workflows) throw new Error("Workflows are not available.");
@@ -849,7 +929,7 @@ export function handleChatA2uiAction(ws, chatId, rawPayload, actor = "owner") {
     if (mode === "resume" && wfMeta.runId) {
       const existingRun = ws.workflows.runs.find((r) => r.id === wfMeta.runId);
       if (existingRun && existingRun.status === "waiting_approval") {
-        const decision = normName === "reject" || normName === "rejected" || normName === "deny" ? "rejected" : "approved";
+        const decision = resolveWorkflowApprovalDecision(action.name, wfMeta);
         const note = typeof action.context?.note === "string"
           ? action.context.note
           : action.userMessage || JSON.stringify(action.context);
@@ -866,16 +946,17 @@ export function handleChatA2uiAction(ws, chatId, rawPayload, actor = "owner") {
 
     if (mode === "trigger" || mode === "resume") {
       const wfId = wfMeta.targetWorkflowId || wfMeta.workflowId;
+      const primitiveContext = Object.fromEntries(
+        Object.entries(action.context ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean"),
+      );
       const inputs = {
+        ...primitiveContext,
         action_name: action.name,
         surface_id: action.surfaceId,
         component_id: action.sourceComponentId,
         ...(action.userMessage ? { user_message: action.userMessage } : {}),
         action_context: JSON.stringify(action.context),
         ...(workingSurface.sendDataModel && action.dataModel ? { data_model: JSON.stringify(action.dataModel) } : {}),
-        ...Object.fromEntries(
-          Object.entries(action.context ?? {}).filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean"),
-        ),
       };
       const triggered = ws.workflows.runManual(wfId, {
         inputs,
