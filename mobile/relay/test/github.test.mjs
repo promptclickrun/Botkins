@@ -397,7 +397,7 @@ describe("POST /v1/github/events on Cloudflare Worker (wrangler dev)", () => {
   before(async () => {
     fakeGitHub = await startFakeGitHubApi(TEST_CATALOG);
     [dev, devOff] = await Promise.all([
-      startDev({ RATE_LIMITS: "off", GITHUB_WEBHOOK_SECRET: SECRET, GITHUB_API_BASE: fakeGitHub.base }),
+      startDev({ RATE_LIMITS: "off", GITHUB_WEBHOOK_SECRET: SECRET, GITHUB_API_BASE: fakeGitHub.base, GITHUB_ALLOW_USER_TOKEN_AUTH: "1" }),
       startDev({ RATE_LIMITS: "off", GITHUB_API_BASE: fakeGitHub.base }),
     ]);
   });
@@ -609,6 +609,7 @@ describe("POST /v1/github/events on self-hosted Node relay (parity + authz + rat
       limits: true,
       githubWebhookSecret: SECRET,
       githubApiBase: fakeGitHub.base,
+      githubAllowUserTokenAuth: true,
       clientIpHeader: "x-test-ip",
     });
     await new Promise((res) => server.listen(0, "127.0.0.1", res));

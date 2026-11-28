@@ -4420,6 +4420,75 @@ export class MockBackend {
       });
       return { name: "botkins-usage-" + days + "d.csv", text: rows.map((row) => row.map(cell).join(",")).join("\n") + "\n" };
     },
+    // GitHub App ("Botkins Agent") settings (strictly owner-only).
+    githubAgentStatus() {
+      this._githubAgent ??= {
+        appSlug: "botkins-agent",
+        mentionHandle: "@botkins-agent",
+        relayConnected: true,
+        eventsOn: true,
+        installations: [
+          {
+            installationId: 5896932,
+            accountLogin: "acme",
+            accountType: "Organization",
+            installerLogin: "octocat",
+            repositorySelection: "selected",
+            repos: ["acme/app"],
+            suspended: false,
+            updatedAt: now(),
+            manageUrl: "https://github.com/settings/installations/5896932",
+          },
+        ],
+        repos: [
+          {
+            fullName: "acme/app",
+            installationId: 5896932,
+            accountLogin: "acme",
+            answerMentions: true,
+            defaultBotId: this.state.bots[0]?.id ?? null,
+            allowlist: [],
+          },
+        ],
+        lastDelivery: null,
+        manageAppUrl: "https://github.com/apps/botkins-agent",
+      };
+      return structuredClone(this._githubAgent);
+    },
+    githubAgentInstallUrl() {
+      return {
+        url: "https://github.com/apps/botkins-agent/installations/new?state=demo",
+        expiresAt: now() + 600_000,
+        appSlug: "botkins-agent",
+      };
+    },
+    githubAgentRefresh() {
+      return this.githubAgentStatus();
+    },
+    githubAgentSetRepo(repo, patch = {}) {
+      const status = this.githubAgentStatus();
+      const lower = String(repo || "").toLowerCase();
+      let entry = this._githubAgent.repos.find((r) => r.fullName === lower);
+      if (!entry) {
+        entry = { fullName: lower, installationId: 5896932, accountLogin: lower.split("/")[0] || "", answerMentions: false, defaultBotId: null, allowlist: [] };
+        this._githubAgent.repos.push(entry);
+      }
+      if (patch.answerMentions !== undefined) entry.answerMentions = patch.answerMentions === true;
+      if (patch.defaultBotId !== undefined) entry.defaultBotId = patch.defaultBotId || null;
+      if (patch.allowlist !== undefined) {
+        entry.allowlist = Array.isArray(patch.allowlist)
+          ? patch.allowlist.map((u) => String(u).trim().replace(/^@+/, "").toLowerCase()).filter(Boolean)
+          : String(patch.allowlist || "").split(/[\s,]+/).map((u) => u.trim().replace(/^@+/, "").toLowerCase()).filter(Boolean);
+      }
+      this._githubAgent.eventsOn = this._githubAgent.repos.some((r) => r.answerMentions);
+      return structuredClone(this._githubAgent);
+    },
+    githubAgentUnbind(installationId) {
+      this.githubAgentStatus();
+      this._githubAgent.installations = this._githubAgent.installations.filter((i) => i.installationId !== Number(installationId));
+      this._githubAgent.repos = this._githubAgent.repos.filter((r) => r.installationId !== Number(installationId));
+      return structuredClone(this._githubAgent);
+    },
     // External messaging Channel Hooks ("channels-v1", strictly owner-only).
     channelsList() {
       return structuredClone(this.state.channels ?? []);

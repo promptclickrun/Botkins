@@ -1,20 +1,33 @@
-// GitHub webhook ingress helpers and payload trimming for POST /v1/github/events
-// and host repository subscriptions over the authenticated host relay connection.
+// GitHub App ("Botkins Agent") webhook ingress, installation binding (OAuth setup),
+// per-repo installation token minting, team delivery claim locks, and payload trimming.
 //
 // No Cloudflare imports here so Node (self-hosted relay + unit tests) loads this file as-is.
 
-import { MAX_SKEW, hex, roomOf, verifyEd25519 } from "./pure.ts";
-import { BASE64URL_43, readCappedBytes } from "./shared.ts";
+import { MAX_SKEW, base64url, hex, roomOf, verifyEd25519 } from "./pure.ts";
+import { BASE64URL_43, readCappedBytes, securePage, PAGE_CSS } from "./shared.ts";
+import { appJwt } from "./feedback.ts";
 
 export const GITHUB_EVENTS_PATH = "/v1/github/events";
+export const GITHUB_SETUP_PATH = "/v1/github/setup";
+export const GITHUB_AGENT_SLUG_DEFAULT = "botkins-agent";
 export const GITHUB_DELIVERY_BODY_BYTES_LIMIT = 512 * 1024; // 512 KiB
 export const GITHUB_ROUTE_REPOSITORIES_LIMIT = 100;
 export const GITHUB_ROUTE_TTL_SECONDS = 300;
 export const GITHUB_ROUTE_TTL_MS = GITHUB_ROUTE_TTL_SECONDS * 1000;
+export const GITHUB_SETUP_STATE_TTL_SECONDS = 600; // 10 minutes
+export const GITHUB_SETUP_STATE_TTL_MS = GITHUB_SETUP_STATE_TTL_SECONDS * 1000;
+/** Per-room GitHub installation bindings expire after 7 days unless re-authorized via OAuth setup. */
+export const GITHUB_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const GITHUB_DELIVERY_DEDUPE_TTL_MS = 10 * 60_000;
 export const GITHUB_DELIVERY_DEDUPE_MAX = 4096;
+export const GITHUB_CLAIM_TTL_MS = 10 * 60_000;
+export const GITHUB_CLAIM_MAX = 4096;
+export const GITHUB_NONCE_TTL_MS = 15 * 60_000;
+export const GITHUB_NONCE_MAX = 4096;
 export const GITHUB_API_BASE_DEFAULT = "https://api.github.com";
+export const GITHUB_WEB_BASE_DEFAULT = "https://github.com";
 export const GITHUB_AUTH_CHECK_TIMEOUT_MS = 8_000;
+export const GITHUB_OAUTH_TIMEOUT_MS = 10_000;
 export const GITHUB_AUTH_TOKEN_MAX_LEN = 512;
 export const GITHUB_AUTH_CONCURRENCY = 6;
 
@@ -23,7 +36,14 @@ export const GITHUB_RAW_WEBHOOK_EVENTS = [
   "issue_comment",
   "pull_request",
   "pull_request_review",
+  "pull_request_review_comment",
   "check_suite",
+  "status",
+  "push",
+  "installation",
+  "installation_repositories",
+  "organization",
+  "membership",
 ] as const;
 
 export const GITHUB_RAW_WEBHOOK_EVENT_SET: ReadonlySet<string> = new Set(GITHUB_RAW_WEBHOOK_EVENTS);
@@ -32,10 +52,86 @@ export const GITHUB_EVENT_NAME_RE = /^[a-z_]{1,64}$/;
 export const GITHUB_DELIVERY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 export const GITHUB_SIGNATURE_RE = /^sha256=[0-9a-f]{64}$/i;
 export const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
+export const GITHUB_NONCE_RE = /^[A-Za-z0-9_-]{16,64}$/;
+export const GITHUB_SIG_RE = /^[A-Za-z0-9_-]{86}$/;
+export const GITHUB_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62})$/i;
 
 export const GITHUB_SUBSCRIBE_PREFIX = "botkins-github-sub-v1:";
+export const GITHUB_SETUP_STATE_PREFIX = "botkins-github-setup-v1:";
+export const GITHUB_TOKEN_REQ_PREFIX = "botkins-github-token-v1:";
+export const GITHUB_CLAIM_PREFIX = "botkins-github-claim-v1:";
+export const GITHUB_INSTALLATIONS_REQ_PREFIX = "botkins-github-installs-v1:";
+export const GITHUB_UNBIND_PREFIX = "botkins-github-unbind-v1:";
+
+/** Permissions requested when minting a single-repository installation token for a host. */
+export const GITHUB_ALLOWED_TOKEN_PERMISSIONS = [
+  "issues",
+  "pull_requests",
+  "contents",
+  "checks",
+  "statuses",
+  "metadata",
+] as const;
+
+export type GitHubTokenPermissionKey = (typeof GITHUB_ALLOWED_TOKEN_PERMISSIONS)[number];
+export type GitHubTokenPermissionLevel = "read" | "write";
+
+const MAX_PERMISSION_LEVEL: Record<GitHubTokenPermissionKey, GitHubTokenPermissionLevel> = {
+  issues: "write",
+  pull_requests: "write",
+  contents: "write",
+  checks: "read",
+  statuses: "read",
+  metadata: "read",
+};
+
+const DEFAULT_TOKEN_PERMISSIONS: Record<string, GitHubTokenPermissionLevel> = {
+  issues: "write",
+  pull_requests: "write",
+  metadata: "read",
+};
 
 const textEnc = new TextEncoder();
+
+export interface GitHubAgentAppConfig {
+  appId: string;
+  appSlug: string;
+  privateKey: string;
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface GitHubSetupStatePayload {
+  v: 1;
+  key: string;
+  room: string;
+  nonce: string;
+  exp: number;
+  sig: string;
+}
+
+export interface GitHubRepoPermissionEntry {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+}
+
+export interface GitHubInstallationBinding {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  installerLogin: string;
+  repositorySelection: "all" | "selected";
+  repos: string[];
+  /** Per-repo permissions observed for the binding user via `GET /user/installations/{id}/repositories`. */
+  repoPermissions: GitHubRepoPermissionEntry[];
+  suspended: boolean;
+  updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
+}
 
 export interface GitHubSubscribeMessage {
   type: "github-subscribe";
@@ -45,7 +141,7 @@ export interface GitHubSubscribeMessage {
   exp: number;
   repos: string[];
   sig: string;
-  /** Optional short-lived GitHub read token (per-host) or per-repo proof map (`owner/repo` -> token). Never persisted or logged. */
+  /** Legacy self-hosted fallback only (when GITHUB_ALLOW_USER_TOKEN_AUTH=1 and no App credentials). */
   githubToken?: string;
   repoTokens?: Record<string, string>;
 }
@@ -54,7 +150,7 @@ export interface GitHubSubscribeVerified {
   ok: true;
   repos: string[];
   expiresAt: number;
-  /** Ephemeral per-repo read proofs (only kept for the duration of the authorization check, never stored). */
+  /** Ephemeral per-repo read proofs (only used when legacy self-hosted user-token mode is explicitly enabled). */
   proofs: Record<string, string>;
 }
 
@@ -73,6 +169,76 @@ export interface GitHubDeliveryFrame {
   installationId: number | null;
   receivedAt: string;
   payload: Record<string, unknown>;
+}
+
+export interface GitHubInstallationSyncFrame {
+  type: "github-installations";
+  version: 1;
+  appSlug: string;
+  installations: Array<{
+    installationId: number;
+    accountLogin: string;
+    accountType: string;
+    installerLogin: string;
+    repositorySelection: "all" | "selected";
+    repos: string[];
+    repoPermissions?: GitHubRepoPermissionEntry[];
+    suspended: boolean;
+    updatedAt: number;
+    boundAt?: number;
+    expiresAt?: number;
+    expired?: boolean;
+  }>;
+}
+
+export interface GitHubTokenRequestVerified {
+  ok: true;
+  requestId: string;
+  repo: string;
+  permissions: Record<string, GitHubTokenPermissionLevel>;
+}
+
+export interface GitHubClaimRequestVerified {
+  ok: true;
+  requestId: string;
+  deliveryId: string;
+}
+
+export interface GitHubUnbindRequestVerified {
+  ok: true;
+  requestId: string;
+  installationId: number;
+}
+
+/** Reads Botkins Agent GitHub App configuration from Worker or Node env. Never reuses GITHUB_APP_* (Intake). */
+export function agentAppOf(env: {
+  GITHUB_AGENT_APP_ID?: string;
+  GITHUB_AGENT_APP_SLUG?: string;
+  GITHUB_AGENT_APP_KEY?: string;
+  GITHUB_AGENT_CLIENT_ID?: string;
+  GITHUB_AGENT_CLIENT_SECRET?: string;
+}): GitHubAgentAppConfig | null {
+  const appId = typeof env.GITHUB_AGENT_APP_ID === "string" ? env.GITHUB_AGENT_APP_ID.trim() : "";
+  const rawSlug = typeof env.GITHUB_AGENT_APP_SLUG === "string" ? env.GITHUB_AGENT_APP_SLUG.trim() : "";
+  const appSlug = rawSlug && GITHUB_SLUG_RE.test(rawSlug) ? rawSlug.toLowerCase() : GITHUB_AGENT_SLUG_DEFAULT;
+  const privateKey = typeof env.GITHUB_AGENT_APP_KEY === "string" ? env.GITHUB_AGENT_APP_KEY : "";
+  const clientId = typeof env.GITHUB_AGENT_CLIENT_ID === "string" ? env.GITHUB_AGENT_CLIENT_ID.trim() : "";
+  const clientSecret = typeof env.GITHUB_AGENT_CLIENT_SECRET === "string" ? env.GITHUB_AGENT_CLIENT_SECRET.trim() : "";
+  if (!/^\d{1,12}$/.test(appId) || !privateKey.trim() || !clientId || !clientSecret) return null;
+  return { appId, appSlug, privateKey, clientId, clientSecret };
+}
+
+/** Reads whether legacy user-token repo verification is explicitly enabled (self-hosted relays without App creds). */
+export function allowsLegacyUserTokenAuth(env: {
+  GITHUB_ALLOW_USER_TOKEN_AUTH?: string;
+  GITHUB_AGENT_APP_ID?: string;
+  GITHUB_AGENT_APP_KEY?: string;
+  GITHUB_AGENT_CLIENT_ID?: string;
+  GITHUB_AGENT_CLIENT_SECRET?: string;
+}): boolean {
+  const flag = String(env.GITHUB_ALLOW_USER_TOKEN_AUTH ?? "").trim().toLowerCase();
+  if (flag !== "1" && flag !== "true" && flag !== "yes") return false;
+  return agentAppOf(env) === null;
 }
 
 /** Constant-time byte array equality (always scans full length when lengths match). */
@@ -127,25 +293,206 @@ export function normalizeSubscribedRepos(rawRepos: unknown): string[] | null {
   return out;
 }
 
+/** Reads the per-room GitHub binding TTL (defaults to 7 days; tests may override with `GITHUB_BINDING_TTL_MS`). */
+export function bindingTtlMsOf(env?: { GITHUB_BINDING_TTL_MS?: string } | null): number {
+  const raw = env?.GITHUB_BINDING_TTL_MS;
+  if (typeof raw === "string" && /^\d{1,12}$/.test(raw.trim())) {
+    const parsed = Number(raw.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return GITHUB_BINDING_TTL_MS;
+}
+
+/**
+ * Clamps requested installation token permissions against the binding user's verified push permission
+ * on that repository: when `canWrite` is false, every `write` permission is downgraded to `read`.
+ */
+export function clampPermissionsForRepoAccess(
+  permissions: Record<string, GitHubTokenPermissionLevel>,
+  canWrite: boolean,
+): Record<string, GitHubTokenPermissionLevel> {
+  if (canWrite) return { ...permissions };
+  const clamped: Record<string, GitHubTokenPermissionLevel> = {};
+  for (const [k, v] of Object.entries(permissions)) {
+    clamped[k] = v === "write" ? "read" : v;
+  }
+  return clamped;
+}
+
+/** Normalizes a list of `{ fullName | full_name, pull, push, admin }` repository permission records. */
+export function normalizeRepoPermissions(rawRepos: unknown): GitHubRepoPermissionEntry[] {
+  if (!Array.isArray(rawRepos)) return [];
+  const byRepo = new Map<string, GitHubRepoPermissionEntry>();
+  for (const item of rawRepos) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const rawName = typeof rec.fullName === "string" ? rec.fullName : typeof rec.full_name === "string" ? rec.full_name : "";
+    const lower = rawName.trim().toLowerCase();
+    if (!GITHUB_REPO_RE.test(lower)) continue;
+    const perms = rec.permissions && typeof rec.permissions === "object" && !Array.isArray(rec.permissions)
+      ? (rec.permissions as Record<string, unknown>)
+      : rec;
+    const admin = perms.admin === true;
+    const push = perms.push === true || perms.maintain === true || admin;
+    // GitHub's `/user/installations/{id}/repositories` only returns repos the user can read; if `permissions`
+    // is absent on a fixture/older payload, treat `pull` as true and `push`/`admin` as false (fail closed on write).
+    const pull = perms.pull === undefined ? true : perms.pull === true || push || admin;
+    if (!pull) continue;
+    const prev = byRepo.get(lower);
+    byRepo.set(lower, {
+      fullName: lower,
+      pull: true,
+      push: Boolean(prev?.push || push),
+      admin: Boolean(prev?.admin || admin),
+    });
+  }
+  return [...byRepo.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
+
+/** Normalizes a repo list from GitHub installation payloads (ignores invalid entries, no 100 cap). */
+export function normalizeInstallationRepos(rawRepos: unknown): string[] {
+  if (!Array.isArray(rawRepos)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of rawRepos) {
+    const rawName = typeof item === "string" ? item : (item && typeof item === "object" ? (item as Record<string, unknown>).full_name : "");
+    if (typeof rawName !== "string") continue;
+    const cleaned = rawName.trim().toLowerCase();
+    if (!GITHUB_REPO_RE.test(cleaned) || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    out.push(cleaned);
+  }
+  out.sort();
+  return out;
+}
+
 /** Canonical signing string for host GitHub subscription messages. */
 export function githubSubscribeChallenge(room: string, time: number, exp: number, repos: string[]): string {
   return `${GITHUB_SUBSCRIBE_PREFIX}${room}:${time}:${exp}:${repos.join(",")}`;
+}
+
+/** Canonical signing string for the GitHub App installation OAuth `state` parameter. */
+export function githubSetupStateChallenge(room: string, nonce: string, exp: number): string {
+  return `${GITHUB_SETUP_STATE_PREFIX}${room}:${nonce}:${exp}`;
+}
+
+/** Canonical signing string for a host WebSocket installation token request. */
+export function githubTokenRequestChallenge(room: string, requestId: string, repo: string, time: number, permissionsKey: string): string {
+  return `${GITHUB_TOKEN_REQ_PREFIX}${room}:${requestId}:${repo}:${time}:${permissionsKey}`;
+}
+
+/** Canonical signing string for a host WebSocket delivery claim lock request. */
+export function githubClaimChallenge(room: string, requestId: string, deliveryId: string, time: number): string {
+  return `${GITHUB_CLAIM_PREFIX}${room}:${requestId}:${deliveryId}:${time}`;
+}
+
+/** Canonical signing string for listing a room's bound installations over WebSocket. */
+export function githubInstallationsChallenge(room: string, requestId: string, time: number): string {
+  return `${GITHUB_INSTALLATIONS_REQ_PREFIX}${room}:${requestId}:${time}`;
+}
+
+/** Canonical signing string for unbinding an installation from a room over WebSocket. */
+export function githubUnbindChallenge(room: string, requestId: string, installationId: number, time: number): string {
+  return `${GITHUB_UNBIND_PREFIX}${room}:${requestId}:${installationId}:${time}`;
+}
+
+function decodeBase64UrlText(raw: string): string | null {
+  if (!raw || raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw)) return null;
+  try {
+    const padded = raw.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - (raw.length % 4)) % 4);
+    const bin = atob(padded);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/** Encodes a signed GitHub setup state object into a compact base64url string safe for `?state=`. */
+export function encodeGitHubSetupState(payload: GitHubSetupStatePayload): string {
+  return base64url(textEnc.encode(JSON.stringify(payload)));
+}
+
+/**
+ * Decodes and cryptographically verifies the `state` query parameter returned to `GET /v1/github/setup`.
+ * Requires valid Ed25519 signature over `githubSetupStateChallenge(room, nonce, exp)`, matching `roomOf(key)`,
+ * valid nonce, and `nowSec < exp <= nowSec + 630`.
+ */
+export async function verifyGitHubSetupState(
+  rawState: string | null | undefined,
+  nowMs = Date.now(),
+): Promise<{ ok: true; room: string; key: string; nonce: string; exp: number } | { ok: false; error: string }> {
+  if (typeof rawState !== "string" || !rawState.trim()) return { ok: false, error: "missing_state" };
+  const decoded = decodeBase64UrlText(rawState.trim());
+  if (!decoded) return { ok: false, error: "bad_state" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    return { ok: false, error: "bad_state" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: "bad_state" };
+  const rec = parsed as Record<string, unknown>;
+  if (rec.v !== 1) return { ok: false, error: "bad_state" };
+  const key = typeof rec.key === "string" ? rec.key : "";
+  const room = typeof rec.room === "string" ? rec.room : "";
+  const nonce = typeof rec.nonce === "string" ? rec.nonce : "";
+  const sig = typeof rec.sig === "string" ? rec.sig : "";
+  const exp = typeof rec.exp === "number" ? rec.exp : NaN;
+  if (!BASE64URL_43.test(key) || !BASE64URL_43.test(room) || !GITHUB_NONCE_RE.test(nonce) || !GITHUB_SIG_RE.test(sig)) {
+    return { ok: false, error: "bad_state" };
+  }
+  if (!Number.isSafeInteger(exp)) return { ok: false, error: "bad_state" };
+
+  const nowSec = Math.floor(nowMs / 1000);
+  if (exp <= nowSec) return { ok: false, error: "expired_state" };
+  if (exp > nowSec + GITHUB_SETUP_STATE_TTL_SECONDS + 60) return { ok: false, error: "bad_exp" };
+
+  if ((await roomOf(key)) !== room) return { ok: false, error: "wrong_room" };
+  const challenge = githubSetupStateChallenge(room, nonce, exp);
+  if (!(await verifyEd25519(key, sig, challenge))) return { ok: false, error: "bad_sig" };
+
+  return { ok: true, room, key, nonce, exp };
+}
+
+/** Normalizes and clamps requested installation token permissions against the App's safe ceiling. */
+export function normalizeTokenPermissions(raw: unknown): { permissions: Record<string, GitHubTokenPermissionLevel>; key: string } | null {
+  if (raw === undefined || raw === null) {
+    const sorted = Object.entries(DEFAULT_TOKEN_PERMISSIONS).sort(([a], [b]) => a.localeCompare(b));
+    return {
+      permissions: Object.fromEntries(sorted),
+      key: sorted.map(([k, v]) => `${k}=${v}`).join(","),
+    };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entries: Array<[string, GitHubTokenPermissionLevel]> = [];
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Object.prototype.hasOwnProperty.call(MAX_PERMISSION_LEVEL, k)) return null;
+    if (v !== "read" && v !== "write") return null;
+    const maxLevel = MAX_PERMISSION_LEVEL[k as GitHubTokenPermissionKey];
+    if (v === "write" && maxLevel !== "write") return null;
+    entries.push([k, v]);
+  }
+  if (!entries.length) {
+    return normalizeTokenPermissions(undefined);
+  }
+  entries.sort(([a], [b]) => a.localeCompare(b));
+  return {
+    permissions: Object.fromEntries(entries),
+    key: entries.map(([k, v]) => `${k}=${v}`).join(","),
+  };
 }
 
 function cleanProofToken(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > GITHUB_AUTH_TOKEN_MAX_LEN) return null;
-  // Reject whitespace or control characters so it can never inject headers.
   if (/[\s\u0000-\u001f\u007f]/.test(trimmed)) return null;
   return trimmed;
 }
 
 /**
  * Parses and verifies a host's `github-subscribe` JSON control message.
- * Requires the host's Ed25519 key to match `expectedRoom`, time within MAX_SKEW, and exp <= time + TTL.
- * Extracts ephemeral per-repo proof tokens (`repoTokens[repo]` or fallback `githubToken`); tokens are
- * never signed into storage and never persisted by the relay.
  */
 export async function verifyGitHubSubscribe(
   rawText: string,
@@ -165,7 +512,7 @@ export async function verifyGitHubSubscribe(
   const sig = typeof rec.sig === "string" ? rec.sig : "";
   const time = typeof rec.time === "number" ? rec.time : NaN;
   const exp = typeof rec.exp === "number" ? rec.exp : NaN;
-  if (!BASE64URL_43.test(key) || !/^[A-Za-z0-9_-]{86}$/.test(sig)) return { ok: false, error: "bad_key" };
+  if (!BASE64URL_43.test(key) || !GITHUB_SIG_RE.test(sig)) return { ok: false, error: "bad_key" };
   if (!Number.isSafeInteger(time) || !Number.isSafeInteger(exp)) return { ok: false, error: "bad_time" };
 
   const nowSec = Math.floor(nowMs / 1000);
@@ -201,16 +548,387 @@ export async function verifyGitHubSubscribe(
   return { ok: true, repos, expiresAt: exp * 1000, proofs };
 }
 
+/** Verifies a host WebSocket `github-token` request asking for a single-repository installation token. */
+export async function verifyGitHubTokenRequest(
+  rec: Record<string, unknown>,
+  expectedRoom: string,
+  nowMs = Date.now(),
+): Promise<GitHubTokenRequestVerified | { ok: false; error: string }> {
+  if (rec.type !== "github-token" || rec.v !== 1) return { ok: false, error: "bad_type" };
+  const requestId = typeof rec.requestId === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(rec.requestId) ? rec.requestId : "";
+  const key = typeof rec.key === "string" ? rec.key : "";
+  const sig = typeof rec.sig === "string" ? rec.sig : "";
+  const time = typeof rec.time === "number" ? rec.time : NaN;
+  const rawRepo = typeof rec.repo === "string" ? rec.repo.trim().toLowerCase() : "";
+  if (!requestId || !BASE64URL_43.test(key) || !GITHUB_SIG_RE.test(sig) || !GITHUB_REPO_RE.test(rawRepo)) {
+    return { ok: false, error: "bad_request" };
+  }
+  if (!Number.isSafeInteger(time)) return { ok: false, error: "bad_time" };
+  const nowSec = Math.floor(nowMs / 1000);
+  if (Math.abs(nowSec - time) > MAX_SKEW) return { ok: false, error: "stale_time" };
+  const perm = normalizeTokenPermissions(rec.permissions);
+  if (!perm) return { ok: false, error: "bad_permissions" };
+  if ((await roomOf(key)) !== expectedRoom) return { ok: false, error: "wrong_room" };
+  const challenge = githubTokenRequestChallenge(expectedRoom, requestId, rawRepo, time, perm.key);
+  if (!(await verifyEd25519(key, sig, challenge))) return { ok: false, error: "bad_sig" };
+  return { ok: true, requestId, repo: rawRepo, permissions: perm.permissions };
+}
+
+/** Verifies a host WebSocket `github-claim` request for exclusive per-delivery mention handling in teams. */
+export async function verifyGitHubClaimRequest(
+  rec: Record<string, unknown>,
+  expectedRoom: string,
+  nowMs = Date.now(),
+): Promise<GitHubClaimRequestVerified | { ok: false; error: string }> {
+  if (rec.type !== "github-claim" || rec.v !== 1) return { ok: false, error: "bad_type" };
+  const requestId = typeof rec.requestId === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(rec.requestId) ? rec.requestId : "";
+  const deliveryId = typeof rec.deliveryId === "string" && GITHUB_DELIVERY_ID_RE.test(rec.deliveryId.trim()) ? rec.deliveryId.trim() : "";
+  const key = typeof rec.key === "string" ? rec.key : "";
+  const sig = typeof rec.sig === "string" ? rec.sig : "";
+  const time = typeof rec.time === "number" ? rec.time : NaN;
+  if (!requestId || !deliveryId || !BASE64URL_43.test(key) || !GITHUB_SIG_RE.test(sig)) {
+    return { ok: false, error: "bad_request" };
+  }
+  if (!Number.isSafeInteger(time)) return { ok: false, error: "bad_time" };
+  const nowSec = Math.floor(nowMs / 1000);
+  if (Math.abs(nowSec - time) > MAX_SKEW) return { ok: false, error: "stale_time" };
+  if ((await roomOf(key)) !== expectedRoom) return { ok: false, error: "wrong_room" };
+  const challenge = githubClaimChallenge(expectedRoom, requestId, deliveryId, time);
+  if (!(await verifyEd25519(key, sig, challenge))) return { ok: false, error: "bad_sig" };
+  return { ok: true, requestId, deliveryId };
+}
+
+/** Verifies a host WebSocket `github-installations-list` request. */
+export async function verifyGitHubInstallationsListRequest(
+  rec: Record<string, unknown>,
+  expectedRoom: string,
+  nowMs = Date.now(),
+): Promise<{ ok: true; requestId: string } | { ok: false; error: string }> {
+  if (rec.type !== "github-installations-list" || rec.v !== 1) return { ok: false, error: "bad_type" };
+  const requestId = typeof rec.requestId === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(rec.requestId) ? rec.requestId : "";
+  const key = typeof rec.key === "string" ? rec.key : "";
+  const sig = typeof rec.sig === "string" ? rec.sig : "";
+  const time = typeof rec.time === "number" ? rec.time : NaN;
+  if (!requestId || !BASE64URL_43.test(key) || !GITHUB_SIG_RE.test(sig)) return { ok: false, error: "bad_request" };
+  if (!Number.isSafeInteger(time)) return { ok: false, error: "bad_time" };
+  const nowSec = Math.floor(nowMs / 1000);
+  if (Math.abs(nowSec - time) > MAX_SKEW) return { ok: false, error: "stale_time" };
+  if ((await roomOf(key)) !== expectedRoom) return { ok: false, error: "wrong_room" };
+  const challenge = githubInstallationsChallenge(expectedRoom, requestId, time);
+  if (!(await verifyEd25519(key, sig, challenge))) return { ok: false, error: "bad_sig" };
+  return { ok: true, requestId };
+}
+
+/** Verifies a host WebSocket `github-unbind` request. */
+export async function verifyGitHubUnbindRequest(
+  rec: Record<string, unknown>,
+  expectedRoom: string,
+  nowMs = Date.now(),
+): Promise<GitHubUnbindRequestVerified | { ok: false; error: string }> {
+  if (rec.type !== "github-unbind" || rec.v !== 1) return { ok: false, error: "bad_type" };
+  const requestId = typeof rec.requestId === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(rec.requestId) ? rec.requestId : "";
+  const installationId = typeof rec.installationId === "number" && Number.isSafeInteger(rec.installationId) && rec.installationId > 0 ? rec.installationId : 0;
+  const key = typeof rec.key === "string" ? rec.key : "";
+  const sig = typeof rec.sig === "string" ? rec.sig : "";
+  const time = typeof rec.time === "number" ? rec.time : NaN;
+  if (!requestId || !installationId || !BASE64URL_43.test(key) || !GITHUB_SIG_RE.test(sig)) return { ok: false, error: "bad_request" };
+  if (!Number.isSafeInteger(time)) return { ok: false, error: "bad_time" };
+  const nowSec = Math.floor(nowMs / 1000);
+  if (Math.abs(nowSec - time) > MAX_SKEW) return { ok: false, error: "stale_time" };
+  if ((await roomOf(key)) !== expectedRoom) return { ok: false, error: "wrong_room" };
+  const challenge = githubUnbindChallenge(expectedRoom, requestId, installationId, time);
+  if (!(await verifyEd25519(key, sig, challenge))) return { ok: false, error: "bad_sig" };
+  return { ok: true, requestId, installationId };
+}
+
+function githubApiHeaders(authHeader: string): Record<string, string> {
+  return {
+    accept: "application/vnd.github+json",
+    authorization: authHeader,
+    "user-agent": "botkins-relay",
+    "x-github-api-version": "2022-11-28",
+  };
+}
+
 /**
- * Checks whether the subscribing host is authorized to read `repo` via GitHub's `GET /repos/{owner}/{repo}`.
- *
- * Deny-by-default rules:
- * - Only `200 OK` with a JSON object where `full_name` matches `repo` (case-insensitively) can pass.
- * - If the repo is private (`private !== false`), a proof token MUST have been presented AND
- *   `permissions?.pull === true` MUST be returned by GitHub.
- * - If the repo is explicitly public (`private === false`), read access is granted (with or without token).
- * - Any non-200 response (401/403/404/5xx), malformed JSON, timeout, or network error denies access.
- * - The proof token is used strictly for the outbound request and never stored or logged.
+ * Exchanges the GitHub App installation OAuth `code` for a one-time user token, confirms that
+ * `installationId` appears in `GET /user/installations` for that user, resolves the user's login
+ * and the installation's repository list, and discards the user token immediately.
+ */
+export async function verifyGitHubInstallationOAuth(
+  app: GitHubAgentAppConfig,
+  code: string,
+  installationId: number,
+  options: { fetch?: typeof fetch; apiBase?: string; webBase?: string } = {},
+): Promise<
+  | {
+      ok: true;
+      installation: GitHubInstallationBinding;
+    }
+  | { ok: false; error: string; status: number }
+> {
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const apiBase = (options.apiBase || GITHUB_API_BASE_DEFAULT).replace(/\/+$/, "");
+  const webBase = (options.webBase || GITHUB_WEB_BASE_DEFAULT).replace(/\/+$/, "");
+
+  // 1. Exchange code for a short-lived user access token (never stored or logged).
+  let userToken = "";
+  try {
+    const tokenRes = await fetcher(`${webBase}/login/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "botkins-relay",
+      },
+      body: JSON.stringify({
+        client_id: app.clientId,
+        client_secret: app.clientSecret,
+        code,
+      }),
+      signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+    });
+    if (!tokenRes.ok) return { ok: false, error: "oauth_exchange_failed", status: 502 };
+    const tokenBody = (await tokenRes.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!tokenBody || typeof tokenBody.access_token !== "string" || !tokenBody.access_token.trim()) {
+      return { ok: false, error: "oauth_exchange_rejected", status: 401 };
+    }
+    userToken = tokenBody.access_token.trim();
+  } catch {
+    return { ok: false, error: "oauth_exchange_unreachable", status: 502 };
+  }
+
+  // 2. Confirm installationId appears in GET /user/installations for that user (paginated up to 5 pages).
+  let matchedInst: Record<string, unknown> | null = null;
+  try {
+    for (let page = 1; page <= 5; page++) {
+      const instRes = await fetcher(`${apiBase}/user/installations?per_page=100&page=${page}`, {
+        method: "GET",
+        headers: githubApiHeaders(`Bearer ${userToken}`),
+        signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+      });
+      if (!instRes.ok) {
+        return { ok: false, error: "user_installations_failed", status: instRes.status === 401 ? 401 : 502 };
+      }
+      const data = (await instRes.json().catch(() => null)) as { installations?: unknown[] } | null;
+      const list = Array.isArray(data?.installations) ? data.installations : [];
+      for (const entry of list) {
+        if (entry && typeof entry === "object" && Number((entry as Record<string, unknown>).id) === installationId) {
+          matchedInst = entry as Record<string, unknown>;
+          break;
+        }
+      }
+      if (matchedInst || list.length < 100) break;
+    }
+  } catch {
+    return { ok: false, error: "user_installations_unreachable", status: 502 };
+  }
+
+  if (!matchedInst) {
+    return { ok: false, error: "installation_not_authorized", status: 403 };
+  }
+
+  const instAppId = matchedInst.app_id;
+  if (instAppId !== undefined && String(instAppId) !== app.appId) {
+    return { ok: false, error: "wrong_app", status: 403 };
+  }
+
+  // 3. Read installer login and accessible repositories for this installation, then discard userToken.
+  let installerLogin = "";
+  try {
+    const userRes = await fetcher(`${apiBase}/user`, {
+      method: "GET",
+      headers: githubApiHeaders(`Bearer ${userToken}`),
+      signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+    });
+    if (userRes.ok) {
+      const u = (await userRes.json().catch(() => null)) as Record<string, unknown> | null;
+      if (typeof u?.login === "string") installerLogin = u.login.trim();
+    }
+  } catch {}
+
+  const rawRepoEntries: unknown[] = [];
+  try {
+    for (let page = 1; page <= 5; page++) {
+      const repoRes = await fetcher(
+        `${apiBase}/user/installations/${installationId}/repositories?per_page=100&page=${page}`,
+        {
+          method: "GET",
+          headers: githubApiHeaders(`Bearer ${userToken}`),
+          signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+        },
+      );
+      if (!repoRes.ok) break;
+      const data = (await repoRes.json().catch(() => null)) as { repositories?: unknown[] } | null;
+      const list = Array.isArray(data?.repositories) ? data.repositories : [];
+      for (const r of list) {
+        if (r && typeof r === "object" && typeof (r as Record<string, unknown>).full_name === "string") {
+          rawRepoEntries.push(r);
+        }
+      }
+      if (list.length < 100) break;
+    }
+  } catch {}
+
+  // Discard userToken — do not return or log it.
+  userToken = "";
+
+  const account = matchedInst.account && typeof matchedInst.account === "object"
+    ? (matchedInst.account as Record<string, unknown>)
+    : {};
+  const accountLogin = typeof account.login === "string" ? account.login.trim() : installerLogin;
+  const accountType = typeof account.type === "string" ? account.type.trim() : "User";
+  const repositorySelection = matchedInst.repository_selection === "all" ? "all" : "selected";
+  const suspended = Boolean(matchedInst.suspended_at);
+  const repoPermissions = normalizeRepoPermissions(rawRepoEntries);
+  const normalizedRepos = repoPermissions.map((r) => r.fullName);
+
+  return {
+    ok: true,
+    installation: {
+      installationId,
+      accountLogin,
+      accountType,
+      installerLogin: installerLogin || accountLogin,
+      repositorySelection,
+      repos: normalizedRepos,
+      repoPermissions,
+      suspended,
+      updatedAt: Date.now(),
+    },
+  };
+}
+
+/**
+ * Mints a GitHub App installation access token scoped strictly to ONE repository (`repoShortName`)
+ * and the minimal validated `permissions`. Never logs or caches the token on disk.
+ */
+export async function mintSingleRepoInstallationToken(
+  app: Pick<GitHubAgentAppConfig, "appId" | "privateKey">,
+  installationId: number,
+  repoFullName: string,
+  permissions: Record<string, GitHubTokenPermissionLevel>,
+  options: { fetch?: typeof fetch; apiBase?: string; nowMs?: number } = {},
+): Promise<{ ok: true; token: string; expiresAt: string; permissions: Record<string, string> } | { ok: false; error: string; status: number }> {
+  const cleanRepo = repoFullName.trim().toLowerCase();
+  if (!GITHUB_REPO_RE.test(cleanRepo)) return { ok: false, error: "bad_repo", status: 400 };
+  const slash = cleanRepo.indexOf("/");
+  const repoShortName = cleanRepo.slice(slash + 1);
+  if (!repoShortName) return { ok: false, error: "bad_repo", status: 400 };
+
+  const jwt = await appJwt(app.appId, app.privateKey, options.nowMs ?? Date.now());
+  if (!jwt) return { ok: false, error: "app_key_invalid", status: 500 };
+
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const apiBase = (options.apiBase || GITHUB_API_BASE_DEFAULT).replace(/\/+$/, "");
+
+  try {
+    const res = await fetcher(`${apiBase}/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: {
+        ...githubApiHeaders(`Bearer ${jwt}`),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        repositories: [repoShortName],
+        permissions,
+      }),
+      signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      return { ok: false, error: res.status === 404 || res.status === 422 ? "repo_not_in_installation" : "github_token_failed", status: res.status };
+    }
+    const body = (await res.json().catch(() => null)) as {
+      token?: string;
+      expires_at?: string;
+      permissions?: Record<string, string>;
+    } | null;
+    if (!body || typeof body.token !== "string" || !body.token.trim()) {
+      return { ok: false, error: "github_token_invalid", status: 502 };
+    }
+    const expiresAt = typeof body.expires_at === "string" && body.expires_at
+      ? body.expires_at
+      : new Date((options.nowMs ?? Date.now()) + 55 * 60_000).toISOString();
+    return {
+      ok: true,
+      token: body.token.trim(),
+      expiresAt,
+      permissions: body.permissions && typeof body.permissions === "object" ? body.permissions : permissions,
+    };
+  } catch {
+    return { ok: false, error: "github_unreachable", status: 502 };
+  }
+}
+
+/** Fetches the full repo list for an installation using the App JWT (used on `installation.created` when selection=all). */
+export async function fetchInstallationRepos(
+  app: Pick<GitHubAgentAppConfig, "appId" | "privateKey">,
+  installationId: number,
+  options: { fetch?: typeof fetch; apiBase?: string } = {},
+): Promise<string[]> {
+  const jwt = await appJwt(app.appId, app.privateKey);
+  if (!jwt) return [];
+  const fetcher = options.fetch ?? globalThis.fetch;
+  const apiBase = (options.apiBase || GITHUB_API_BASE_DEFAULT).replace(/\/+$/, "");
+  try {
+    const tokenRes = await fetcher(`${apiBase}/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: { ...githubApiHeaders(`Bearer ${jwt}`), "content-type": "application/json" },
+      body: JSON.stringify({ permissions: { metadata: "read" } }),
+      signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+    });
+    if (!tokenRes.ok) return [];
+    const tokenBody = (await tokenRes.json().catch(() => null)) as { token?: string } | null;
+    const tok = typeof tokenBody?.token === "string" ? tokenBody.token.trim() : "";
+    if (!tok) return [];
+    const out: string[] = [];
+    for (let page = 1; page <= 5; page++) {
+      const repoRes = await fetcher(`${apiBase}/installation/repositories?per_page=100&page=${page}`, {
+        method: "GET",
+        headers: githubApiHeaders(`Bearer ${tok}`),
+        signal: AbortSignal.timeout(GITHUB_OAUTH_TIMEOUT_MS),
+      });
+      if (!repoRes.ok) break;
+      const data = (await repoRes.json().catch(() => null)) as { repositories?: unknown[] } | null;
+      const list = Array.isArray(data?.repositories) ? data.repositories : [];
+      for (const r of list) {
+        if (r && typeof r === "object" && typeof (r as Record<string, unknown>).full_name === "string") {
+          out.push((r as Record<string, unknown>).full_name as string);
+        }
+      }
+      if (list.length < 100) break;
+    }
+    return normalizeInstallationRepos(out);
+  } catch {
+    return [];
+  }
+}
+
+/** Renders the post-install browser confirmation / error HTML page for `GET /v1/github/setup`. */
+export function githubSetupResultPage(result: { ok: boolean; accountLogin?: string; repoCount?: number; message?: string }): Response {
+  const title = result.ok ? "Botkins Agent connected" : "GitHub setup could not finish";
+  const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const bodyHtml = result.ok
+    ? `  <main>
+    <h1>Botkins Agent connected</h1>
+    <p class="intro">${esc(result.accountLogin ? `Connected ${result.accountLogin} (${result.repoCount ?? 0} ${result.repoCount === 1 ? "repository" : "repositories"}).` : "Your GitHub installation is now linked to your Botkins host.")}</p>
+    <p class="help">You can close this tab and return to Botkins Settings &rsaquo; GitHub.</p>
+    <a class="button" href="botkins://settings/github">Open Botkins</a>
+  </main>`
+    : `  <main>
+    <h1>GitHub setup could not finish</h1>
+    <p class="error">${esc(result.message || "The setup link is invalid or expired. Start again from Botkins Settings › GitHub.")}</p>
+    <p class="help">Nothing was saved. Return to Botkins and try installing again.</p>
+  </main>`;
+  const page = securePage(title, PAGE_CSS, bodyHtml, "");
+  return new Response(page.body, {
+    status: result.ok ? 200 : 400,
+    headers: page.headers,
+  });
+}
+
+/**
+ * Legacy self-hosted-only check (gated behind explicit GITHUB_ALLOW_USER_TOKEN_AUTH=1 when no App creds exist).
  */
 export async function checkGitHubRepoAccess(
   repo: string,
@@ -241,7 +959,6 @@ export async function checkGitHubRepoAccess(
     const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) return false;
     const fullName = typeof body.full_name === "string" ? body.full_name.trim().toLowerCase() : "";
-    // Guard against unexpected redirect/mismatch unless GitHub returned the requested repo (or renamed repo with pull permission).
     const isPublic = body.private === false;
     const perms = body.permissions && typeof body.permissions === "object" && !Array.isArray(body.permissions)
       ? (body.permissions as Record<string, unknown>)
@@ -249,7 +966,6 @@ export async function checkGitHubRepoAccess(
     const hasPull = perms?.pull === true;
     if (fullName && fullName !== cleanRepo && !hasPull) return false;
     if (isPublic) return true;
-    // Private (or unknown visibility): require proof token AND explicit `permissions.pull === true`.
     return Boolean(tok && hasPull);
   } catch {
     return false;
@@ -259,9 +975,7 @@ export async function checkGitHubRepoAccess(
 }
 
 /**
- * Verifies every requested repo against GitHub (skipping GitHub calls for repos already cached as
- * active for this room within the subscription TTL). Drops any unauthorized repo (deny-by-default)
- * and returns `{ allowed, denied }`. Never stores or returns proof tokens.
+ * Legacy self-hosted-only batch repo verifier (used only when GITHUB_ALLOW_USER_TOKEN_AUTH=1).
  */
 export async function authorizeSubscribedRepos(
   repos: string[],
@@ -382,7 +1096,7 @@ function trimIssueOrPr(raw: unknown, isPr: boolean): Record<string, unknown> | u
 }
 
 /**
- * Extracts only the fields needed by Botkins workflows from a verified GitHub webhook payload.
+ * Extracts only the fields needed by Botkins workflows and @mentions from a verified GitHub webhook payload.
  * Never retains secrets, tokens, or unrelated bloat.
  */
 export function trimGitHubWebhookPayload(event: string, raw: Record<string, unknown>): Record<string, unknown> {
@@ -417,17 +1131,18 @@ export function trimGitHubWebhookPayload(event: string, raw: Record<string, unkn
     if (issue) out.issue = issue;
   }
 
-  if (event === "pull_request" || event === "pull_request_review") {
+  if (event === "pull_request" || event === "pull_request_review" || event === "pull_request_review_comment") {
     const pr = trimIssueOrPr(raw.pull_request, true);
     if (pr) out.pull_request = pr;
   }
 
-  if (event === "issue_comment" && raw.comment && typeof raw.comment === "object") {
+  if ((event === "issue_comment" || event === "pull_request_review_comment") && raw.comment && typeof raw.comment === "object") {
     const c = raw.comment as Record<string, unknown>;
     const commentOut: Record<string, unknown> = {};
     if (typeof c.id === "number") commentOut.id = c.id;
     if (typeof c.body === "string") commentOut.body = clampString(c.body, 32 * 1024);
     if (typeof c.html_url === "string") commentOut.html_url = clampString(c.html_url, 500);
+    if (typeof c.path === "string") commentOut.path = clampString(c.path, 500);
     if (typeof c.updated_at === "string") commentOut.updated_at = clampString(c.updated_at, 64);
     if (typeof c.created_at === "string") commentOut.created_at = clampString(c.created_at, 64);
     if (typeof c.author_association === "string") commentOut.author_association = clampString(c.author_association, 40);
@@ -480,7 +1195,34 @@ export function trimGitHubWebhookPayload(event: string, raw: Record<string, unkn
   return out;
 }
 
+export interface CheckedGitHubInstallationEvent {
+  kind: "installation";
+  deliveryId: string;
+  event: "installation" | "installation_repositories";
+  action: string;
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  repositorySelection: "all" | "selected";
+  repositories: string[];
+  repositoriesAdded: string[];
+  repositoriesRemoved: string[];
+  receivedAt: string;
+}
+
+export interface CheckedGitHubMembershipEvent {
+  kind: "membership";
+  deliveryId: string;
+  event: "organization" | "membership";
+  action: string;
+  installationId: number | null;
+  accountLogin: string;
+  memberLogin: string;
+  receivedAt: string;
+}
+
 export interface CheckedGitHubWebhook {
+  kind: "delivery";
   deliveryId: string;
   event: string;
   action: string | null;
@@ -505,14 +1247,14 @@ export interface GitHubIngressLimiters {
  * - 512 KiB body cap (413)
  * - x-github-event, x-github-delivery, x-hub-signature-256 constant-time HMAC-SHA256 (401)
  * - installation.id rate limit (429)
- * - JSON object with repository.full_name (400 / 202 for ping)
+ * - handles `ping` (202), `installation` & `installation_repositories` lifecycle events, and repo events
  */
 export async function checkGitHubWebhookRequest(
   request: Request,
   secret: string | undefined,
   limiters: GitHubIngressLimiters,
   nowMs = Date.now(),
-): Promise<CheckedGitHubWebhook | Response> {
+): Promise<CheckedGitHubWebhook | CheckedGitHubInstallationEvent | CheckedGitHubMembershipEvent | Response> {
   const fail = (error: string, status: number) =>
     Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 
@@ -551,15 +1293,67 @@ export async function checkGitHubWebhookRequest(
   }
   const obj = parsed as Record<string, unknown>;
 
-  const instRaw = obj.installation && typeof obj.installation === "object" ? (obj.installation as Record<string, unknown>).id : undefined;
+  const instObj = obj.installation && typeof obj.installation === "object" ? (obj.installation as Record<string, unknown>) : null;
+  const instRaw = instObj?.id;
   const installationId = typeof instRaw === "number" && Number.isSafeInteger(instRaw) && instRaw > 0 ? instRaw : null;
   const installKey = installationId !== null ? `installation:${installationId}` : "installation:none";
   if (!(await limiters.checkInstallation(installKey))) {
     return fail("rate_limited", 429);
   }
 
+  const receivedAt = new Date(nowMs).toISOString();
+
   if (event === "ping") {
     return Response.json({ ok: true, event: "ping", deliveryId }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
+
+  if (event === "installation" || event === "installation_repositories") {
+    if (!installationId) return fail("bad_request", 400);
+    const action = typeof obj.action === "string" ? clampString(obj.action, 64).toLowerCase() : "";
+    const account = instObj?.account && typeof instObj.account === "object" ? (instObj.account as Record<string, unknown>) : {};
+    const accountLogin = typeof account.login === "string" ? clampString(account.login, 100) : "";
+    const accountType = typeof account.type === "string" ? clampString(account.type, 40) : "User";
+    const selectionRaw = obj.repository_selection ?? instObj?.repository_selection;
+    const repositorySelection = selectionRaw === "all" ? "all" : "selected";
+    return {
+      kind: "installation",
+      deliveryId,
+      event,
+      action,
+      installationId,
+      accountLogin,
+      accountType,
+      repositorySelection,
+      repositories: normalizeInstallationRepos(obj.repositories),
+      repositoriesAdded: normalizeInstallationRepos(obj.repositories_added),
+      repositoriesRemoved: normalizeInstallationRepos(obj.repositories_removed),
+      receivedAt,
+    };
+  }
+
+  if (event === "organization" || event === "membership") {
+    const action = typeof obj.action === "string" ? clampString(obj.action, 64).toLowerCase() : "";
+    const orgObj = obj.organization && typeof obj.organization === "object" ? (obj.organization as Record<string, unknown>) : null;
+    const instAccount = instObj?.account && typeof instObj.account === "object" ? (instObj.account as Record<string, unknown>) : null;
+    const accountLogin =
+      (typeof orgObj?.login === "string" ? clampString(orgObj.login, 100) : "") ||
+      (typeof instAccount?.login === "string" ? clampString(instAccount.login, 100) : "");
+    const membershipObj = obj.membership && typeof obj.membership === "object" ? (obj.membership as Record<string, unknown>) : null;
+    const membershipUser = membershipObj?.user && typeof membershipObj.user === "object" ? (membershipObj.user as Record<string, unknown>) : null;
+    const memberObj = obj.member && typeof obj.member === "object" ? (obj.member as Record<string, unknown>) : null;
+    const memberLogin =
+      (typeof membershipUser?.login === "string" ? clampString(membershipUser.login, 100) : "") ||
+      (typeof memberObj?.login === "string" ? clampString(memberObj.login, 100) : "");
+    return {
+      kind: "membership",
+      deliveryId,
+      event,
+      action,
+      installationId,
+      accountLogin,
+      memberLogin,
+      receivedAt,
+    };
   }
 
   const repoRaw = obj.repository && typeof obj.repository === "object" ? (obj.repository as Record<string, unknown>).full_name : undefined;
@@ -569,10 +1363,10 @@ export async function checkGitHubWebhookRequest(
   }
 
   const action = typeof obj.action === "string" ? clampString(obj.action, 64) : null;
-  const receivedAt = new Date(nowMs).toISOString();
   const trimmed = trimGitHubWebhookPayload(event, obj);
 
   return {
+    kind: "delivery",
     deliveryId,
     event,
     action,

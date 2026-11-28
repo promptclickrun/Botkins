@@ -558,6 +558,63 @@ export interface WorkflowGithubDelivery {
   replayable?: boolean;
 }
 
+export interface GithubAgentRepoPermission {
+  fullName: string;
+  pull: boolean;
+  push: boolean;
+  admin: boolean;
+}
+
+export interface GithubAgentInstallation {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+  installerLogin: string;
+  repositorySelection: "all" | "selected";
+  repos: string[];
+  repoPermissions?: GithubAgentRepoPermission[];
+  suspended: boolean;
+  updatedAt: number;
+  boundAt?: number;
+  expiresAt?: number;
+  expired?: boolean;
+  manageUrl?: string;
+}
+
+export interface GithubAgentRepoConfig {
+  fullName: string;
+  installationId: number | null;
+  accountLogin: string;
+  canWrite?: boolean;
+  answerMentions: boolean;
+  defaultBotId: string | null;
+  allowlist: string[];
+}
+
+export interface GithubAgentStatus {
+  appSlug: string;
+  mentionHandle: string;
+  relayConnected: boolean;
+  eventsOn: boolean;
+  hasExpiredBindings?: boolean;
+  installations: GithubAgentInstallation[];
+  repos: GithubAgentRepoConfig[];
+  lastDelivery: {
+    deliveryId: string;
+    event: string;
+    action: string | null;
+    repository: string;
+    receivedAt: string;
+  } | null;
+  manageAppUrl: string;
+}
+
+export interface GithubAgentInstallUrl {
+  url: string;
+  expiresAt: number;
+  appSlug: string;
+}
+
 export interface WorkflowGithubStatus {
   installed: boolean;
   authenticated: boolean;
@@ -1662,6 +1719,15 @@ declare global {
       workflowGithubCatalog(options?: { repos?: string[]; repo?: string; includeLabels?: boolean; includeAssignees?: boolean }): Promise<WorkflowGithubCatalog>;
       workflowGithubDeliveries(workflowId: string, nodeId?: string): Promise<WorkflowGithubDelivery[]>;
       workflowGithubReplayLast(workflowId: string, nodeId?: string): Promise<WorkflowRun>;
+      // Botkins Agent GitHub App (owner-only)
+      githubAgentStatus(): Promise<GithubAgentStatus>;
+      githubAgentInstallUrl(): Promise<GithubAgentInstallUrl>;
+      githubAgentRefresh(): Promise<GithubAgentStatus>;
+      githubAgentSetRepo(
+        repo: string,
+        patch: { answerMentions?: boolean; defaultBotId?: string | null; allowlist?: string[] | string },
+      ): Promise<GithubAgentStatus>;
+      githubAgentUnbind(installationId: number): Promise<GithubAgentStatus>;
       workflowExport(id: string): Promise<boolean>;
       workflowImport(): Promise<{ workflow: Workflow; unresolvedAgents: string[] } | null>;
       workflowExportText(id: string): Promise<string>;

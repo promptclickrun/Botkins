@@ -577,11 +577,13 @@ export class Workflows {
     this.ws = ws;
     this.githubAuth = options.githubAuth ?? new WorkflowGithubAuth();
     this.githubPoller = options.githubPoller ?? createDefaultGithubPoller(this.githubAuth);
+    this._getGithubInstallationToken =
+      typeof options.getGithubInstallationToken === "function" ? options.getGithubInstallationToken : null;
     this.githubOutputClient =
       options.githubOutputClient ??
       createDefaultGithubOutputClient({
         auth: this.githubAuth,
-        getInstallationToken: options.getGithubInstallationToken,
+        getInstallationToken: (repo) => this._getGithubInstallationToken?.(repo) ?? Promise.resolve(null),
       });
     this.githubActionStore = options.githubActionStore ?? createWorkspaceActionStore(ws);
     this.modelRunner = options.modelRunner ?? null;
@@ -593,11 +595,50 @@ export class Workflows {
     this.onGithubReposChange = typeof options.onGithubReposChange === "function" ? options.onGithubReposChange : null;
     this.githubRelayConnected = false;
     this.githubRelayLostAt = null;
-    this.githubBotLogins = Array.isArray(options.githubBotLogins) ? options.githubBotLogins : ["botkins-agent", "botkins-bot"];
+    this.githubBotLogins = Array.isArray(options.githubBotLogins) ? options.githubBotLogins : ["botkins-agent"];
 
     this.ensureState();
+    this.migrateDeprecatedGithubMentionHandles();
     this.loadGithubCursorsFromState();
     this.bindEvents();
+  }
+
+  /** Wires a dynamic GitHub App installation token provider (from the relay WebSocket) into output steps. */
+  setGithubInstallationTokenProvider(fn) {
+    this._getGithubInstallationToken = typeof fn === "function" ? fn : null;
+  }
+
+  /** Migrates saved GitHub trigger nodes whose mentionHandle(s) contain the legacy `@botkins-bot` to `@botkins-agent`. */
+  migrateDeprecatedGithubMentionHandles() {
+    let changed = false;
+    for (const wf of this.ws.state.workflows ?? []) {
+      for (const node of wf?.nodes ?? []) {
+        if (node?.kind !== "trigger" || node.triggerKind !== "github" || !node.config) continue;
+        if (typeof node.config.mentionHandle === "string" && /\bbotkins-bot\b/i.test(node.config.mentionHandle)) {
+          node.config.mentionHandle = node.config.mentionHandle.replace(/@?botkins-bot\b/gi, "@botkins-agent");
+          changed = true;
+        }
+        if (Array.isArray(node.config.mentionHandles)) {
+          let arrChanged = false;
+          const next = [];
+          const seen = new Set();
+          for (const h of node.config.mentionHandles) {
+            const raw = String(h ?? "").trim();
+            const replaced = raw.replace(/^@+/, "").toLowerCase() === "botkins-bot" ? "botkins-agent" : raw.replace(/^@+/, "").toLowerCase();
+            if (replaced !== raw.replace(/^@+/, "").toLowerCase()) arrChanged = true;
+            if (replaced && !seen.has(replaced)) {
+              seen.add(replaced);
+              next.push(replaced);
+            }
+          }
+          if (arrChanged) {
+            node.config.mentionHandles = next;
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) this.ws.save();
   }
 
   /** Attaches a callback invoked whenever the set of enabled GitHub trigger repositories changes (for relay subscriptions). */

@@ -12,7 +12,7 @@
 // ChaCha20-Poly1305 under a numbered nonce that is accepted once.
 import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Credentials, scrub } from "./credentials.mjs";
 import { PROTON_SETUP } from "./proton-setup.mjs";
 import { agree, b64u, box, cleanCode, hkdf, INFO, newCode, newKeyPair, open, random, seal, pushNonce, seqNonce, unb64u, unbox } from "./crypto.mjs";
@@ -812,6 +812,7 @@ export class LinkHost extends EventEmitter {
       },
       onTaken: () => this.emit("status"),
       onGithubDelivery: (frame) => this.emit("githubDelivery", frame),
+      onGithubInstallations: (info) => this.emit("githubInstallations", info),
       getGithubAuthProof: this._githubAuthProofProvider ?? null,
       log: (line) => this.log(line),
       WebSocket: this.relayOptions.WebSocket,
@@ -827,10 +828,54 @@ export class LinkHost extends EventEmitter {
     this._githubRepos = Array.isArray(repos) ? [...repos] : [];
     this.relayLink?.setGithubRepos(this._githubRepos);
   }
-  /** Registers an async callback returning ephemeral GitHub read-access proof tokens for relay subscriptions. */
+  /** Registers an async callback returning ephemeral GitHub read-access proof tokens for legacy self-hosted relays. */
   setGithubAuthProofProvider(fn) {
     this._githubAuthProofProvider = typeof fn === "function" ? fn : null;
     this.relayLink?.setGithubAuthProofProvider(this._githubAuthProofProvider);
+  }
+  /** Creates a signed 10-minute GitHub App install URL bound to this host's room key. */
+  createGithubInstallUrl(appSlug) {
+    const key = this.store.relayKey();
+    if (this.relayLink?.createGithubInstallUrl) {
+      return this.relayLink.createGithubInstallUrl(appSlug);
+    }
+    const slug = String(appSlug || "botkins-agent").trim().toLowerCase();
+    const room = roomOf(key.publicKey);
+    const nonce = randomBytes(18).toString("base64url");
+    const exp = Math.floor(Date.now() / 1000) + 600;
+    const sig = signWithRelayKey(key, `botkins-github-setup-v1:${room}:${nonce}:${exp}`);
+    const state = Buffer.from(
+      JSON.stringify({ v: 1, key: key.publicKey, room, nonce, exp, sig }),
+      "utf8",
+    ).toString("base64url");
+    return {
+      url: `https://github.com/apps/${slug}/installations/new?state=${encodeURIComponent(state)}`,
+      expiresAt: exp * 1000,
+      appSlug: slug,
+    };
+  }
+  /** Requests a single-repo GitHub App installation token over the host's authenticated relay WebSocket. */
+  getGithubInstallationToken(repo, permissions) {
+    return this.relayLink?.getGithubInstallationToken?.(repo, permissions) ?? Promise.resolve(null);
+  }
+  /** Invalidates cached GitHub installation tokens in memory. */
+  invalidateGithubTokens(repo) {
+    this.relayLink?.invalidateGithubTokens?.(repo);
+  }
+  /** Acquires a per-delivery claim lock on the relay so exactly one room in a team acts on a mention. */
+  claimGithubDelivery(deliveryId) {
+    return this.relayLink?.claimGithubDelivery?.(deliveryId) ?? Promise.resolve({ ok: false, claimed: false });
+  }
+  /** Lists the room's bound GitHub App installations from the relay. */
+  listGithubInstallations() {
+    return this.relayLink?.listGithubInstallations?.() ?? Promise.resolve({ ok: false, appSlug: "botkins-agent", installations: [] });
+  }
+  /** Unbinds a GitHub App installation from this host's room on the relay. */
+  unbindGithubInstallation(installationId) {
+    if (!this.relayLink?.unbindGithubInstallation) {
+      return Promise.reject(new Error("Relay is not connected."));
+    }
+    return this.relayLink.unbindGithubInstallation(installationId);
   }
   /**
    * Changes the relay settings, saves them and applies them at once. `enabled` turns it on or off; `url` is

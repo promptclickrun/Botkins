@@ -21,7 +21,7 @@
   // FEEDBACK_REPO is where /v1/feedback opens issues, as the Botkins Intake GitHub App (installed on that repo
   // only, Issues: write). GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_KEY and TURNSTILE_SECRET (the
   // website form) are Worker secrets; without the app's three the route answers 503.
-  "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile", "FEEDBACK_REPO": "promptclickrun/Botkins" },
+  "vars": { "RATE_LIMITS": "on", "APNS_TOPIC": "app.botkins.mobile", "FEEDBACK_REPO": "promptclickrun/Botkins", "GITHUB_AGENT_APP_SLUG": "botkins-agent" },
   "ratelimits": [
     { "name": "SOCKETS", "namespace_id": "47611", "simple": { "limit": 30, "period": 60 } },
     { "name": "REQUESTS", "namespace_id": "47612", "simple": { "limit": 120, "period": 60 } },

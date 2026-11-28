@@ -393,7 +393,7 @@ function GithubTriggerEditor({
     const merged = [...others, ...nextForGroup];
     const patch: Record<string, unknown> = { events: merged.length ? merged : ["issue.opened"] };
     if (merged.includes("mention") && !cfg.mentionHandle && !cfg.mentionHandles?.length) {
-      patch.mentionHandle = "@botkins-bot";
+      patch.mentionHandle = "@botkins-agent";
     }
     setConfig(patch);
   };
@@ -530,12 +530,12 @@ function GithubTriggerEditor({
       {selectedEvents.includes("mention") && (
         <Field
           label="Mention handle(s)"
-          hint="Default @botkins-bot. Separate multiple handles with commas."
-          placeholder="@botkins-bot"
+          hint="Default @botkins-agent. Separate multiple handles with commas."
+          placeholder="@botkins-agent"
           value={
             Array.isArray(cfg.mentionHandles) && cfg.mentionHandles.length
               ? cfg.mentionHandles.map((h: string) => `@${h.replace(/^@/, "")}`).join(", ")
-              : cfg.mentionHandle ?? "@botkins-bot"
+              : cfg.mentionHandle ?? "@botkins-agent"
           }
           onChangeText={(mentionHandle) => setConfig({ mentionHandle, mentionHandles: undefined })}
           autoCapitalize="none"

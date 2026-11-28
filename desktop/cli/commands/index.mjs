@@ -27,6 +27,7 @@ import { hostsCommands } from "./hosts.mjs";
 import { feedbackCommands } from "./feedback.mjs";
 import { marketplaceCommands } from "./marketplace.mjs";
 import { channelsCommands } from "./channels.mjs";
+import { githubCommands } from "./github.mjs";
 import { workspaceStoreCommands } from "./workspace-store.mjs";
 
 export const COMMANDS = { ...service, ...tui, ...install, ...link, ...workspace, ...tools, ...settings, ...profileCommands, ...nodeCommands, ...hostsCommands, ...feedbackCommands, ...marketplaceCommands, ...workspaceStoreCommands };
@@ -35,7 +36,7 @@ Object.assign(COMMANDS.bots.commands, botTools);
 // Plugins: to install, update and switch one on is to look at it first (cli/commands/plugins.mjs).
 Object.assign(COMMANDS.plugins.commands, pluginCommands);
 // The rest of the workspace, one file for each area. A group that is there already gets the new commands; a command's name is never taken twice.
-for (const area of [botsCommands, chatsCommands, routinesCommands, projectsCommands, wikiCommands, prefsCommands, credentialsCommands, voiceCommands, spacesCommands, sharingCommands, teamCommands, appsCommands, piCommands, channelsCommands]) {
+for (const area of [botsCommands, chatsCommands, routinesCommands, projectsCommands, wikiCommands, prefsCommands, credentialsCommands, voiceCommands, spacesCommands, sharingCommands, teamCommands, appsCommands, piCommands, channelsCommands, githubCommands]) {
   for (const [word, group] of Object.entries(area)) {
     if (!COMMANDS[word]) COMMANDS[word] = group;
     else {

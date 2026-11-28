@@ -681,7 +681,7 @@ function GithubTriggerSettings({
       : [...selectedEvents, ev];
     const patch: Record<string, any> = { events: next.length ? next : ["issue.opened"] };
     if (ev === "mention" && !selectedEvents.includes(ev) && !config.mentionHandle && !config.mentionHandles?.length) {
-      patch.mentionHandle = "@botkins-bot";
+      patch.mentionHandle = "@botkins-agent";
     }
     setConfig(patch);
   };
@@ -826,9 +826,9 @@ function GithubTriggerSettings({
             value={
               Array.isArray(config.mentionHandles) && config.mentionHandles.length
                 ? config.mentionHandles.map((h: string) => `@${h.replace(/^@/, "")}`).join(", ")
-                : config.mentionHandle ?? "@botkins-bot"
+                : config.mentionHandle ?? "@botkins-agent"
             }
-            placeholder="@botkins-bot"
+            placeholder="@botkins-agent"
             onChange={(e) => setConfig({ mentionHandle: e.target.value, mentionHandles: undefined })}
           />
           <p className="wf-hint">Triggers when an issue, PR, or comment mentions any listed handle (comma-separated).</p>

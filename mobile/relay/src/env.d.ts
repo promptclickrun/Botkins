@@ -21,12 +21,25 @@ interface Env {
   GITHUB_APP_KEY?: string;
   /** Webhook secret for the "Botkins Agent" GitHub App (`POST /v1/github/events`). Route answers 503 github_off when unset. */
   GITHUB_WEBHOOK_SECRET?: string;
+  /** "Botkins Agent" GitHub App settings (separate from GITHUB_APP_* used by Botkins Intake feedback). */
+  GITHUB_AGENT_APP_ID?: string;
+  GITHUB_AGENT_APP_SLUG?: string;
+  /** PEM text of the Botkins Agent GitHub App's PKCS#8 private key. */
+  GITHUB_AGENT_APP_KEY?: string;
+  GITHUB_AGENT_CLIENT_ID?: string;
+  GITHUB_AGENT_CLIENT_SECRET?: string;
+  /** Explicit opt-in for legacy self-hosted relays without GitHub App credentials to fall back to user-token repo checks. */
+  GITHUB_ALLOW_USER_TOKEN_AUTH?: string;
   /** The website form's Turnstile secret. Website reports are refused without it. */
   TURNSTILE_SECRET?: string;
   /** Tests only: replaces both Apple hosts, and adds an `x-botkins-apns-env` header. Unset in wrangler.jsonc. */
   APNS_HOST?: string;
-  /** Tests only: replaces `https://api.github.com` when checking repo read authorization on subscribe. Unset in wrangler.jsonc. */
+  /** Tests only: replaces `https://api.github.com` for GitHub API calls. Unset in wrangler.jsonc. */
   GITHUB_API_BASE?: string;
+  /** Tests only: replaces `https://github.com` for OAuth code exchange. Unset in wrangler.jsonc. */
+  GITHUB_WEB_BASE?: string;
+  /** Tests only: overrides the default 7-day per-room GitHub binding TTL (in ms). Unset in wrangler.jsonc. */
+  GITHUB_BINDING_TTL_MS?: string;
 }
 
 // The shared-space page's scripts are plain files, bundled as text (wrangler's own rule for *.txt).
