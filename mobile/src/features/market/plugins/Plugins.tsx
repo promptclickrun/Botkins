@@ -30,7 +30,8 @@ export function PluginsPage() {
 function Plugins() {
   const online = useOnline();
   const member = useMember();
-  const folders = !member && useCapability("folders-v1");
+  const hasFolders = useCapability("folders-v1");
+  const folders = !member && hasFolders;
   const canManage = useCan("plugins", "manage");
   const canRefresh = useCanRefresh();
   const markets = usePluginMarketplaces();

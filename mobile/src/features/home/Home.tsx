@@ -463,11 +463,13 @@ export default function Home() {
   const unifiedHosts = useApp((state) => state.unifiedHosts);
   const includedHosts = unifiedHosts.filter((h) => h.included);
   const onlineHosts = includedHosts.filter((h) => h.state === "online").length;
+  // Every hook runs on every render: a hook inside the ternary crashed the app when unified view was turned off.
+  const pairingName = useApp((state) => state.pairing?.name);
   const computer = unified
     ? onlineHosts === includedHosts.length
       ? "All computers"
       : onlineHosts + "/" + includedHosts.length + " computers"
-    : (useApp((state) => state.pairing?.name) ?? "Computer");
+    : (pairingName ?? "Computer");
   const pillOnline = unified ? onlineHosts === includedHosts.length && includedHosts.length > 0 : online;
   const adminOn = useApp((state) => state.parts.meta?.you?.kind === "owner" && state.parts.meta.you.admin === true);
   const computerOrder = usePrefs(prefs => prefs.computerOrder);

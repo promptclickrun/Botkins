@@ -43,7 +43,8 @@ export default function Skills() {
   }
   const canManage = useCan("skills", "manage");
   const member = useMember();
-  const canFolders = !member && useCapability("folders-v1");
+  const hasFolders = useCapability("folders-v1");
+  const canFolders = !member && hasFolders;
   const skills = useSkills();
   const part = usePart("skills");
   const off = part?.disabled;
