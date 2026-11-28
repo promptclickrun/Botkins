@@ -505,10 +505,24 @@ export const routinesCommands = {
       },
       retry: {
         summary: "Retry a failed workflow run from the failed step",
-        usage: "botkins workflows retry <runId>",
+        usage: "botkins workflows retry <runId> [--allow-uncertain]",
+        options: {
+          "allow-uncertain": {
+            type: "boolean",
+            about: "Override githubUncertain guard on an interrupted GitHub output step (may double-post)",
+          },
+        },
         async run(context) {
           const runId = one(context, "Give the run id.");
-          context.print(await context.client.call("workflows.retry", runId), (run) => "Retrying run " + run.id + ".");
+          const allowUncertainRetry = context.options["allow-uncertain"] === true;
+          const result = allowUncertainRetry
+            ? await context.client.call("workflows.retry", runId, null, { allowUncertainRetry: true })
+            : await context.client.call("workflows.retry", runId);
+          context.print(result, (run) =>
+            allowUncertainRetry
+              ? "Retrying run " + run.id + " (allowing uncertain GitHub retry)."
+              : "Retrying run " + run.id + ".",
+          );
         },
       },
       approve: {

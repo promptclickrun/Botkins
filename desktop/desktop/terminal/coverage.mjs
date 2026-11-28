@@ -617,7 +617,11 @@ export const CHANGES = {
   "workflows.resume": (args, value) => value?.name ?? args?.[0],
   "workflows.run": (args, value) => value?.workflowId ?? args?.[0],
   "workflows.replay": (args, value) => value?.workflowId ?? args?.[0],
-  "workflows.retry": (args, value) => value?.id ?? args?.[0],
+  "workflows.retry": (args, value) => {
+    const id = value?.id ?? args?.[0];
+    if (args?.[2]?.allowUncertainRetry !== true) return id;
+    return thingForLog(id) && String(id).length <= 61 ? id + " (allow-uncertain)" : "(allow-uncertain)";
+  },
   "workflows.approve": (args, value) => value?.id ?? args?.[0],
   "workflows.cancel": (args, value) => value?.id ?? args?.[0],
   "workflows.import": (args, value) => value?.workflow?.name ?? "imported",

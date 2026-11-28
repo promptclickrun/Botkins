@@ -1783,6 +1783,15 @@ export type Workflow = {
   updatedAt: number;
   lastRunAt?: number | null;
 };
+export type WorkflowGithubUncertainInfo = {
+  nodeId?: string;
+  stepLabel?: string;
+  action: string;
+  repository: string;
+  number?: number | null;
+  pullRequest?: boolean | null;
+  url?: string | null;
+};
 export type WorkflowStepRun = {
   nodeId: string;
   kind: WorkflowNode["kind"];
@@ -1792,6 +1801,8 @@ export type WorkflowStepRun = {
   finishedAt?: number | null;
   summary?: string;
   error?: string;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   branch?: string | null;
 };
 export type WorkflowRun = {
@@ -1806,6 +1817,8 @@ export type WorkflowRun = {
   startedAt: number;
   finishedAt?: number | null;
   error?: string | null;
+  errorCode?: string | null;
+  githubUncertain?: WorkflowGithubUncertainInfo | null;
   steps: Record<string, WorkflowStepRun>;
   pendingApproval?: { nodeId: string; label: string; message: string; noteField?: string | null } | null;
 };
@@ -2413,7 +2426,7 @@ export type Calls = {
   workflowPause(id: string): Workflow;
   workflowResume(id: string): Workflow;
   workflowRun(id: string, options?: { triggerNodeId?: string; inputs?: Record<string, unknown> }): WorkflowRun;
-  workflowRetryRun(runId: string, nodeId?: string): WorkflowRun;
+  workflowRetryRun(runId: string, nodeId?: string | null, options?: { allowUncertainRetry?: boolean }): WorkflowRun;
   workflowRespondApproval(runId: string, nodeId: string | null, decision: "approved" | "rejected", note?: string): WorkflowRun;
   workflowCancelRun(runId: string): WorkflowRun;
   workflowDelete(id: string): boolean;
