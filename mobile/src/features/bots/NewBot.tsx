@@ -93,6 +93,11 @@ function NewBotEditor() {
   const teams = useCapability(PROACTIVE_TEAM);
   const bundlesSupported = useCapability(AGENT_TEMPLATE_BUNDLES);
   const saved = usePart("templates");
+  const unified = useApp((s) => s.unified);
+  const unifiedHosts = useApp((s) => s.unifiedHosts);
+  const primaryId = useApp((s) => s.pairing?.serverId ?? null);
+  const includedHosts = unifiedHosts.filter((h) => h.included);
+  const [targetHost, setTargetHost] = useState<string | null>(() => primaryId ?? includedHosts[0]?.id ?? null);
   const [picker, setPicker] = useState<"templates" | "import">();
   const options = useLookOptions();
   const prompt = useTextPrompt();
@@ -183,6 +188,7 @@ function NewBotEditor() {
         ...(start?.avatar && { avatar: start.avatar }),
         ...(start?.starter && { starter: start.starter }),
         ...(start?.bundle && { bundle: start.bundle }),
+        ...(unified && targetHost ? { hostId: targetHost } : {}),
       };
       id = await attempt(api.addBot(bot));
     }
@@ -292,6 +298,19 @@ function NewBotEditor() {
         <T variant="footnote" color="muted">
           {"Copied from your " + agent.providerName + " agent " + agent.agent + ". Changes here don't change that agent." + (agent.missingModel ? " Its model, " + agent.missingModel + ", isn't on your account, so the bot uses your default model." : "")}
         </T>
+      )}
+
+      {unified && includedHosts.length > 1 && (
+        <StartRow label="Computer">
+          {includedHosts.map((host) => (
+            <Chip
+              key={host.id}
+              label={host.name}
+              selected={(targetHost ?? primaryId) === host.id}
+              onPress={() => setTargetHost(host.id)}
+            />
+          ))}
+        </StartRow>
       )}
 
       <View style={{ gap: space.lg }}>

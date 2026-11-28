@@ -738,6 +738,25 @@ botkins node disconnect --yes
 - **`botkins node disconnect`** turns off Node Host mode, cancels pending and running jobs, and stops advertising node capabilities. `revoke` and `disconnect` ask at a terminal and require `--yes` without a terminal.
 - All commands support `--json`. State changes leave a line in the log (`node.setup`, `node.rename`, `node.pause`, `node.share`, `node.wholeComputer`, `node.execMode`, `node.allowlist.add`, `node.allowlist.remove`, `node.revoke`, `node.disconnect`).
 
+## Unified multi-host view
+
+When multiple Botkins computers are paired with this host, you can operate bots, chats, pending approvals and runs from all of them together in one view instead of switching hosts one at a time.
+
+```sh
+botkins hosts list
+botkins hosts unified on
+botkins hosts unified off
+botkins hosts include "Studio Mac" off
+botkins hosts include "Studio Mac" on
+botkins hosts focus "Studio Mac"
+botkins hosts focus local
+```
+
+- **`botkins hosts list`** lists paired computers, their connection state, whether each is included in the unified view, and bot / pending-approval counts.
+- **`botkins hosts unified on|off`** enables or disables operating all included computers together. While unified view is on, `botkins bots list`, `botkins chat`, `botkins chats approve <chat-id>`, `botkins status`, and the TUI dashboard merge local and remote bots, chats, approvals and runs with host labels.
+- **`botkins hosts include <host> on|off`** controls which paired computers participate in the unified view.
+- **`botkins hosts focus <host|local>`** switches back to operating a single computer (either `local` or a paired host) and turns unified view off.
+
 ## Pair a phone
 
 ```sh

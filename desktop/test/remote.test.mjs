@@ -270,7 +270,7 @@ test("pairing with a code makes this app a desktop device of the host, and the c
   const secret = JSON.parse(wrapped.at(-1)).secretKey;
   assert.ok(secret.length > 20 && !kept.includes(secret), "the secret key is not in the file as it is");
   assert.ok(!JSON.stringify(b.remote.list()).includes(secret));
-  assert.deepEqual(Object.keys(b.remote.list()[0]).sort(), ["addedAt", "current", "id", "name"]);
+  assert.deepEqual(Object.keys(b.remote.list()[0]).sort(), ["addedAt", "current", "id", "included", "name"]);
   // The app opened again later knows the host; with another key for the credentials it knows none.
   assert.deepEqual(b.make().list().map((h) => h.id), [paired.id]);
   assert.deepEqual(new RemoteHosts({ file: b.file, protect: { wrap: (x) => x, unwrap: () => null }, lib }).list(), []);
