@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { defineTool } from "./providers/provider.mjs";
 import { nextTime } from "./panels.mjs";
 import { compileCadence, describeCadence, localZone } from "./routines.mjs";
+import { applyA2uiMessages, summarizeA2uiSurface } from "./link/a2ui.mjs";
+import { collectChatSurfaces } from "./a2ui-host.mjs";
 import {
   NODE_KINDS,
   TRIGGER_KINDS,
@@ -402,6 +404,127 @@ function resolveOutputCard(cardCfg, context, fallbackTitle, fallbackText, ws) {
   if (link) parts.push(`[${link.label}](${link.url})`);
 
   return { actionCard, fallbackText: parts.join("\n\n") };
+}
+
+function resolveTemplateDeep(value, context, depth = 0) {
+  if (depth > 16 || value === null || value === undefined) return value;
+  if (typeof value === "string") return resolveTemplate(value, context);
+  if (Array.isArray(value)) return value.map((item) => resolveTemplateDeep(item, context, depth + 1));
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = resolveTemplateDeep(v, context, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Resolves an Output node's `a2ui` configuration (array of v1.0 messages, `{ messages, onAction, targetWorkflowId, dispatch }`,
+ * or JSON string) with `{{field}}` templates and validates it against A2UI v1.0 + the Basic Catalog.
+ */
+function resolveOutputA2ui(a2uiCfg, context, wf, run, bot, targetChat, ws) {
+  let rawMessages;
+  let onAction;
+  let targetWorkflowId;
+  let dispatch;
+  let allowMembers = false;
+  let decisions;
+  let decision;
+  if (typeof a2uiCfg === "string") {
+    const resolvedStr = resolveTemplate(a2uiCfg, context).trim();
+    const parsed = JSON.parse(resolvedStr);
+    rawMessages = Array.isArray(parsed) ? parsed : [parsed];
+  } else if (Array.isArray(a2uiCfg)) {
+    rawMessages = resolveTemplateDeep(a2uiCfg, context);
+  } else if (a2uiCfg && typeof a2uiCfg === "object") {
+    onAction = a2uiCfg.onAction;
+    targetWorkflowId = typeof a2uiCfg.targetWorkflowId === "string" && a2uiCfg.targetWorkflowId.trim() ? a2uiCfg.targetWorkflowId.trim() : undefined;
+    allowMembers = a2uiCfg.allowMembers === true;
+    if (a2uiCfg.decisions && typeof a2uiCfg.decisions === "object" && !Array.isArray(a2uiCfg.decisions)) {
+      decisions = resolveTemplateDeep(a2uiCfg.decisions, context);
+    }
+    if (typeof a2uiCfg.decision === "string" && a2uiCfg.decision.trim()) {
+      decision = resolveTemplate(a2uiCfg.decision, context).trim();
+    }
+    if (a2uiCfg.dispatch && typeof a2uiCfg.dispatch === "object") {
+      dispatch = resolveTemplateDeep(a2uiCfg.dispatch, context);
+    }
+    if (typeof a2uiCfg.messages === "string") {
+      const parsed = JSON.parse(resolveTemplate(a2uiCfg.messages, context).trim());
+      rawMessages = Array.isArray(parsed) ? parsed : [parsed];
+    } else if (Array.isArray(a2uiCfg.messages)) {
+      rawMessages = resolveTemplateDeep(a2uiCfg.messages, context);
+    } else if (a2uiCfg.version === "1.0") {
+      rawMessages = [resolveTemplateDeep(a2uiCfg, context)];
+    }
+  }
+  if (!Array.isArray(rawMessages) || !rawMessages.length) {
+    throw new Error("Output a2ui resolved to no A2UI v1.0 messages.");
+  }
+
+  // Ensure workflow-posted createSurface IDs don't collide across multiple runs unless explicitly targeting an update.
+  const existingEntries = collectChatSurfaces(targetChat, ws?.state?.runs ?? []);
+  const existingSurfaces = [...existingEntries.values()].map((e) => e.surface);
+  const usedIds = new Set(existingSurfaces.filter((s) => !s.deleted).map((s) => s.surfaceId));
+  const idMap = new Map();
+  const normalizedMessages = rawMessages.map((m) => {
+    if (m?.createSurface?.surfaceId && usedIds.has(m.createSurface.surfaceId)) {
+      const nextId = `${m.createSurface.surfaceId}-${run.id.slice(0, 8)}`;
+      idMap.set(m.createSurface.surfaceId, nextId);
+      return { ...m, createSurface: { ...m.createSurface, surfaceId: nextId } };
+    }
+    if (m?.updateComponents?.surfaceId && idMap.has(m.updateComponents.surfaceId)) {
+      return { ...m, updateComponents: { ...m.updateComponents, surfaceId: idMap.get(m.updateComponents.surfaceId) } };
+    }
+    if (m?.updateDataModel?.surfaceId && idMap.has(m.updateDataModel.surfaceId)) {
+      return { ...m, updateDataModel: { ...m.updateDataModel, surfaceId: idMap.get(m.updateDataModel.surfaceId) } };
+    }
+    if (m?.deleteSurface?.surfaceId && idMap.has(m.deleteSurface.surfaceId)) {
+      return { ...m, deleteSurface: { ...m.deleteSurface, surfaceId: idMap.get(m.deleteSurface.surfaceId) } };
+    }
+    return m;
+  });
+
+  const wfMeta = {
+    workflowId: wf.id,
+    workflowName: wf.name,
+    runId: run.id,
+    ...(onAction && onAction !== "bot" ? { onAction } : {}),
+    ...(targetWorkflowId ? { targetWorkflowId } : {}),
+    ...(decisions ? { decisions } : {}),
+    ...(decision ? { decision } : {}),
+  };
+
+  const applied = applyA2uiMessages(existingSurfaces, normalizedMessages, {
+    botId: bot?.id,
+    workflow: wfMeta,
+    ...(allowMembers ? { allowMembers: true } : {}),
+    ...(dispatch ? { dispatch } : {}),
+    now: Date.now(),
+  });
+
+  // Apply in-place updates/deletes to previously posted surfaces in the target chat.
+  for (const id of applied.updatedIds.concat(applied.deletedIds)) {
+    const prev = existingEntries.get(id);
+    const next = applied.surfaces.get(id);
+    if (prev && next) {
+      const list = prev.container.a2uiSurfaces;
+      const idx = list.findIndex((s) => s.surfaceId === id);
+      if (idx >= 0) list[idx] = next;
+    }
+  }
+
+  const createdSurfaces = applied.createdIds
+    .map((id) => applied.surfaces.get(id))
+    .filter((s) => s && !s.deleted);
+  const fallbackText = createdSurfaces
+    .map((s) => summarizeA2uiSurface(s).text)
+    .filter(Boolean)
+    .join("\n\n");
+
+  return { surfaces: createdSurfaces, updatedIds: applied.updatedIds, deletedIds: applied.deletedIds, fallbackText };
 }
 
 /** Strips vault references when sending workflows over sync / RPC to remote devices. */
@@ -1905,7 +2028,8 @@ export class Workflows {
     const text = resolveTemplate(cfg.template || "", run.context).trim();
     const title = resolveTemplate(cfg.title || wf.name, run.context).trim() || wf.name;
     const hasCard = dest === "chat" && cfg.card && typeof cfg.card === "object" && !Array.isArray(cfg.card);
-    if (!hasCard && !text) throw new Error("Output message resolved to empty text.");
+    const hasA2ui = dest === "chat" && cfg.a2ui !== undefined && cfg.a2ui !== null && (typeof cfg.a2ui !== "string" || cfg.a2ui.trim().length > 0);
+    if (!hasCard && !hasA2ui && !text) throw new Error("Output message resolved to empty text.");
 
     if (dest === "chat") {
       const bot = this.resolveBotForNode(node);
@@ -1921,11 +2045,21 @@ export class Workflows {
       }
       const now = Date.now();
       let actionCard;
+      let a2uiSurfaces;
       let finalText = text;
       if (hasCard) {
         const built = resolveOutputCard(cfg.card, run.context, title, text, this.ws);
         actionCard = built.actionCard;
         finalText = text || built.fallbackText;
+      }
+      if (hasA2ui) {
+        const built = resolveOutputA2ui(cfg.a2ui, run.context, wf, run, bot, target, this.ws);
+        if (built.surfaces.length) a2uiSurfaces = built.surfaces;
+        finalText = finalText || built.fallbackText || title;
+        if (!a2uiSurfaces && !actionCard && !text && (built.updatedIds.length || built.deletedIds.length)) {
+          this.ws.save();
+          return { chatId: target.id, summary: `Updated A2UI surface in ${target.title || bot.name}` };
+        }
       }
       target.messages.push({
         role: "assistant",
@@ -1933,6 +2067,7 @@ export class Workflows {
         time: now,
         fromWorkflow: { workflowId: wf.id, workflowName: wf.name, runId: run.id },
         ...(actionCard ? { actionCard } : {}),
+        ...(a2uiSurfaces ? { a2uiSurfaces } : {}),
       });
       target.time = now;
       target.unread = true;
@@ -2043,7 +2178,7 @@ export class Workflows {
         config: {
           type: "object",
           description:
-            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category,card}. Optional card (chat destination only, all string fields support {{field}} templates): {title,subtitle?,needsYou?(boolean or 'yes'/'true'/'no'/'false'),body?,fields?:[{label,value,tone?}],link?:{label?,url},blocks?,dispatch?:{botName?,botId?,label?,chatTitle?,prompt}}.",
+            "Step config. Trigger(task): {event,toStatus,fromStatus,botName,taskId,titleContains}. Trigger(schedule): {cadence,time,days,cron,timezone}. Trigger(manual): {inputs}. Trigger(routine): {routineChatId,routineName,botId,onlyOnStatus}. Trigger(chat): {chatId,botId,mentionOnly,textContains}. Trigger(webhook): {fields}. Trigger(github): {repo,events,mentionHandle,branch,author,pollMinutes}. Trigger(channel): {channel,connection,conversation,sender,isDirect,mentionsBot,textContains}. Agent: {botName,botId,prompt,outputKey,outputFields}. Model: {model,prompt,outputKey,outputFields}. Condition: {expression,match,rules}. Approval: {message,noteField}. Output: {destination,chatId,botName,title,template,category,card,a2ui}. Optional card (chat destination only, {{field}} templates): {title,subtitle?,needsYou?,body?,fields?,link?,blocks?,dispatch?}. Optional a2ui (chat destination only, {{field}} templates in strings): array of A2UI v1.0 messages or {messages:[...],onAction?:'bot'|'resume'|'trigger',targetWorkflowId?,dispatch?}.",
         },
       },
       required: ["id", "kind"],

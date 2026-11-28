@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://botkins.app/a2ui/catalog/v1.json",
+  "protocolVersion": "1.0",
+  "title": "Botkins A2UI Catalog v1",
+  "description": "Botkins native UI components and functions extending the A2UI v1.0 Basic Catalog for avatars, status badges, KPI metrics, progress bars, data charts, tables, task cards, and approval cards.",
+  "catalogId": "https://botkins.app/a2ui/catalog/v1.json",
+  "instructions": "Use the Botkins Catalog alongside the A2UI Basic Catalog by setting catalogId on createSurface or @catalogId on individual components. Prefer Botkins components (BotAvatar, Badge, StatusBadge, Metric, Progress, Chart, Table, TaskCard, ApprovalCard) for rich operational dashboards and interactive approval/task flows.",
+  "$defs": {
+    "anyComponent": {
+      "oneOf": [
+        { "$ref": "#/components/BotAvatar" },
+        { "$ref": "#/components/Badge" },
+        { "$ref": "#/components/StatusBadge" },
+        { "$ref": "#/components/Metric" },
+        { "$ref": "#/components/Progress" },
+        { "$ref": "#/components/Chart" },
+        { "$ref": "#/components/Table" },
+        { "$ref": "#/components/TaskCard" },
+        { "$ref": "#/components/ApprovalCard" }
+      ]
+    },
+    "anyFunction": {
+      "oneOf": [
+        { "$ref": "#/functions/copyToClipboard" },
+        { "$ref": "#/functions/getThemeMode" },
+        { "$ref": "#/functions/computeSummary" }
+      ]
+    },
+    "Tone": {
+      "type": "string",
+      "enum": ["neutral", "positive", "warning", "negative", "accent"],
+      "default": "neutral"
+    }
+  },
+  "components": {
+    "BotAvatar": {
+      "type": "object",
+      "description": "Displays a Botkins bot avatar with optional name and role subtitle.",
+      "properties": {
+        "component": { "const": "BotAvatar" },
+        "botId": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "name": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "role": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "status": {
+          "type": "string",
+          "enum": ["idle", "working", "online", "offline", "error"]
+        },
+        "size": {
+          "type": "string",
+          "enum": ["sm", "md", "lg"],
+          "default": "md"
+        }
+      },
+      "required": ["component", "name"]
+    },
+    "Badge": {
+      "type": "object",
+      "description": "Compact status or category pill badge.",
+      "properties": {
+        "component": { "const": "Badge" },
+        "label": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "tone": { "$ref": "#/$defs/Tone" },
+        "icon": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["component", "label"]
+    },
+    "StatusBadge": {
+      "type": "object",
+      "description": "Status pill badge with semantic indicator dot.",
+      "properties": {
+        "component": { "const": "StatusBadge" },
+        "label": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "tone": { "$ref": "#/$defs/Tone" },
+        "pulse": { "$ref": "common_types.json#/$defs/DynamicBoolean" }
+      },
+      "required": ["component", "label"]
+    },
+    "Metric": {
+      "type": "object",
+      "description": "Single KPI metric display with label, value, optional delta/note, and tone.",
+      "properties": {
+        "component": { "const": "Metric" },
+        "label": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "value": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "note": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "delta": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "tone": { "$ref": "#/$defs/Tone" }
+      },
+      "required": ["component", "label", "value"]
+    },
+    "Progress": {
+      "type": "object",
+      "description": "Linear progress indicator showing value out of max with optional note.",
+      "properties": {
+        "component": { "const": "Progress" },
+        "label": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "value": { "$ref": "common_types.json#/$defs/DynamicNumber" },
+        "max": { "$ref": "common_types.json#/$defs/DynamicNumber" },
+        "note": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "tone": { "$ref": "#/$defs/Tone" }
+      },
+      "required": ["component", "label", "value", "max"]
+    },
+    "Chart": {
+      "type": "object",
+      "description": "Native bar or line chart rendered from dataModel or inline series.",
+      "properties": {
+        "component": { "const": "Chart" },
+        "kind": {
+          "type": "string",
+          "enum": ["bar", "line"],
+          "default": "bar"
+        },
+        "title": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "labels": { "$ref": "common_types.json#/$defs/DynamicValue" },
+        "series": { "$ref": "common_types.json#/$defs/DynamicValue" },
+        "items": { "$ref": "common_types.json#/$defs/DynamicValue" },
+        "unit": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["component", "kind"]
+    },
+    "Table": {
+      "type": "object",
+      "description": "Structured data table with header columns and data rows.",
+      "properties": {
+        "component": { "const": "Table" },
+        "title": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "columns": { "$ref": "common_types.json#/$defs/DynamicValue" },
+        "rows": { "$ref": "common_types.json#/$defs/DynamicValue" },
+        "emptyText": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["component", "columns", "rows"]
+    },
+    "TaskCard": {
+      "type": "object",
+      "description": "Actionable task summary card with priority/status badge, owner, and optional action buttons.",
+      "properties": {
+        "component": { "const": "TaskCard" },
+        "title": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "summary": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "status": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "normal", "high", "urgent"]
+        },
+        "botName": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "due": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "child": { "$ref": "common_types.json#/$defs/Child" },
+        "action": { "$ref": "common_types.json#/$defs/Action" },
+        "actionLabel": { "$ref": "common_types.json#/$defs/DynamicString" }
+      },
+      "required": ["component", "title"]
+    },
+    "ApprovalCard": {
+      "type": "object",
+      "description": "Interactive approval card with title, summary, optional risk badge, and Approve/Reject actions.",
+      "properties": {
+        "component": { "const": "ApprovalCard" },
+        "title": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "summary": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"],
+          "default": "pending"
+        },
+        "risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "approveLabel": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "rejectLabel": { "$ref": "common_types.json#/$defs/DynamicString" },
+        "approveAction": { "$ref": "common_types.json#/$defs/Action" },
+        "rejectAction": { "$ref": "common_types.json#/$defs/Action" },
+        "child": { "$ref": "common_types.json#/$defs/Child" }
+      },
+      "required": ["component", "title"]
+    }
+  },
+  "functions": {
+    "copyToClipboard": {
+      "type": "object",
+      "description": "Copies text to the user's clipboard after user activation.",
+      "properties": {
+        "@call": { "const": "copyToClipboard" },
+        "args": {
+          "type": "object",
+          "properties": {
+            "text": { "$ref": "common_types.json#/$defs/DynamicString" }
+          },
+          "required": ["text"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["@call", "args"],
+      "returnType": "boolean",
+      "allowedCallers": "rendererOnly",
+      "requiresUserActivation": true
+    },
+    "getThemeMode": {
+      "type": "object",
+      "description": "Returns the renderer's active theme mode ('light' or 'dark').",
+      "properties": {
+        "@call": { "const": "getThemeMode" },
+        "args": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "required": ["@call"],
+      "returnType": "string",
+      "allowedCallers": "rendererOrAgent",
+      "requiresUserActivation": false
+    },
+    "computeSummary": {
+      "type": "object",
+      "description": "Agent-callable or renderer-callable function that returns a structured summary object.",
+      "properties": {
+        "@call": { "const": "computeSummary" },
+        "args": {
+          "type": "object",
+          "properties": {
+            "topic": { "$ref": "common_types.json#/$defs/DynamicString" },
+            "includeMetrics": { "$ref": "common_types.json#/$defs/DynamicBoolean" }
+          },
+          "required": ["topic"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["@call", "args"],
+      "returnType": "object",
+      "allowedCallers": "rendererOrAgent",
+      "requiresUserActivation": false
+    }
+  }
+}

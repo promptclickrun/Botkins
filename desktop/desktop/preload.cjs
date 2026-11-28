@@ -411,6 +411,8 @@ for (const name of [
   "sendNow",
   "reactToMessage",
   "chat.cardAction",
+  "chat.a2uiAction",
+  "chat.a2uiFunction",
   "showEmojiPanel",
   "forkChat",
   "retry",

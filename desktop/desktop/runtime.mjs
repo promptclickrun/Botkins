@@ -141,7 +141,9 @@ const STOP_HELPER = "stop-helper-v1";
 export const WORKFLOWS = "workflows-v1";
 /** External messaging Channel Hooks (`channels-v1`). */
 export const CHANNELS = "channels-v1";
-export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
+/** A2UI v1.0 interactive surfaces, Botkins Catalog, and bidirectional function RPC (`a2ui-v1`). */
+export const A2UI_CAPABILITY = "a2ui-v1";
+export const CAPABILITIES = ["main-chat-v1", "message-reactions-v1", "client-message-id-v1", "voice-turns-v1", "voice-history-v1", "quiet-replies-v1", "models-v2", "fast-mode-v1", LOOKS_CAPABILITY, ...headCapabilities, BOT_VOICE, ROUTINE_DELIVERY, "routine-no-output-v1", ROUTINE_OWNER, ROUTINE_SCRIPTS, ROUTINE_MODELS, ROUTINE_SILENT, ROUTINE_NOTIFY_TARGETS, WORKFLOWS, CHANNELS, A2UI_CAPABILITY, PROACTIVE, PROACTIVE_LEARNING, PROACTIVE_TEAM, BOARD_MENTIONS, PROVIDER_USAGE, SIDE_PANE, REMOTE_HOSTS, FILES, FOLDERS, ARTIFACTS, PROJECT_ARTIFACTS, "project-folders-v1", "project-mode-v1", "project-clone-v1", PROJECT_JOBS, "secure-input-v1", "turn-timeline-v1", PLUGINS, PLUGIN_STARTS, PROVIDER_SIGNIN, SPACES, AGENT_TEMPLATES, "agent-template-bundles-v1", COMPOSIO_APPS, MARKET_REFRESH, MCP_APPS, "pi-packages-v1", "pi-packages-remove-v1", "skill-upload-v1", "skills-catalog-v1", "skills-featured-v1", MARKETPLACE_V2, SCRIPT_COMMANDS_CAPABILITY, MCP_CATALOG_CAPABILITY, CHAT_TITLE_REGENERATION, MARK_CHATS_READ, STOP_HELPER, KEYED_PROVIDERS, CLAUDE_ARTIFACTS_CAPABILITY];
 /**
  * What a paired device is told this app supports. A feature whose calls the link does not carry
  * (desktop/link/methods.mjs) is left out, so a device never asks for what it cannot reach.
@@ -1060,8 +1062,29 @@ export async function createRuntime({ host, dataDir, trial = false, pushed = () 
     unqueue: (id, itemId) => workspace.unqueue(id, itemId),
     sendNow: (id, itemId) => workspace.sendNow(id, itemId),
     reactToMessage: (id, index, time, emoji, person = "owner") => workspace.reactToMessage(id, index, time, emoji, person === "owner" ? person : "member:" + person),
-    "chat.cardAction": (chatId, target, action, person = "owner") => {
+    "chat.cardAction": (chatId, target, action, payloadOrPerson = "owner", maybePerson = "owner") => {
+      if (action === "a2ui") {
+        const person = typeof maybePerson === "string" ? maybePerson : "owner";
+        const { turn, ...answer } = workspace.chatA2uiAction(
+          chatId,
+          { ...(payloadOrPerson && typeof payloadOrPerson === "object" ? payloadOrPerson : {}), ...(typeof target === "string" && target.trim() && !payloadOrPerson?.surfaceId ? { surfaceId: target.trim() } : {}) },
+          person === "owner" ? person : "member:" + person,
+        );
+        turn?.catch((error) => console.error("Workspace turn:", error.message));
+        return answer;
+      }
+      const person = typeof payloadOrPerson === "string" ? payloadOrPerson : "owner";
       const { turn, ...answer } = workspace.chatCardAction(chatId, target, action, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
+    "chat.a2uiAction": (chatId, payload, person = "owner") => {
+      const { turn, ...answer } = workspace.chatA2uiAction(chatId, payload, person === "owner" ? person : "member:" + person);
+      turn?.catch((error) => console.error("Workspace turn:", error.message));
+      return answer;
+    },
+    "chat.a2uiFunction": (chatId, payload, person = "owner") => {
+      const { turn, wait: _wait, ...answer } = workspace.chatA2uiFunction(chatId, payload, person === "owner" ? person : "member:" + person);
       turn?.catch((error) => console.error("Workspace turn:", error.message));
       return answer;
     },

@@ -41,6 +41,7 @@ import { headCapabilities, cleanLook, deviceKind, LinkStore, personName, SCREEN_
 import { chatSectionsOf, withChatSections, authorize, chatPeople, cleanGroup, cleanRole, filterParts, ownerParts, inChat, panelOfFrame, panelView, spaceCan, inviteLink, inviteLookup, MAX_CHAT_PEOPLE, newInviteCode, normalizeCode, OWNER, personOf, sharedBotFlags, teamPeople, viewOf, visible, withBotFlags, withChatFlags, hasAction, roleOfMember, seenItemsOf, spacesViewOf } from "./team.mjs";
 import { avatarOf, cleanAvatar, ownerApprovalChats, privateProactiveChat, withoutProactiveAlerts } from "./team.mjs";
 import { isRoutineChat } from "./routine-chat.mjs";
+import { getA2uiRendererCapabilities } from "./a2ui.mjs";
 import { Failure, searchDirs } from "./tools.mjs";
 import { ASK_BOT_DESCRIPTION, cleanBotVoice, liveContextOf, liveInstructions, Voice } from "./voice.mjs";
 import { Uploads } from "./uploads.mjs";
@@ -2553,6 +2554,7 @@ export class LinkHost extends EventEmitter {
       // The app names what it supports itself (`backend.capabilities`); a look with eyes and its own
       // colors is one of those when the app keeps looks on its bots, and the link's own otherwise.
       capabilities: [...new Set([...Object.keys(this.backend.extras ?? {}), ...(Array.isArray(this.backend.capabilities) ? this.backend.capabilities : []), ...CAPABILITIES.filter((c) => (c !== "stream-appends-v1" && c !== "reasoning-appends-v1") || this.backend.streamAppends !== false), ...(this.backend.protonSetup === false ? [] : [PROTON_SETUP]), ...(this.headless() ? [GRANT_CAPABILITY, ...(this.ownRelay() ? [GRANT_RELAY_CAPABILITY] : [])] : []), ...(typeof this.backend.frames?.page === "function" ? ["frames-v1"] : []), ...(typeof this.backend.setLook === "function" ? [] : ["looks-v2", ...headCapabilities]), ...(this.spaces.on ? [SPACE_ALERTS_CAPABILITY] : [])])],
+      a2uiRendererCapabilities: getA2uiRendererCapabilities(),
     };
   }
   /**

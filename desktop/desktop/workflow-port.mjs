@@ -129,6 +129,14 @@ export function exportWorkflow(workflow, bots = [], appVersion = "0.17.17") {
         }
         delete cfg.card.dispatch.botId;
       }
+      if (cfg.a2ui?.dispatch?.botId) {
+        const dName = botNameById.get(cfg.a2ui.dispatch.botId) ?? cfg.a2ui.dispatch.botName ?? null;
+        if (dName) {
+          cfg.a2ui.dispatch.botName = dName;
+          agents.add(dName);
+        }
+        delete cfg.a2ui.dispatch.botId;
+      }
     }
     return {
       id: node.id,
