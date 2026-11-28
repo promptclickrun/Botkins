@@ -781,7 +781,9 @@ export async function executeGithubOutputNode({
 
   const actionPass = Number.isInteger(pass) && pass >= 0 ? pass : Number(run.retryPass ?? 0) || 0;
   const actionKey = `${run.id}:${node.id}:${actionPass}`;
-  const overrideUncertain = Boolean(allowUncertainRetry || cfg.allowUncertainRetry === true || run.allowUncertainRetry === true);
+  // Only the run-level flag counts. retryRun sets it, and Link refuses it for anyone but the owner.
+  // A step's saved config is ignored here: members with workflow "manage" can edit configs.
+  const overrideUncertain = Boolean(allowUncertainRetry || run.allowUncertainRetry === true);
 
   // 1. Check write-before-call idempotency ledger BEFORE making any side-effecting call.
   const existing = actionStore?.get?.(actionKey);
